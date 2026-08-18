@@ -1,0 +1,134 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [internal]
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-zbridge}
+      POSTGRES_USER: ${POSTGRES_USER:-zbridge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zbridge}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-zbridge} -d ${POSTGRES_DB:-zbridge}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+
+  zalo-gateway:
+    build: ./zalo-gateway
+    restart: unless-stopped
+    environment:
+      PORT: 3001
+      ZALO_GATEWAY_SECRET: ${ZALO_GATEWAY_SECRET:-dev-gateway-secret}
+      BACKEND_EVENT_URL: http://backend:8000/internal/zalo/events
+      ZALO_EVENT_SECRET: ${ZALO_EVENT_SECRET:-dev-zalo-event-secret}
+      ZALO_SESSION_PATH: /data/zalo-session/session.enc
+      ZALO_SESSION_SECRET: ${ZALO_SESSION_SECRET:-dev-session-secret-change-me}
+      ZALO_MOCK: ${ZALO_MOCK:-false}
+      ZALO_SEND_INTERVAL_MS: ${ZALO_SEND_INTERVAL_MS:-1000}
+    volumes:
+      - zalo-session:/data/zalo-session
+    expose: ["3001"]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://zbridge:zbridge@postgres:5432/zbridge}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-change-this-secret-at-least-32-bytes}
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-480}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-admin@example.com}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-change-this-password}
+      ZALO_GATEWAY_URL: http://zalo-gateway:3001
+      ZALO_GATEWAY_SECRET: ${ZALO_GATEWAY_SECRET:-dev-gateway-secret}
+      ZALO_EVENT_SECRET: ${ZALO_EVENT_SECRET:-dev-zalo-event-secret}
+      APP_URL: ${APP_URL:-http://localhost:5173}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      zalo-gateway:
+        condition: service_healthy
+    expose: ["8000"]
+    networks: [internal]
+
+  celery-worker:
+    build: ./backend
+    restart: unless-stopped
+    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=${CELERY_CONCURRENCY:-4}"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://zbridge:zbridge@postgres:5432/zbridge}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      ZALO_GATEWAY_URL: http://zalo-gateway:3001
+      ZALO_GATEWAY_SECRET: ${ZALO_GATEWAY_SECRET:-dev-gateway-secret}
+      MENTION_SCHEDULER_INTERVAL_SECONDS: ${MENTION_SCHEDULER_INTERVAL_SECONDS:-15}
+      DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS: ${DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS:-60}
+      GOOGLE_SERVICE_ACCOUNT_FILE: ${GOOGLE_SERVICE_ACCOUNT_FILE:-/run/secrets/google-service-account.json}
+    volumes:
+      - ./secrets:/run/secrets:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      zalo-gateway:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    networks: [internal]
+
+  celery-beat:
+    build: ./backend
+    restart: unless-stopped
+    command: ["celery", "-A", "app.celery_app:celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://zbridge:zbridge@postgres:5432/zbridge}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      MENTION_SCHEDULER_INTERVAL_SECONDS: ${MENTION_SCHEDULER_INTERVAL_SECONDS:-15}
+      DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS: ${DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS:-60}
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    networks: [internal]
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: /api
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on: [backend]
+    networks: [internal]
+
+volumes:
+  postgres-data:
+  redis-data:
+  zalo-session:
+
+networks:
+  internal:
+    driver: bridge

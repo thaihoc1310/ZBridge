@@ -1,0 +1,81 @@
+@import url('https://fonts.googleapis.com/css2?family=Calistoga&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #fafafa;
+  --foreground: #0f172a;
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;
+  --accent: #0052ff;
+  --accent-secondary: #4d7cff;
+  --border: #e2e8f0;
+  --card: #ffffff;
+  color: var(--foreground);
+  background: var(--background);
+  font-family: Inter, system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--background); }
+button, input, textarea, select { font: inherit; }
+::selection { color: white; background: var(--accent); }
+
+@layer components {
+  .field {
+    @apply min-h-12 w-full rounded-xl border border-border bg-white px-4 text-sm text-foreground outline-none transition placeholder:text-slate-400 focus:border-accent focus:ring-2 focus:ring-blue-100;
+  }
+  .card {
+    @apply rounded-2xl border border-border bg-card shadow-card;
+  }
+  .eyebrow {
+    @apply inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[.15em] text-accent;
+  }
+  .gradient-text {
+    background: linear-gradient(90deg, var(--accent), var(--accent-secondary));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .dot-grid {
+    background-image: radial-gradient(circle, rgba(255,255,255,.18) 1px, transparent 1px);
+    background-size: 26px 26px;
+  }
+  .app-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+    scrollbar-gutter: stable;
+  }
+  .app-scrollbar::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .app-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+    margin-block: 10px;
+  }
+  .app-scrollbar::-webkit-scrollbar-thumb {
+    min-height: 40px;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-color: #cbd5e1;
+    background-clip: padding-box;
+  }
+  .app-scrollbar::-webkit-scrollbar-thumb:hover {
+    background-color: #94a3b8;
+  }
+  .app-scrollbar::-webkit-scrollbar-thumb:active {
+    background-color: var(--accent-secondary);
+  }
+  .app-scrollbar::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

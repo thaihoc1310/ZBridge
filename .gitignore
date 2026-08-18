@@ -1,0 +1,17 @@
+.env
+**/.env
+**/node_modules/
+**/dist/
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.venv/
+*.pyc
+*.pyo
+*.sqlite3
+data/
+zalo-session/
+secrets/*
+!secrets/.gitignore
+.DS_Store
