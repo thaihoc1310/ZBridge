@@ -3,6 +3,8 @@ export const config = {
   gatewaySecret: process.env.ZALO_GATEWAY_SECRET ?? "dev-gateway-secret",
   backendEventUrl:
     process.env.BACKEND_EVENT_URL ?? "http://backend:8000/internal/zalo/events",
+  backendAlertUrl:
+    process.env.BACKEND_ALERT_URL ?? "http://backend:8000/internal/zalo/alerts",
   zaloEventSecret:
     process.env.ZALO_EVENT_SECRET ?? "dev-zalo-event-secret",
   sessionPath: process.env.ZALO_SESSION_PATH ?? "/data/zalo-session/session.enc",

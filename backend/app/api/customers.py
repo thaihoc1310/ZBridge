@@ -3,8 +3,19 @@ import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import require_permission
+from app.core.permissions import (
+    CUSTOMER_READ,
+    CUSTOMER_SYNC,
+    CUSTOMER_UPDATE,
+    DEBT_REMINDER_READ,
+    DEBT_REMINDER_UPDATE,
+    MENTION_READ,
+    MENTION_UPDATE,
+    MESSAGE_SEND,
+)
 from app.db.database import get_db
+from app.models import User
 from app.schemas.api import (
     CustomerListResponse,
     CustomerResponse,
@@ -33,9 +44,7 @@ from app.services.mention_automation_service import (
     save_mention_automation,
 )
 
-router = APIRouter(
-    prefix="/customers", tags=["customers"], dependencies=[Depends(get_current_user)]
-)
+router = APIRouter(prefix="/customers", tags=["customers"])
 
 
 @router.get("", response_model=CustomerListResponse)
@@ -45,17 +54,25 @@ async def customers(
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=25, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
+    _actor: User = Depends(require_permission(CUSTOMER_READ)),
 ) -> CustomerListResponse:
     return await list_customers(db, search, debt, page, limit)
 
 
 @router.post("/sync", response_model=SyncResponse)
-async def sync(db: AsyncSession = Depends(get_db)) -> SyncResponse:
+async def sync(
+    db: AsyncSession = Depends(get_db),
+    _actor: User = Depends(require_permission(CUSTOMER_SYNC)),
+) -> SyncResponse:
     return await sync_groups(db)
 
 
 @router.get("/{customer_id}", response_model=CustomerResponse)
-async def detail(customer_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> CustomerResponse:
+async def detail(
+    customer_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _actor: User = Depends(require_permission(CUSTOMER_READ)),
+) -> CustomerResponse:
     return customer_response(await get_customer(db, customer_id))
 
 
@@ -64,13 +81,16 @@ async def update(
     customer_id: uuid.UUID,
     data: CustomerUpdate,
     db: AsyncSession = Depends(get_db),
+    _actor: User = Depends(require_permission(CUSTOMER_UPDATE)),
 ) -> CustomerResponse:
     return await update_customer(db, customer_id, data)
 
 
 @router.get("/{customer_id}/members", response_model=list[GroupMemberResponse])
 async def members(
-    customer_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+    customer_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _actor: User = Depends(require_permission(CUSTOMER_READ)),
 ) -> list[GroupMemberResponse]:
     customer = await get_customer(db, customer_id)
     return await list_group_members(db, customer.zalo_group_id)
@@ -78,7 +98,9 @@ async def members(
 
 @router.get("/{customer_id}/mention-automation", response_model=MentionAutomationResponse)
 async def mention_automation(
-    customer_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+    customer_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _actor: User = Depends(require_permission(MENTION_READ)),
 ) -> MentionAutomationResponse:
     customer = await get_customer(db, customer_id)
     return await get_mention_automation(db, customer.zalo_group_id)
@@ -89,6 +111,7 @@ async def update_mention_automation(
     customer_id: uuid.UUID,
     data: MentionAutomationUpdate,
     db: AsyncSession = Depends(get_db),
+    _actor: User = Depends(require_permission(MENTION_UPDATE)),
 ) -> MentionAutomationResponse:
     customer = await get_customer(db, customer_id)
     return await save_mention_automation(db, customer.zalo_group_id, data)
@@ -99,13 +122,16 @@ async def create_message(
     customer_id: uuid.UUID,
     data: MessageCreate,
     db: AsyncSession = Depends(get_db),
+    _actor: User = Depends(require_permission(MESSAGE_SEND)),
 ) -> DeliveryLogResponse:
     return await send_customer_message(db, customer_id, data)
 
 
 @router.get("/{customer_id}/debt-reminder", response_model=DebtReminderResponse)
 async def debt_reminder(
-    customer_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+    customer_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _actor: User = Depends(require_permission(DEBT_REMINDER_READ)),
 ) -> DebtReminderResponse:
     return await get_debt_reminder(db, customer_id)
 
@@ -115,5 +141,6 @@ async def update_debt_reminder(
     customer_id: uuid.UUID,
     data: DebtReminderUpdate,
     db: AsyncSession = Depends(get_db),
+    _actor: User = Depends(require_permission(DEBT_REMINDER_UPDATE)),
 ) -> DebtReminderResponse:
     return await save_debt_reminder(db, customer_id, data)

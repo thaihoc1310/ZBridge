@@ -17,6 +17,9 @@ DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 SHEETS_READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
 GOOGLE_SHEET_MIME_TYPE = "application/vnd.google-apps.spreadsheet"
 MAX_PDF_BYTES = 20 * 1024 * 1024
+# The gateway accepts a 20 MB PNG body; stay below it with room for overhead.
+MAX_PNG_BYTES = 18 * 1024 * 1024
+MAX_PNG_SHRINK_ATTEMPTS = 3
 MAX_IMAGE_WIDTH = 1800
 MAX_IMAGE_HEIGHT = 12000
 CONTENT_PADDING = 24
@@ -133,10 +136,45 @@ def render_pdf_to_png(pdf_data: bytes) -> tuple[bytes, int, int]:
         offset += image.height + PAGE_GAP
         image.close()
 
-    output = io.BytesIO()
-    combined.save(output, format="PNG", optimize=True)
-    combined.close()
-    return output.getvalue(), width, height
+    try:
+        return encode_png_within_limit(combined)
+    finally:
+        combined.close()
+
+
+def encode_png_within_limit(image: Image.Image) -> tuple[bytes, int, int]:
+    """Encode to PNG, shrinking until it fits what the gateway will accept.
+
+    A dense sheet can render past the upload limit; without this the send fails
+    with a 413 on every retry until the run is marked permanently failed.
+    """
+    current = image
+    try:
+        for _ in range(MAX_PNG_SHRINK_ATTEMPTS + 1):
+            output = io.BytesIO()
+            current.save(output, format="PNG", optimize=True)
+            data = output.getvalue()
+            if len(data) <= MAX_PNG_BYTES:
+                return data, current.width, current.height
+            # Encoded size tracks pixel count, so scale each side by the square root.
+            ratio = (MAX_PNG_BYTES / len(data)) ** 0.5 * 0.95
+            next_size = (
+                max(1, round(current.width * ratio)),
+                max(1, round(current.height * ratio)),
+            )
+            if next_size == (current.width, current.height):
+                break
+            resized = current.resize(next_size, Image.Resampling.LANCZOS)
+            if current is not image:
+                current.close()
+            current = resized
+        raise SheetExportError(
+            "SHEET_IMAGE_TOO_LARGE",
+            "Ảnh công nợ vẫn vượt giới hạn 20 MB sau khi đã giảm kích thước.",
+        )
+    finally:
+        if current is not image:
+            current.close()
 
 
 class GoogleSheetsService:

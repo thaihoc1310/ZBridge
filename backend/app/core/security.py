@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -6,6 +7,12 @@ from pwdlib import PasswordHash
 from app.core.config import settings
 
 password_hash = PasswordHash.recommended()
+
+
+@dataclass(frozen=True)
+class TokenPayload:
+    subject: str
+    issued_at: datetime
 
 
 def hash_password(password: str) -> str:
@@ -26,9 +33,17 @@ def create_access_token(subject: str) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 
 
-def decode_access_token(token: str) -> str | None:
+def decode_token(token: str) -> TokenPayload | None:
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
-        return str(payload["sub"])
-    except (jwt.InvalidTokenError, KeyError):
+        return TokenPayload(
+            subject=str(payload["sub"]),
+            issued_at=datetime.fromtimestamp(int(payload["iat"]), tz=UTC),
+        )
+    except (jwt.InvalidTokenError, KeyError, TypeError, ValueError):
         return None
+
+
+def decode_access_token(token: str) -> str | None:
+    payload = decode_token(token)
+    return payload.subject if payload else None

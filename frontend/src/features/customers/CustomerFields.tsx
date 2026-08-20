@@ -4,10 +4,22 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../../api/client";
 import type { Customer } from "../../api/types";
 import { cn } from "../../lib/cn";
+import { PERMISSIONS } from "../../lib/permissions";
+import { usePermissions } from "../../lib/session";
 import { Button } from "../../components/ui/Button";
 import { Modal } from "../../components/ui/Modal";
 
 export type DebtConfirmation = { customer: Customer; nextValue: boolean };
+
+/** Server-side is authoritative; this keeps the UI from offering dead buttons. */
+function useCanUpdateCustomer() {
+  const { can } = usePermissions();
+  return can(PERMISSIONS.customerUpdate);
+}
+
+function ReadOnlyHint() {
+  return <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">Vai trò của bạn không có quyền sửa thông tin khách hàng.</p>;
+}
 
 export function DebtStatusOptions({ value, onChange, disabled = false }: { value: boolean; onChange: (nextValue: boolean) => void; disabled?: boolean }) {
   return <div role="radiogroup" aria-label="Trạng thái công nợ" className="flex items-center gap-2">
@@ -41,41 +53,47 @@ function ErrorMessage({ error }: { error: Error | null }) {
 export function NoteEditorModal({ customer, onClose }: { customer: Customer | null; onClose: () => void }) {
   const [note, setNote] = useState("");
   const mutation = useCustomerUpdate(customer, onClose);
+  const canEdit = useCanUpdateCustomer();
   useEffect(() => setNote(customer?.note ?? ""), [customer]);
   const initial = customer?.note ?? "";
   const changed = note.trim() !== initial.trim();
 
   return <Modal open={Boolean(customer)} onClose={onClose} title="Ghi chú khách hàng" description={customer ? `Cập nhật ghi chú dành cho ${customer.name}.` : undefined}>
-    <label className="block"><span className="mb-2 block text-sm font-semibold">Nội dung ghi chú</span><textarea autoFocus className="field min-h-56 resize-y py-4 leading-relaxed" maxLength={10000} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Thêm thông tin cần lưu ý về khách hàng..." /></label>
+    <label className="block"><span className="mb-2 block text-sm font-semibold">Nội dung ghi chú</span><textarea autoFocus className="field min-h-56 resize-y py-4 leading-relaxed" maxLength={10000} disabled={!canEdit} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Thêm thông tin cần lưu ý về khách hàng..." /></label>
     <div className="mt-2 flex justify-end text-xs text-muted-foreground"><span>{note.length}/10000</span></div>
+    {!canEdit && <ReadOnlyHint />}
     <ErrorMessage error={mutation.error} />
-    <div className="mt-6 flex justify-end gap-3"><Button variant="ghost" onClick={onClose}>Hủy</Button><Button loading={mutation.isPending} disabled={!changed} onClick={() => mutation.mutate({ note: note.trim() || null })}><Save className="h-4 w-4" />Lưu ghi chú</Button></div>
+    <div className="mt-6 flex justify-end gap-3"><Button variant="ghost" onClick={onClose}>Đóng</Button><Button loading={mutation.isPending} disabled={!changed || !canEdit} onClick={() => mutation.mutate({ note: note.trim() || null })}><Save className="h-4 w-4" />Lưu ghi chú</Button></div>
   </Modal>;
 }
 
 export function FolderEditorModal({ customer, onClose }: { customer: Customer | null; onClose: () => void }) {
   const [folderUrl, setFolderUrl] = useState("");
   const mutation = useCustomerUpdate(customer, onClose);
+  const canEdit = useCanUpdateCustomer();
   useEffect(() => setFolderUrl(customer?.folder_url ?? ""), [customer]);
   const initialUrl = customer?.folder_url ?? "";
   const changed = folderUrl.trim() !== initialUrl;
   const validUrl = /^https?:\/\/\S+$/i.test(folderUrl.trim());
 
   return <Modal open={Boolean(customer)} onClose={onClose} title="Thư mục khách hàng" description="Lưu đường dẫn tới thư mục Drive chứa file, Sheet và tài liệu liên quan.">
-    <label className="block"><span className="mb-2 block text-sm font-semibold">Đường dẫn thư mục</span><input autoFocus className="field" type="url" value={folderUrl} onChange={(event) => setFolderUrl(event.target.value)} maxLength={2000} placeholder="https://drive.google.com/drive/folders/..." /></label>
+    <label className="block"><span className="mb-2 block text-sm font-semibold">Đường dẫn thư mục</span><input autoFocus className="field" type="url" disabled={!canEdit} value={folderUrl} onChange={(event) => setFolderUrl(event.target.value)} maxLength={2000} placeholder="https://drive.google.com/drive/folders/..." /></label>
     {folderUrl && !validUrl && <p className="mt-3 text-xs text-red-600">Đường dẫn phải bắt đầu bằng http:// hoặc https://</p>}
+    {!canEdit && <ReadOnlyHint />}
     <ErrorMessage error={mutation.error} />
-    <div className="mt-6 flex justify-end gap-3"><Button variant="ghost" onClick={onClose}>Hủy</Button><Button loading={mutation.isPending} disabled={!changed || !validUrl} onClick={() => mutation.mutate({ folder_url: folderUrl.trim() })}><Save className="h-4 w-4" />Lưu thư mục</Button></div>
+    <div className="mt-6 flex justify-end gap-3"><Button variant="ghost" onClick={onClose}>Đóng</Button><Button loading={mutation.isPending} disabled={!changed || !validUrl || !canEdit} onClick={() => mutation.mutate({ folder_url: folderUrl.trim() })}><Save className="h-4 w-4" />Lưu thư mục</Button></div>
   </Modal>;
 }
 
 export function DebtConfirmModal({ confirmation, onClose }: { confirmation: DebtConfirmation | null; onClose: () => void }) {
   const customer = confirmation?.customer ?? null;
   const mutation = useCustomerUpdate(customer, onClose);
+  const canEdit = useCanUpdateCustomer();
   const markingAsPaid = confirmation?.nextValue === false;
   return <Modal open={Boolean(confirmation)} onClose={onClose} className="max-w-md" title={markingAsPaid ? "Xác nhận đã thanh toán" : "Xác nhận còn nợ"} description={markingAsPaid ? "Thời điểm xác nhận sẽ được lưu làm ngày trả nợ gần nhất." : "Khách hàng sẽ được đánh dấu là đang còn nợ."}>
     <p className="text-sm leading-relaxed text-muted-foreground">Áp dụng thay đổi cho <strong className="text-foreground">{customer?.name}</strong>?</p>
+    {!canEdit && <ReadOnlyHint />}
     <ErrorMessage error={mutation.error} />
-    <div className="mt-7 flex justify-center gap-3"><Button variant="ghost" onClick={onClose}>Hủy</Button><Button loading={mutation.isPending} onClick={() => confirmation && mutation.mutate({ has_debt: confirmation.nextValue })}>Xác nhận</Button></div>
+    <div className="mt-7 flex justify-center gap-3"><Button variant="ghost" onClick={onClose}>Hủy</Button><Button loading={mutation.isPending} disabled={!canEdit} onClick={() => confirmation && mutation.mutate({ has_debt: confirmation.nextValue })}>Xác nhận</Button></div>
   </Modal>;
 }

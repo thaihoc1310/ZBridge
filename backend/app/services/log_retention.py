@@ -5,8 +5,8 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import SessionLocal
-from app.models import BotDeliveryLog, DebtReminderRun
-from app.models.entities import DebtReminderStatus
+from app.models import BotDeliveryLog, DebtReminderRun, MentionFollowup
+from app.models.entities import DebtReminderStatus, MentionFollowupStatus
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,20 @@ async def delete_expired_delivery_logs(
                     DebtReminderStatus.FAILED,
                     DebtReminderStatus.SKIPPED,
                     DebtReminderStatus.CANCELLED,
+                ]
+            ),
+        )
+    )
+    # Follow-ups in a terminal state only: PENDING/PROCESSING rows are live loops
+    # still waiting for the customer to reply.
+    await db.execute(
+        delete(MentionFollowup).where(
+            MentionFollowup.processed_at < cutoff,
+            MentionFollowup.status.in_(
+                [
+                    MentionFollowupStatus.SENT,
+                    MentionFollowupStatus.FAILED,
+                    MentionFollowupStatus.CANCELLED,
                 ]
             ),
         )

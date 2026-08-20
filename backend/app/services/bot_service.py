@@ -3,9 +3,11 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.alerts import Severity
 from app.models import ZaloAccount, ZaloGroup
 from app.models.entities import BotStatus
 from app.schemas.api import BotStatusResponse
+from app.services.alerting import report_async
 from app.services.zalo_gateway_client import GatewayError, zalo_gateway
 
 
@@ -22,9 +24,13 @@ async def get_or_create_account(db: AsyncSession) -> ZaloAccount:
 async def refresh_bot_status(db: AsyncSession) -> BotStatusResponse:
     account = await get_or_create_account(db)
     now = datetime.now(UTC)
+    listener_status: str | None = None
+    events_healthy = False
     try:
         gateway_status = await zalo_gateway.get_status()
         raw_status = gateway_status.get("status", "ERROR")
+        listener_status = gateway_status.get("listener_status")
+        events_healthy = bool(gateway_status.get("events_healthy", False))
         account.status = BotStatus(raw_status)
         account.zalo_user_id = gateway_status.get("zalo_user_id") or account.zalo_user_id
         account.display_name = gateway_status.get("account_name") or account.display_name
@@ -37,6 +43,11 @@ async def refresh_bot_status(db: AsyncSession) -> BotStatusResponse:
         account.status = BotStatus.ERROR
         account.last_health_check_at = now
         account.last_error = getattr(exc, "message", str(exc))
+        await report_async(
+            "ZALO_GATEWAY_UNREACHABLE",
+            f"Không lấy được trạng thái bot Zalo: {account.last_error}",
+            severity=Severity.ERROR,
+        )
     await db.commit()
     group_count = await db.scalar(
         select(func.count()).select_from(ZaloGroup).where(ZaloGroup.is_available.is_(True))
@@ -51,4 +62,6 @@ async def refresh_bot_status(db: AsyncSession) -> BotStatusResponse:
         last_connected_at=account.last_connected_at,
         last_health_check_at=account.last_health_check_at,
         last_error=account.last_error,
+        listener_status=listener_status,
+        events_healthy=events_healthy,
     )

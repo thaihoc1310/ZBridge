@@ -13,10 +13,69 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=8, max_length=128)
 
 
+class PermissionResponse(BaseModel):
+    code: str
+    name: str
+    category: str
+
+
+class RoleResponse(BaseModel):
+    id: uuid.UUID
+    code: str
+    name: str
+    description: str | None = None
+    is_system: bool
+    permissions: list[str]
+    user_count: int = 0
+
+
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
     email: str
+    full_name: str | None = None
+    is_active: bool
+    role: RoleResponse
+    created_at: datetime
+    updated_at: datetime
+
+
+class UserCreate(BaseModel):
+    email: EmailStr
+    full_name: str | None = Field(default=None, max_length=255)
+    password: str = Field(min_length=8, max_length=128)
+    role_id: uuid.UUID
+    is_active: bool = True
+
+
+class UserUpdate(BaseModel):
+    full_name: str | None = Field(default=None, max_length=255)
+    password: str | None = Field(default=None, min_length=8, max_length=128)
+    role_id: uuid.UUID | None = None
+    is_active: bool | None = None
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_change(self):
+        if self.current_password == self.new_password:
+            raise ValueError("Mật khẩu mới phải khác mật khẩu hiện tại.")
+        return self
+
+
+class RoleCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=1000)
+    permissions: list[str] = Field(min_length=1, max_length=100)
+
+
+class RoleUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=1000)
+    permissions: list[str] | None = Field(default=None, max_length=100)
 
 
 class BotStatusResponse(BaseModel):
@@ -29,6 +88,8 @@ class BotStatusResponse(BaseModel):
     last_connected_at: datetime | None = None
     last_health_check_at: datetime | None = None
     last_error: str | None = None
+    listener_status: str | None = None
+    events_healthy: bool = False
 
 
 class QRResponse(BaseModel):
@@ -242,7 +303,18 @@ class IncomingGroupMessage(BaseModel):
     message_id: str = Field(min_length=1, max_length=128)
     sender_id: str | None = Field(default=None, max_length=128)
     content: str = Field(default="", max_length=10000)
-    mentions: list[IncomingMention] = Field(default_factory=list, max_length=100)
+    # Generous on purpose: rejecting an event would also drop the reply
+    # acknowledgement it carries, leaving the follow-up loop running forever.
+    mentions: list[IncomingMention] = Field(default_factory=list, max_length=1000)
+
+
+class GatewayAlert(BaseModel):
+    """An operator alert raised by the Zalo gateway (which cannot reach Celery)."""
+
+    code: str = Field(min_length=1, max_length=64)
+    message: str = Field(min_length=1, max_length=2000)
+    severity: Literal["WARNING", "ERROR", "CRITICAL"] = "ERROR"
+    context: dict[str, str] = Field(default_factory=dict, max_length=12)
 
 
 class IncomingEventResponse(BaseModel):

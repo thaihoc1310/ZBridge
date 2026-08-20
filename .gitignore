@@ -1,5 +1,9 @@
 .env
 **/.env
+# Mọi biến thể .env đều chứa secret; chỉ các file *.example được commit.
+.env.*
+!.env.example
+!.env.prod.example
 **/node_modules/
 **/dist/
 **/__pycache__/

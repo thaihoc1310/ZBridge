@@ -55,12 +55,27 @@ def next_debt_reminder_run(
     scheduled_for: datetime,
     *,
     has_debt: bool,
+    now: datetime | None = None,
 ) -> datetime:
+    """Next moment this customer should be reminded, never a moment already past.
+
+    Missed occurrences are skipped rather than replayed: after an outage longer
+    than the repeat interval, advancing purely from ``scheduled_for`` would leave
+    ``next_run_at`` in the past, so every beat tick would create another run and
+    the customer would receive a burst of reminders a minute apart.
+    """
     scheduled_for = _as_utc(scheduled_for)
-    monthly_anchor = next_monthly_run(day_of_month, send_time, now=scheduled_for)
+    reference = _as_utc(now or datetime.now(UTC))
+    monthly_anchor = next_monthly_run(
+        day_of_month, send_time, now=max(scheduled_for, reference)
+    )
     if not has_debt:
         return monthly_anchor
-    repeated_run = scheduled_for + timedelta(days=repeat_interval_days)
+    step = timedelta(days=repeat_interval_days)
+    repeated_run = scheduled_for + step
+    if repeated_run <= reference:
+        missed = (reference - repeated_run) // step + 1
+        repeated_run += missed * step
     return min(repeated_run, monthly_anchor)
 
 
@@ -192,8 +207,9 @@ async def save_debt_reminder(
                 repeated_run = _as_utc(last_sent.scheduled_for) + timedelta(
                     days=data.repeat_interval_days
                 )
-                if repeated_run > effective_now:
-                    next_run_at = min(next_run_at, repeated_run)
+                # An already-overdue repeat must fire now. Dropping it would push a
+                # still-indebted customer all the way to next month's anchor.
+                next_run_at = min(next_run_at, max(repeated_run, effective_now))
         automation.next_run_at = next_run_at
     else:
         automation.next_run_at = None

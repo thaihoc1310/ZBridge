@@ -7,14 +7,20 @@ import type { Dashboard } from "../api/types";
 import { PageHeader } from "../components/PageHeader";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { formatDate } from "../lib/format";
+import { PERMISSIONS } from "../lib/permissions";
+import { usePermissions } from "../lib/session";
 
 export function DashboardPage() {
   const { data, isLoading } = useQuery({ queryKey: ["dashboard"], queryFn: () => api<Dashboard>("/dashboard"), refetchInterval: 30_000 });
+  const { can } = usePermissions();
+  // Only link where the role can actually follow.
+  const customersLink = can(PERMISSIONS.customerRead);
+  const activityLink = can(PERMISSIONS.activityRead);
   const cards = [
     { label: "Bot", value: data?.bot_status ?? "—", icon: Bot, status: true },
-    { label: "Tổng khách hàng", value: data?.customer_count ?? "—", sub: `${data?.customers_with_debt ?? 0} đang còn nợ`, icon: UsersRound, to: "/customers" },
-    { label: "Tin nhắn hôm nay", value: data?.messages_today ?? "—", sub: "Mọi lượt bot gửi", icon: MessageSquareText, to: "/activity?date=today" },
-    { label: "Thất bại hôm nay", value: data?.failed_today ?? "—", sub: "Bấm để kiểm tra", icon: XCircle, to: "/activity?status=FAILED&date=today" },
+    { label: "Tổng khách hàng", value: data?.customer_count ?? "—", sub: `${data?.customers_with_debt ?? 0} đang còn nợ`, icon: UsersRound, to: customersLink ? "/customers" : undefined },
+    { label: "Tin nhắn hôm nay", value: data?.messages_today ?? "—", sub: "Mọi lượt bot gửi", icon: MessageSquareText, to: activityLink ? "/activity?date=today" : undefined },
+    { label: "Thất bại hôm nay", value: data?.failed_today ?? "—", sub: activityLink ? "Bấm để kiểm tra" : "Trong hôm nay", icon: XCircle, to: activityLink ? "/activity?status=FAILED&date=today" : undefined },
   ];
   return (
     <div className="mx-auto max-w-7xl">
@@ -41,8 +47,8 @@ export function DashboardPage() {
         </div>
       </section>
       <div className="mt-6 grid gap-4 sm:grid-cols-2">
-        <Link to="/bot" className="card group flex items-center justify-between p-5 transition hover:border-accent/30 hover:shadow-card-hover"><span><span className="text-sm font-semibold">Quản lý kết nối</span><span className="mt-1 block text-xs text-muted-foreground">Session, QR và sức khỏe bot</span></span><ArrowUpRight className="text-muted-foreground transition group-hover:-translate-y-1 group-hover:translate-x-1 group-hover:text-accent" /></Link>
-        <Link to="/customers" className="card group flex items-center justify-between p-5 transition hover:border-accent/30 hover:shadow-card-hover"><span><span className="text-sm font-semibold">Mở danh sách khách hàng</span><span className="mt-1 block text-xs text-muted-foreground">Công nợ, hồ sơ và cấu hình tự động hóa</span></span><ArrowUpRight className="text-muted-foreground transition group-hover:-translate-y-1 group-hover:translate-x-1 group-hover:text-accent" /></Link>
+        {can(PERMISSIONS.botRead) && <Link to="/bot" className="card group flex items-center justify-between p-5 transition hover:border-accent/30 hover:shadow-card-hover"><span><span className="text-sm font-semibold">Quản lý kết nối</span><span className="mt-1 block text-xs text-muted-foreground">Session, QR và sức khỏe bot</span></span><ArrowUpRight className="text-muted-foreground transition group-hover:-translate-y-1 group-hover:translate-x-1 group-hover:text-accent" /></Link>}
+        {customersLink && <Link to="/customers" className="card group flex items-center justify-between p-5 transition hover:border-accent/30 hover:shadow-card-hover"><span><span className="text-sm font-semibold">Mở danh sách khách hàng</span><span className="mt-1 block text-xs text-muted-foreground">Công nợ, hồ sơ và cấu hình tự động hóa</span></span><ArrowUpRight className="text-muted-foreground transition group-hover:-translate-y-1 group-hover:translate-x-1 group-hover:text-accent" /></Link>}
       </div>
     </div>
   );

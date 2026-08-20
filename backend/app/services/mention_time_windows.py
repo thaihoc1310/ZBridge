@@ -6,7 +6,7 @@ DEFAULT_MENTION_WINDOWS = [
     {"start": "08:00", "end": "12:00"},
     {"start": "14:00", "end": "18:00"},
 ]
-MENTION_TIMEZONE = ZoneInfo("Asia/Bangkok")
+MENTION_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 
 
 def normalize_time_windows(windows: Iterable[Mapping[str, str]]) -> list[dict[str, str]]:

@@ -238,7 +238,10 @@ async def test_successful_followup_is_scheduled_again(monkeypatch) -> None:
         )
         db.add(group)
         await db.flush()
-        db.add(Customer(id=group.id, zalo_group_id=group.id))
+        # Deliberately not reusing the group id: delivery logs must be attached to
+        # the customer that owns the group, not to the group itself.
+        customer = Customer(zalo_group_id=group.id)
+        db.add(customer)
         automation = MentionAutomation(
             zalo_group_id=group.id,
             enabled=True,
@@ -260,6 +263,7 @@ async def test_successful_followup_is_scheduled_again(monkeypatch) -> None:
         db.add(followup)
         await db.commit()
         followup_id = followup.id
+        customer_id = customer.id
 
     sent: list[tuple[str, list[dict[str, str]]]] = []
 
@@ -267,7 +271,11 @@ async def test_successful_followup_is_scheduled_again(monkeypatch) -> None:
         sent.append((group_id, targets))
         return {"message_id": "sent-message"}
 
+    async def healthy_status() -> dict[str, object]:
+        return {"status": "CONNECTED", "events_healthy": True}
+
     monkeypatch.setattr(mention_scheduler, "SessionLocal", session_factory)
+    monkeypatch.setattr(mention_scheduler.zalo_gateway, "get_status", healthy_status)
     monkeypatch.setattr(mention_scheduler.zalo_gateway, "send_mention", fake_send_mention)
     before = datetime.now(UTC)
     await mention_scheduler.process_followup(followup_id)
@@ -285,12 +293,85 @@ async def test_successful_followup_is_scheduled_again(monkeypatch) -> None:
         assert delivery_log is not None
         assert delivery_log.status == DeliveryStatus.SENT
         assert delivery_log.type == DeliveryType.MENTION_AUTOMATION
-        assert delivery_log.customer_id == group.id
+        assert delivery_log.customer_id == customer_id
+        assert delivery_log.customer_id != group.id
     assert sent == [
         (
             "group-repeat",
             [{"user_id": "target-user", "display_name": "Người cần trả lời"}],
         )
     ]
+
+    await engine.dispose()
+
+
+async def test_followup_waits_while_zalo_event_channel_is_down(monkeypatch) -> None:
+    """Without the event channel a reply cannot be observed, so tagging must pause."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with session_factory() as db:
+        account = ZaloAccount()
+        db.add(account)
+        await db.flush()
+        group = ZaloGroup(
+            zalo_account_id=account.id,
+            zalo_group_id="group-events-down",
+            name="Nhóm mất kênh sự kiện",
+            member_count=2,
+            is_available=True,
+            last_synced_at=datetime.now(UTC),
+        )
+        db.add(group)
+        await db.flush()
+        db.add(Customer(zalo_group_id=group.id))
+        automation = MentionAutomation(
+            zalo_group_id=group.id,
+            enabled=True,
+            delay_minutes=1,
+            active_windows=[{"start": "00:00", "end": "23:59"}],
+        )
+        db.add(automation)
+        await db.flush()
+        followup = MentionFollowup(
+            automation_id=automation.id,
+            source_message_id="source-events-down",
+            target_user_ids=["target-user"],
+            target_display_names=["Người cần trả lời"],
+            due_at=datetime.now(UTC),
+            status=MentionFollowupStatus.PROCESSING,
+            claimed_at=datetime.now(UTC),
+            attempt_count=1,
+        )
+        db.add(followup)
+        await db.commit()
+        followup_id = followup.id
+
+    sent: list[str] = []
+
+    async def unhealthy_status() -> dict[str, object]:
+        return {"status": "CONNECTED", "events_healthy": False}
+
+    async def fake_send_mention(group_id: str, _targets: list[dict[str, str]]) -> dict[str, str]:
+        sent.append(group_id)
+        return {"message_id": "must-not-be-sent"}
+
+    monkeypatch.setattr(mention_scheduler, "SessionLocal", session_factory)
+    monkeypatch.setattr(mention_scheduler.zalo_gateway, "get_status", unhealthy_status)
+    monkeypatch.setattr(mention_scheduler.zalo_gateway, "send_mention", fake_send_mention)
+    before = datetime.now(UTC)
+    await mention_scheduler.process_followup(followup_id)
+
+    async with session_factory() as db:
+        postponed = await db.get(MentionFollowup, followup_id)
+        assert sent == []
+        assert postponed is not None
+        assert postponed.status == MentionFollowupStatus.PENDING
+        assert postponed.claimed_at is None
+        assert postponed.attempt_count == 0
+        assert postponed.due_at.replace(tzinfo=UTC) > before
+        assert await db.scalar(select(BotDeliveryLog)) is None
 
     await engine.dispose()

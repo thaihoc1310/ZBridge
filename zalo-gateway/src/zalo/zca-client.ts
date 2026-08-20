@@ -1,4 +1,5 @@
 import {
+  CloseReason,
   LoginQRCallbackEventType,
   ThreadType,
   Zalo,
@@ -7,12 +8,14 @@ import {
   type LoginQRCallbackEvent,
   type Message,
 } from "zca-js";
+import { reportGatewayError } from "../alerting.js";
 import { GatewayError } from "../errors.js";
 import { EncryptedSessionStore } from "./session.js";
 import type {
   BotState,
   ImageAttachment,
   IncomingGroupMessageEvent,
+  ListenerStatus,
   MentionTarget,
   RichTextPart,
   SendResult,
@@ -22,6 +25,11 @@ import type {
 } from "./types.js";
 
 type EventSink = (event: IncomingGroupMessageEvent) => Promise<void>;
+
+/** The backend never reads message bodies, so a generous cap avoids 422s on long messages. */
+const MAX_EVENT_CONTENT_LENGTH = 2_000;
+const MAX_EVENT_MENTIONS = 1_000;
+const LISTENER_RECOVERY_DELAYS_MS = [10_000, 30_000, 60_000, 120_000, 300_000];
 
 export class ZcaJsClient implements ZaloClient {
   private api: API | null = null;
@@ -34,6 +42,10 @@ export class ZcaJsClient implements ZaloClient {
   private lastError: string | null = null;
   private loginTask: Promise<void> | null = null;
   private outboundTail: Promise<void> = Promise.resolve();
+  private listenerStatus: ListenerStatus = "IDLE";
+  private listenerAttached = false;
+  private recoveryTimer: NodeJS.Timeout | null = null;
+  private recoveryAttempt = 0;
 
   constructor(
     private readonly sessions: EncryptedSessionStore,
@@ -50,16 +62,21 @@ export class ZcaJsClient implements ZaloClient {
     try {
       this.status = "CONNECTING";
       const zalo = new Zalo();
-      this.api = await zalo.login(credentials);
+      this.setApi(await zalo.login(credentials));
       await this.loadProfile();
       this.startListener();
       this.status = "CONNECTED";
       console.info("BOT_CONNECTED restored_session=true");
     } catch (error) {
-      this.api = null;
+      this.setApi(null);
       this.status = "AUTH_REQUIRED";
       this.lastError = this.safeError(error);
       console.warn("BOT_AUTH_REQUIRED saved_session_invalid=true");
+      reportGatewayError(
+        "BOT_SESSION_INVALID",
+        `Session Zalo đã lưu không dùng được nữa, cần quét lại mã QR: ${this.lastError}`,
+        "CRITICAL",
+      );
     }
   }
 
@@ -79,7 +96,7 @@ export class ZcaJsClient implements ZaloClient {
 
   async reconnect(): Promise<BotState> {
     this.stopListener();
-    this.api = null;
+    this.setApi(null);
     const credentials = await this.sessions.load();
     if (!credentials) {
       this.status = "AUTH_REQUIRED";
@@ -87,7 +104,7 @@ export class ZcaJsClient implements ZaloClient {
     }
     try {
       this.status = "CONNECTING";
-      this.api = await new Zalo().login(credentials);
+      this.setApi(await new Zalo().login(credentials));
       await this.loadProfile();
       this.startListener();
       this.status = "CONNECTED";
@@ -104,7 +121,7 @@ export class ZcaJsClient implements ZaloClient {
 
   async disconnect(): Promise<BotState> {
     this.stopListener();
-    this.api = null;
+    this.setApi(null);
     this.status = "DISCONNECTED";
     this.qrImage = null;
     this.qrStatus = null;
@@ -122,6 +139,8 @@ export class ZcaJsClient implements ZaloClient {
       session_active: await this.sessions.exists(),
       qr_status: this.qrStatus,
       last_error: this.lastError,
+      listener_status: this.listenerStatus,
+      events_healthy: this.status === "CONNECTED" && this.listenerStatus === "LISTENING",
     };
   }
 
@@ -386,11 +405,20 @@ export class ZcaJsClient implements ZaloClient {
     return this.api;
   }
 
+  /** Swapping the API instance also invalidates the listener bound to the old one. */
+  private setApi(api: API | null): void {
+    this.clearRecoveryTimer();
+    this.recoveryAttempt = 0;
+    this.listenerAttached = false;
+    this.listenerStatus = api ? "IDLE" : "STOPPED";
+    this.api = api;
+  }
+
   private async runQrLogin(): Promise<void> {
     try {
       const zalo = new Zalo();
-      this.api = await zalo.loginQR({}, (event) => this.handleQrEvent(event));
-      const context = this.api.getContext();
+      this.setApi(await zalo.loginQR({}, (event) => this.handleQrEvent(event)));
+      const context = this.requireApiUnchecked().getContext();
       const credentials: Credentials = {
         cookie: context.cookie.toJSON()?.cookies ?? [],
         imei: context.imei,
@@ -404,11 +432,16 @@ export class ZcaJsClient implements ZaloClient {
       this.qrImage = null;
       console.info("BOT_CONNECTED qr_login=true");
     } catch (error) {
-      this.api = null;
+      this.setApi(null);
       this.status = "AUTH_REQUIRED";
       this.qrStatus = "AUTH_REQUIRED";
       this.lastError = this.safeError(error);
       console.error("BOT_AUTH_REQUIRED qr_login_failed=true");
+      reportGatewayError(
+        "BOT_QR_LOGIN_FAILED",
+        `Đăng nhập Zalo bằng mã QR thất bại: ${this.lastError}`,
+        "ERROR",
+      );
     }
   }
 
@@ -449,38 +482,135 @@ export class ZcaJsClient implements ZaloClient {
   }
 
   private startListener(): void {
-    if (!this.api) return;
-    this.api.listener.on("message", (message) => this.handleMessage(message));
-    this.api.listener.on("connected", () => {
-      console.info("ZALO_LISTENER_CONNECTED");
-    });
-    this.api.listener.on("disconnected", (code, reason) => {
-      console.warn(
-        "ZALO_LISTENER_DISCONNECTED code=%d reason=%s",
-        code,
-        reason || "unknown",
+    const api = this.api;
+    if (!api) return;
+    if (!this.listenerAttached) {
+      api.listener.on("connected", () => {
+        if (this.api !== api) return;
+        this.listenerStatus = "LISTENING";
+        this.recoveryAttempt = 0;
+        this.clearRecoveryTimer();
+        console.info("ZALO_LISTENER_CONNECTED");
+      });
+      api.listener.on("disconnected", (code, reason) => {
+        if (this.api !== api || code === CloseReason.ManualClosure) return;
+        // zca-js may still retry on its own; `closed` tells us when it gave up.
+        this.listenerStatus = "RECONNECTING";
+        console.warn("ZALO_LISTENER_DISCONNECTED code=%d reason=%s", code, reason || "unknown");
+      });
+      api.listener.on("closed", (code, reason) => {
+        if (this.api !== api) return;
+        this.handleListenerClosed(code, reason);
+      });
+      api.listener.on("error", (error) => {
+        console.error("ZALO_LISTENER_ERROR", this.safeError(error));
+      });
+      api.listener.on("message", (message) => this.handleMessage(message));
+      this.listenerAttached = true;
+    }
+    try {
+      this.listenerStatus = "STARTING";
+      api.listener.start({ retryOnClose: true });
+      console.info("ZALO_LISTENER_STARTED");
+    } catch (error) {
+      this.listenerStatus = "CLOSED";
+      this.lastError = this.safeError(error);
+      console.error("ZALO_LISTENER_START_FAILED", this.lastError);
+      reportGatewayError(
+        "ZALO_LISTENER_START_FAILED",
+        `Không mở được kênh nhận tin nhắn Zalo: ${this.lastError}`,
+        "ERROR",
       );
-    });
-    this.api.listener.on("closed", (code, reason) => {
-      console.error(
-        "ZALO_LISTENER_CLOSED code=%d reason=%s",
-        code,
-        reason || "unknown",
+      this.scheduleListenerRecovery();
+    }
+  }
+
+  /**
+   * `closed` only fires once zca-js has stopped retrying, so the event channel
+   * is dead until we act. Leaving `status` at CONNECTED here would make the
+   * backend believe replies are still observable and tag customers forever.
+   */
+  private handleListenerClosed(code: number, reason: string): void {
+    const detail = reason || `code ${code}`;
+    if (code === CloseReason.ManualClosure) {
+      this.listenerStatus = "STOPPED";
+      return;
+    }
+    this.listenerStatus = "CLOSED";
+    if (code === CloseReason.KickConnection || code === CloseReason.DuplicateConnection) {
+      this.setApi(null);
+      this.status = "AUTH_REQUIRED";
+      this.qrStatus = "AUTH_REQUIRED";
+      this.lastError = `Zalo đã đóng phiên đăng nhập của bot (${detail}). Hãy quét lại mã QR.`;
+      console.error("BOT_AUTH_REQUIRED listener_closed=%d reason=%s", code, detail);
+      reportGatewayError(
+        "BOT_SESSION_KILLED",
+        `Zalo đã đóng phiên của bot (${detail}). Bot ngừng hoạt động cho tới khi quét lại mã QR.`,
+        "CRITICAL",
+        { close_code: String(code) },
       );
-    });
-    this.api.listener.on("error", (error) => {
-      console.error("ZALO_LISTENER_ERROR", this.safeError(error));
-    });
-    this.api.listener.start({ retryOnClose: true });
-    console.info("ZALO_LISTENER_STARTED");
+      return;
+    }
+    this.lastError = `Kênh sự kiện Zalo đã đóng (${detail}). Gateway đang tự kết nối lại.`;
+    console.error("ZALO_LISTENER_CLOSED code=%d reason=%s", code, detail);
+    reportGatewayError(
+      "ZALO_EVENT_CHANNEL_CLOSED",
+      `Mất kênh nhận tin nhắn Zalo (${detail}). Đang tự kết nối lại; trong lúc đó tag tên tự động tạm dừng.`,
+      "ERROR",
+      { close_code: String(code) },
+    );
+    this.scheduleListenerRecovery();
+  }
+
+  private scheduleListenerRecovery(): void {
+    if (this.recoveryTimer) return;
+    const api = this.api;
+    if (!api) return;
+    const delayMs =
+      LISTENER_RECOVERY_DELAYS_MS[
+        Math.min(this.recoveryAttempt, LISTENER_RECOVERY_DELAYS_MS.length - 1)
+      ] ?? 300_000;
+    this.recoveryAttempt += 1;
+    console.warn(
+      "ZALO_LISTENER_RECOVERY_SCHEDULED attempt=%d delay_ms=%d",
+      this.recoveryAttempt,
+      delayMs,
+    );
+    this.recoveryTimer = setTimeout(() => {
+      this.recoveryTimer = null;
+      if (this.api !== api) return;
+      try {
+        this.listenerStatus = "STARTING";
+        api.listener.start({ retryOnClose: true });
+        console.info("ZALO_LISTENER_RECOVERY_STARTED attempt=%d", this.recoveryAttempt);
+      } catch (error) {
+        this.listenerStatus = "CLOSED";
+        console.error("ZALO_LISTENER_RECOVERY_FAILED", this.safeError(error));
+        this.scheduleListenerRecovery();
+      }
+    }, delayMs);
+  }
+
+  private clearRecoveryTimer(): void {
+    if (!this.recoveryTimer) return;
+    clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = null;
   }
 
   private stopListener(): void {
+    this.clearRecoveryTimer();
+    this.recoveryAttempt = 0;
+    this.listenerStatus = "STOPPED";
     try {
       this.api?.listener.stop();
     } catch (error) {
       console.warn("ZALO_LISTENER_STOP_FAILED", this.safeError(error));
     }
+  }
+
+  private requireApiUnchecked(): API {
+    if (!this.api) throw new GatewayError("BOT_DISCONNECTED", "Bot chưa kết nối với Zalo.", 409);
+    return this.api;
   }
 
   private handleMessage(message: Message): void {
@@ -495,13 +625,16 @@ export class ZcaJsClient implements ZaloClient {
       .map((value) => String(value ?? ""))
       .find((value) => value !== "" && value !== "0");
     if (!messageId) return;
+    const content =
+      typeof message.data.content === "string" ? message.data.content : "";
     const event: IncomingGroupMessageEvent = {
       group_id: message.threadId,
       message_id: messageId,
       sender_id: this.normalizeMemberId(message.data.uidFrom),
-      content:
-        typeof message.data.content === "string" ? message.data.content : "",
-      mentions: mentions.map((mention) => ({
+      // Trimmed on purpose: an oversized body would be rejected by the backend
+      // and the reply acknowledgement it carries would be lost for good.
+      content: content.slice(0, MAX_EVENT_CONTENT_LENGTH),
+      mentions: mentions.slice(0, MAX_EVENT_MENTIONS).map((mention) => ({
         user_id: this.normalizeMemberId(mention.uid),
         position: mention.pos,
         length: mention.len,
@@ -512,6 +645,15 @@ export class ZcaJsClient implements ZaloClient {
         "ZALO_EVENT_FORWARD_FAILED group_id=%s error=%s",
         message.threadId,
         this.safeError(error),
+      );
+      // A dropped event means a customer reply was never acknowledged, so the
+      // bot may keep tagging someone who already answered.
+      reportGatewayError(
+        "ZALO_EVENT_DROPPED",
+        `Không đẩy được tin nhắn đến sang backend: ${this.safeError(error)}.`
+          + " Có thể bỏ sót phản hồi của khách và tag lại người đã trả lời.",
+        "CRITICAL",
+        { zalo_group_id: message.threadId },
       );
     });
   }

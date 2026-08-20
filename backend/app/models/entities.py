@@ -71,12 +71,68 @@ class TimestampMixin:
     )
 
 
+class Permission(TimestampMixin, Base):
+    __tablename__ = "permissions"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    roles: Mapped[list[Role]] = relationship(
+        secondary="role_permissions", back_populates="permissions"
+    )
+
+
+class Role(TimestampMixin, Base):
+    __tablename__ = "roles"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    permissions: Mapped[list[Permission]] = relationship(
+        secondary="role_permissions",
+        back_populates="roles",
+        order_by="Permission.code",
+    )
+    users: Mapped[list[User]] = relationship(back_populates="role")
+
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+
+    role_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True
+    )
+    permission_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
 class User(TimestampMixin, Base):
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True, nullable=False)
+    full_name: Mapped[str | None] = mapped_column(String(255))
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    password_changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    role_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+
+    role: Mapped[Role] = relationship(back_populates="users")
+
+    @property
+    def permission_codes(self) -> frozenset[str]:
+        """Requires ``role.permissions`` to be eager-loaded (see ``api.deps``)."""
+        return frozenset(permission.code for permission in self.role.permissions)
 
 
 class ZaloAccount(TimestampMixin, Base):

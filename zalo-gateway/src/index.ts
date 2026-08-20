@@ -1,6 +1,8 @@
+import { timingSafeEqual } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import helmet from "helmet";
 import { z } from "zod";
+import { reportGatewayError } from "./alerting.js";
 import { config } from "./config.js";
 import { GatewayError } from "./errors.js";
 import { MockZaloClient } from "./zalo/mock-client.js";
@@ -13,12 +15,22 @@ const app = express();
 app.use(helmet());
 app.use(express.json({ limit: "32kb" }));
 
+const EVENT_FORWARD_ATTEMPTS = 5;
+
 type AsyncRoute = (req: Request, res: Response) => Promise<unknown>;
 
 function asyncRoute(handler: AsyncRoute) {
   return (req: Request, res: Response, next: NextFunction) => {
     void handler(req, res).catch(next);
   };
+}
+
+function secretMatches(provided: string | undefined, expected: string): boolean {
+  if (!provided) return false;
+  const left = Buffer.from(provided, "utf8");
+  const right = Buffer.from(expected, "utf8");
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
 }
 
 const client: ZaloClient = config.mock
@@ -29,9 +41,14 @@ const client: ZaloClient = config.mock
       config.sendIntervalMs,
     );
 
+/**
+ * A dropped event means a customer's reply is never acknowledged and the bot
+ * keeps tagging them, so retry generously — but never on a 4xx, which will
+ * fail identically forever.
+ */
 async function forwardGroupMessageEvent(event: IncomingGroupMessageEvent): Promise<void> {
   let lastError: unknown;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= EVENT_FORWARD_ATTEMPTS; attempt += 1) {
     try {
       const response = await fetch(config.backendEventUrl, {
         method: "POST",
@@ -43,11 +60,19 @@ async function forwardGroupMessageEvent(event: IncomingGroupMessageEvent): Promi
         signal: AbortSignal.timeout(10_000),
       });
       if (response.ok) return;
+      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+        throw new GatewayError(
+          "EVENT_REJECTED",
+          `Backend rejected Zalo event with status ${response.status}`,
+          response.status,
+        );
+      }
       throw new Error(`Backend rejected Zalo event with status ${response.status}`);
     } catch (error) {
       lastError = error;
-      if (attempt < 3) {
-        await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
+      if (error instanceof GatewayError) break;
+      if (attempt < EVENT_FORWARD_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, 2 ** (attempt - 1) * 1_000));
       }
     }
   }
@@ -56,11 +81,11 @@ async function forwardGroupMessageEvent(event: IncomingGroupMessageEvent): Promi
 
 app.get("/health", asyncRoute(async (_req, res) => {
   const state = await client.getStatus();
-  res.json({ gateway: "UP", zalo: state.status });
+  res.json({ gateway: "UP", zalo: state.status, listener: state.listener_status });
 }));
 
 app.use((req, res, next) => {
-  if (req.header("X-Gateway-Secret") !== config.gatewaySecret) {
+  if (!secretMatches(req.header("X-Gateway-Secret"), config.gatewaySecret)) {
     res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Invalid gateway secret." } });
     return;
   }
@@ -169,10 +194,21 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   }
   const message = error instanceof Error ? error.message : "Unknown gateway error.";
   console.error("ZALO_GATEWAY_ERROR", message);
+  reportGatewayError("GATEWAY_UNHANDLED_ERROR", message, "CRITICAL", {
+    path: _req.path,
+  });
   res.status(500).json({ error: { code: "UNKNOWN_ERROR", message } });
 });
 
-await client.initialize();
+// Serve before restoring the Zalo session: a login that hangs must not keep the
+// health check (and therefore the whole compose stack) from coming up.
 app.listen(config.port, "0.0.0.0", () => {
   console.info(`Zalo Gateway listening on port ${config.port} mock=${config.mock}`);
+});
+
+void client.initialize().catch((error: unknown) => {
+  console.error(
+    "ZALO_INITIALIZE_FAILED",
+    error instanceof Error ? error.message : "unknown error",
+  );
 });

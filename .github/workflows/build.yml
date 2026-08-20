@@ -1,0 +1,82 @@
+name: build-images
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Gate the images behind the same checks used locally: a broken build must not
+  # reach the registry the VPS pulls from.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e "./backend[dev]"
+      - name: Backend lint and tests
+        working-directory: backend
+        run: |
+          ruff check .
+          pytest -q
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Frontend typecheck and lint
+        working-directory: frontend
+        run: |
+          npm ci
+          npx tsc -b
+          npx eslint src --max-warnings=0
+      - name: Gateway typecheck
+        working-directory: zalo-gateway
+        run: |
+          npm ci
+          npx tsc --noEmit
+
+  build:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        image:
+          - name: backend
+            context: ./backend
+          - name: frontend
+            context: ./frontend
+          - name: zalo-gateway
+            context: ./zalo-gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/zbridge-${{ matrix.image.name }}
+          tags: |
+            type=sha,format=long
+            type=ref,event=tag
+            type=raw,value=latest,enable={{is_default_branch}}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.image.context }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

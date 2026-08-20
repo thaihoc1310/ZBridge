@@ -12,9 +12,13 @@ import { DebtConfirmModal, DebtStatusOptions, FolderEditorModal, NoteEditorModal
 import { DebtReminderModal } from "../features/debt-reminders/DebtReminderModal";
 import { MentionAutomationModal } from "../features/mentions/MentionAutomationModal";
 import { formatDate, initials } from "../lib/format";
+import { PERMISSIONS } from "../lib/permissions";
+import { usePermissions } from "../lib/session";
 
 export function CustomerDetailPage() {
   const { id = "" } = useParams();
+  const { can } = usePermissions();
+  const canUpdate = can(PERMISSIONS.customerUpdate);
   const [composerOpen, setComposerOpen] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [debtReminderOpen, setDebtReminderOpen] = useState(false);
@@ -49,24 +53,24 @@ export function CustomerDetailPage() {
         <div className="mt-6 grid gap-5 md:grid-cols-3">
           <div className="group/field relative rounded-xl border border-border bg-muted/30 p-4">
             <p className="flex items-center gap-2 text-xs text-muted-foreground"><FolderOpen className="h-4 w-4 text-accent" />Thư mục</p>
-            {item.folder_url ? <a href={item.folder_url} target="_blank" rel="noreferrer" className="mt-3 inline-flex max-w-[calc(100%-2rem)] items-center gap-1.5 font-medium text-accent underline decoration-blue-200 underline-offset-4 hover:decoration-accent"><span className="truncate">Mở thư mục</span><ExternalLink className="h-3.5 w-3.5 shrink-0" /></a> : <button className="mt-3 text-sm italic text-muted-foreground/70 hover:text-accent" onClick={() => setFolderOpen(true)}>+ Thêm thư mục</button>}
-            <EditButton label="Sửa thư mục" onClick={() => setFolderOpen(true)} />
+            {item.folder_url ? <a href={item.folder_url} target="_blank" rel="noreferrer" className="mt-3 inline-flex max-w-[calc(100%-2rem)] items-center gap-1.5 font-medium text-accent underline decoration-blue-200 underline-offset-4 hover:decoration-accent"><span className="truncate">Mở thư mục</span><ExternalLink className="h-3.5 w-3.5 shrink-0" /></a> : canUpdate ? <button className="mt-3 text-sm italic text-muted-foreground/70 hover:text-accent" onClick={() => setFolderOpen(true)}>+ Thêm thư mục</button> : <p className="mt-3 text-sm text-muted-foreground/70">Chưa có</p>}
+            {canUpdate && <EditButton label="Sửa thư mục" onClick={() => setFolderOpen(true)} />}
           </div>
-          <div className="rounded-xl border border-border bg-muted/30 p-4"><p className="mb-3 flex items-center gap-2 text-xs text-muted-foreground"><WalletCards className="h-4 w-4 text-accent" />Công nợ</p><DebtStatusOptions value={item.has_debt} onChange={(nextValue) => setDebtConfirmation({ customer: item, nextValue })} /></div>
+          <div className="rounded-xl border border-border bg-muted/30 p-4"><p className="mb-3 flex items-center gap-2 text-xs text-muted-foreground"><WalletCards className="h-4 w-4 text-accent" />Công nợ</p><DebtStatusOptions value={item.has_debt} disabled={!canUpdate} onChange={(nextValue) => setDebtConfirmation({ customer: item, nextValue })} /></div>
           <div className="rounded-xl border border-border bg-muted/30 p-4"><p className="flex items-center gap-2 text-xs text-muted-foreground"><Clock3 className="h-4 w-4 text-accent" />Ngày trả nợ gần nhất</p><p className="mt-3 text-sm font-semibold">{item.last_debt_paid_at ? formatDate(item.last_debt_paid_at) : <span className="font-normal text-muted-foreground">Chưa có</span>}</p></div>
         </div>
         <div className="group/field relative mt-5 border-t border-border pt-5">
-          <div className="flex items-center gap-1.5"><p className="text-xs text-muted-foreground">Ghi chú</p><button type="button" onClick={() => setNoteOpen(true)} title="Sửa ghi chú" aria-label="Sửa ghi chú" className="rounded-md p-1 text-slate-300 opacity-0 transition hover:bg-muted hover:text-accent group-hover/field:opacity-100 focus:opacity-100"><Pencil className="h-3 w-3" /></button></div>
-          <p className={`mt-2 whitespace-pre-wrap break-words text-sm leading-7 ${item.note ? "text-foreground" : "italic text-muted-foreground/70"}`}>{item.note || "+ Thêm ghi chú cho khách hàng"}</p>
+          <div className="flex items-center gap-1.5"><p className="text-xs text-muted-foreground">Ghi chú</p>{canUpdate && <button type="button" onClick={() => setNoteOpen(true)} title="Sửa ghi chú" aria-label="Sửa ghi chú" className="rounded-md p-1 text-slate-300 opacity-0 transition hover:bg-muted hover:text-accent group-hover/field:opacity-100 focus:opacity-100"><Pencil className="h-3 w-3" /></button>}</div>
+          <p className={`mt-2 whitespace-pre-wrap break-words text-sm leading-7 ${item.note ? "text-foreground" : "italic text-muted-foreground/70"}`}>{item.note || (canUpdate ? "+ Thêm ghi chú cho khách hàng" : "Chưa có ghi chú")}</p>
         </div>
       </section>
 
       <section className="card p-6 sm:p-8">
         <SectionTitle title="Chức năng" description="Các công cụ và tự động hóa dành riêng cho khách hàng này." />
         <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <CustomerAction icon={MessageSquareText} title="Gửi tin nhắn" description="Soạn và gửi tin nhắn văn bản vào nhóm" onClick={() => setComposerOpen(true)} disabled={!item.is_available} primary />
-          <CustomerAction icon={AtSign} title="Tag tên tự động" description="Tag lại người được chọn sau một khoảng chờ" onClick={() => setMentionOpen(true)} disabled={!item.is_available} />
-          <CustomerAction icon={ReceiptText} title="Nhắc thanh toán công nợ" description="Gửi ảnh Google Sheet, link và nội dung nhắc hàng tháng" onClick={() => setDebtReminderOpen(true)} disabled={!item.is_available} />
+          {can(PERMISSIONS.messageSend) && <CustomerAction icon={MessageSquareText} title="Gửi tin nhắn" description="Soạn và gửi tin nhắn văn bản vào nhóm" onClick={() => setComposerOpen(true)} disabled={!item.is_available} primary />}
+          {can(PERMISSIONS.mentionRead) && <CustomerAction icon={AtSign} title="Tag tên tự động" description="Tag lại người được chọn sau một khoảng chờ" onClick={() => setMentionOpen(true)} disabled={!item.is_available} />}
+          {can(PERMISSIONS.debtReminderRead) && <CustomerAction icon={ReceiptText} title="Nhắc thanh toán công nợ" description="Gửi ảnh Google Sheet, link và nội dung nhắc hàng tháng" onClick={() => setDebtReminderOpen(true)} disabled={!item.is_available} />}
         </div>
         <div className="mt-5 rounded-xl border border-dashed border-border bg-muted/40 px-4 py-3 text-center text-xs text-muted-foreground">Các chức năng mới sẽ được bổ sung tại đây.</div>
       </section>

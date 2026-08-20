@@ -27,9 +27,27 @@ class Settings(BaseSettings):
     google_service_account_file: str | None = None
     google_api_timeout_seconds: float = 90.0
 
+    # Operator alerting to Telegram.
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    telegram_timeout_seconds: float = 10.0
+    alert_min_severity: str = "WARNING"
+    alert_dedup_window_seconds: int = 900
+    # Base URL used in alert links. APP_URL is often localhost, which Telegram
+    # refuses to linkify, so this can point at a LAN IP or public domain.
+    alert_link_base_url: str = ""
+    health_check_url: str = "http://backend:8000/health"
+    alert_heartbeat_interval_seconds: int = 120
+    login_failure_alert_threshold: int = 5
+    login_failure_window_seconds: int = 600
+
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.app_url.split(",") if origin.strip()]
+
+    @property
+    def telegram_enabled(self) -> bool:
+        return bool(self.telegram_bot_token and self.telegram_chat_id)
 
 
 @lru_cache

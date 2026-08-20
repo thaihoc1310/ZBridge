@@ -5,6 +5,21 @@ export type ConnectionStatus =
   | "AUTH_REQUIRED"
   | "ERROR";
 
+/**
+ * Health of the Zalo websocket that delivers incoming group messages.
+ *
+ * `LISTENING` is the only state in which the gateway can observe that a
+ * customer replied, so the backend must not send mention follow-ups in any
+ * other state — it would keep tagging people who already answered.
+ */
+export type ListenerStatus =
+  | "IDLE"
+  | "STARTING"
+  | "LISTENING"
+  | "RECONNECTING"
+  | "CLOSED"
+  | "STOPPED";
+
 export type BotState = {
   status: ConnectionStatus;
   account_name: string | null;
@@ -13,6 +28,8 @@ export type BotState = {
   session_active: boolean;
   qr_status: string | null;
   last_error: string | null;
+  listener_status: ListenerStatus;
+  events_healthy: boolean;
 };
 
 export type ZaloGroup = {

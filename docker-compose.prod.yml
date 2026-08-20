@@ -1,0 +1,230 @@
+# Production stack for a single VPS, reached only through Cloudflare Tunnel.
+#
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+#
+# No service publishes a port: cloudflared dials out to Cloudflare, so the VPS
+# needs no inbound firewall rule at all (not even 80/443).
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    mem_limit: ${REDIS_MEM_LIMIT:-256m}
+    logging: *logging
+    networks: [internal]
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-zbridge}
+      POSTGRES_USER: ${POSTGRES_USER:-zbridge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-zbridge} -d ${POSTGRES_DB:-zbridge}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: ${POSTGRES_MEM_LIMIT:-512m}
+    logging: *logging
+    networks: [internal]
+
+  migrate:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_OWNER:?IMAGE_OWNER is required}/zbridge-backend:${IMAGE_TAG:-latest}
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *logging
+    networks: [internal]
+
+  zalo-gateway:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/zbridge-zalo-gateway:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      PORT: 3001
+      ZALO_GATEWAY_SECRET: ${ZALO_GATEWAY_SECRET:?ZALO_GATEWAY_SECRET is required}
+      BACKEND_EVENT_URL: http://backend:8000/internal/zalo/events
+      BACKEND_ALERT_URL: http://backend:8000/internal/zalo/alerts
+      ZALO_EVENT_SECRET: ${ZALO_EVENT_SECRET:?ZALO_EVENT_SECRET is required}
+      ZALO_SESSION_PATH: /data/zalo-session/session.enc
+      ZALO_SESSION_SECRET: ${ZALO_SESSION_SECRET:?ZALO_SESSION_SECRET is required}
+      ZALO_MOCK: "false"
+      ZALO_SEND_INTERVAL_MS: ${ZALO_SEND_INTERVAL_MS:-1000}
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    volumes:
+      - zalo-session:/data/zalo-session
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+    mem_limit: ${GATEWAY_MEM_LIMIT:-2g}
+    logging: *logging
+    networks: [internal]
+
+  backend:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/zbridge-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-480}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:?INITIAL_ADMIN_EMAIL is required}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:?INITIAL_ADMIN_PASSWORD is required}
+      ZALO_GATEWAY_URL: http://zalo-gateway:3001
+      ZALO_GATEWAY_SECRET: ${ZALO_GATEWAY_SECRET}
+      ZALO_EVENT_SECRET: ${ZALO_EVENT_SECRET}
+      APP_URL: ${APP_URL:?APP_URL is required}
+      # Browsers reach us over HTTPS via Cloudflare, so the session cookie must
+      # carry the Secure flag.
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      ALERT_LINK_BASE_URL: ${ALERT_LINK_BASE_URL:-}
+      LOGIN_FAILURE_ALERT_THRESHOLD: ${LOGIN_FAILURE_ALERT_THRESHOLD:-5}
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      zalo-gateway:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=5)"]
+      interval: 15s
+      timeout: 8s
+      retries: 5
+      start_period: 20s
+    mem_limit: ${BACKEND_MEM_LIMIT:-512m}
+    logging: *logging
+    networks: [internal]
+
+  celery-worker:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/zbridge-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=celery", "--concurrency=${CELERY_CONCURRENCY:-4}"]
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      ZALO_GATEWAY_URL: http://zalo-gateway:3001
+      ZALO_GATEWAY_SECRET: ${ZALO_GATEWAY_SECRET}
+      MENTION_SCHEDULER_INTERVAL_SECONDS: ${MENTION_SCHEDULER_INTERVAL_SECONDS:-15}
+      DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS: ${DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS:-60}
+      GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google-service-account.json
+      APP_URL: ${APP_URL}
+      ALERT_LINK_BASE_URL: ${ALERT_LINK_BASE_URL:-}
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    volumes:
+      - ./secrets:/run/secrets:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      zalo-gateway:
+        condition: service_started
+    # Rendering a Google Sheet to PNG is the memory-hungry step here.
+    mem_limit: ${WORKER_MEM_LIMIT:-2g}
+    logging: *logging
+    networks: [internal]
+
+  celery-alerts:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/zbridge-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=alerts", "--concurrency=${ALERT_CONCURRENCY:-2}"]
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      ALERT_MIN_SEVERITY: ${ALERT_MIN_SEVERITY:-WARNING}
+      ALERT_DEDUP_WINDOW_SECONDS: ${ALERT_DEDUP_WINDOW_SECONDS:-900}
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    depends_on:
+      redis:
+        condition: service_healthy
+    mem_limit: ${ALERTS_MEM_LIMIT:-256m}
+    logging: *logging
+    networks: [internal]
+
+  # MUST stay at exactly one replica: a second scheduler would double every
+  # periodic task, which means customers receiving each debt reminder twice.
+  celery-beat:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/zbridge-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    command: ["celery", "-A", "app.celery_app:celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      MENTION_SCHEDULER_INTERVAL_SECONDS: ${MENTION_SCHEDULER_INTERVAL_SECONDS:-15}
+      DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS: ${DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS:-60}
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    mem_limit: ${BEAT_MEM_LIMIT:-256m}
+    logging: *logging
+    networks: [internal]
+
+  frontend:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/zbridge-frontend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on: [backend]
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    mem_limit: ${FRONTEND_MEM_LIMIT:-128m}
+    logging: *logging
+    networks: [internal]
+
+  # Outbound-only tunnel. Point the public hostname at http://frontend:8080 in
+  # the Cloudflare Zero Trust dashboard.
+  cloudflared:
+    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-latest}
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run", "--token", "${CLOUDFLARE_TUNNEL_TOKEN:?CLOUDFLARE_TUNNEL_TOKEN is required}"]
+    depends_on: [frontend]
+    mem_limit: ${CLOUDFLARED_MEM_LIMIT:-128m}
+    logging: *logging
+    networks: [internal]
+
+volumes:
+  postgres-data:
+  redis-data:
+  zalo-session:
+
+networks:
+  internal:
+    driver: bridge

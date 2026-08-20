@@ -21,6 +21,8 @@ import type {
 import { Button } from "../../components/ui/Button";
 import { Modal } from "../../components/ui/Modal";
 import { initials } from "../../lib/format";
+import { PERMISSIONS } from "../../lib/permissions";
+import { usePermissions } from "../../lib/session";
 
 type Props = {
   customerId: string;
@@ -61,6 +63,8 @@ export function MentionAutomationModal({
   onClose,
 }: Props) {
   const queryClient = useQueryClient();
+  const { can } = usePermissions();
+  const canEdit = can(PERMISSIONS.mentionUpdate);
   const pickerRef = useRef<HTMLDivElement>(null);
   const [selected, setSelected] = useState<MentionTarget[]>([]);
   const [delayValue, setDelayValue] = useState<number | "">(2);
@@ -495,9 +499,14 @@ export function MentionAutomationModal({
             </p>
           )}
 
+          {!canEdit && (
+            <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Vai trò của bạn chỉ được xem cấu hình tag tên tự động.
+            </p>
+          )}
           <div className="flex justify-end gap-3 border-t border-border pt-5">
-            <Button variant="ghost" onClick={onClose}>Hủy</Button>
-            <Button loading={save.isPending} onClick={() => save.mutate()}>
+            <Button variant="ghost" onClick={onClose}>Đóng</Button>
+            <Button loading={save.isPending} disabled={!canEdit} onClick={() => save.mutate()}>
               Lưu cấu hình
             </Button>
           </div>

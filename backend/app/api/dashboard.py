@@ -5,19 +5,21 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import require_permission
+from app.core.permissions import DASHBOARD_READ
 from app.db.database import get_db
-from app.models import BotDeliveryLog, Customer, ZaloAccount, ZaloGroup
+from app.models import BotDeliveryLog, Customer, User, ZaloAccount, ZaloGroup
 from app.models.entities import BotStatus, DeliveryStatus
 from app.schemas.api import DashboardResponse
 
-router = APIRouter(
-    prefix="/dashboard", tags=["dashboard"], dependencies=[Depends(get_current_user)]
-)
+router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 
 @router.get("", response_model=DashboardResponse)
-async def dashboard(db: AsyncSession = Depends(get_db)) -> DashboardResponse:
+async def dashboard(
+    db: AsyncSession = Depends(get_db),
+    _actor: User = Depends(require_permission(DASHBOARD_READ)),
+) -> DashboardResponse:
     account = await db.scalar(select(ZaloAccount).order_by(ZaloAccount.created_at).limit(1))
     local_now = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh"))
     today = local_now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)

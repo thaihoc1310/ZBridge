@@ -8,7 +8,28 @@ export type DeliveryType =
   | "DEBT_REMINDER_MESSAGE";
 export type DebtReminderStatus = "PENDING" | "PROCESSING" | "SENT" | "FAILED" | "SKIPPED" | "CANCELLED";
 
-export type User = { id: string; email: string };
+export type Permission = { code: string; name: string; category: string };
+
+export type Role = {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  is_system: boolean;
+  permissions: string[];
+  user_count: number;
+};
+
+export type User = {
+  id: string;
+  email: string;
+  full_name: string | null;
+  is_active: boolean;
+  role: Role;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Bot = {
   status: BotStatus;
   account_name: string | null;
@@ -19,6 +40,8 @@ export type Bot = {
   last_connected_at: string | null;
   last_health_check_at: string | null;
   last_error: string | null;
+  listener_status: string | null;
+  events_healthy: boolean;
 };
 export type QRState = { status: string; qr: string | null; account_name: string | null };
 export type Customer = {

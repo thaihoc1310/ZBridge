@@ -5,14 +5,16 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
+from app.core.alerts import Severity
 from app.db.database import SessionLocal
-from app.models import Customer, DebtReminderAutomation, DebtReminderRun
+from app.models import Customer, DebtReminderAutomation, DebtReminderRun, ZaloGroup
 from app.models.entities import (
     BotStatus,
     DebtReminderStatus,
     DeliveryStatus,
     DeliveryType,
 )
+from app.services.alerting import customer_link, report_async
 from app.services.debt_reminder_service import next_debt_reminder_run
 from app.services.delivery_service import add_delivery_log
 from app.services.google_sheets_service import SheetExportError, google_sheets
@@ -71,6 +73,7 @@ async def claim_due_debt_reminders() -> list[uuid.UUID]:
                 automation.repeat_interval_days,
                 scheduled_for,
                 has_debt=automation.customer.has_debt,
+                now=now,
             )
         await db.flush()
 
@@ -132,13 +135,37 @@ async def _fail_run(
             delay_minutes = min(60, 5 * (2 ** max(0, current.attempt_count - 1)))
             current.status = DebtReminderStatus.PENDING
             current.retry_at = datetime.now(UTC) + timedelta(minutes=delay_minutes)
+        exhausted = current.status == DebtReminderStatus.FAILED
+        attempts = current.attempt_count
+        customer_name = await db.scalar(
+            select(ZaloGroup.name)
+            .join(Customer, Customer.zalo_group_id == ZaloGroup.id)
+            .where(Customer.id == customer_id)
+        )
         await db.commit()
         logger.warning(
             "DEBT_REMINDER_FAILED run_id=%s attempt=%d code=%s",
             current.id,
-            current.attempt_count,
+            attempts,
             code,
         )
+    await report_async(
+        "DEBT_REMINDER_FAILED" if exhausted else "DEBT_REMINDER_RETRY",
+        (
+            f"Không nhắc được công nợ sau {MAX_ATTEMPTS} lần thử, khách sẽ không nhận"
+            f" được nhắc: {message}"
+            if exhausted
+            else f"Nhắc công nợ lỗi, sẽ thử lại: {message}"
+        ),
+        severity=Severity.ERROR if exhausted else Severity.WARNING,
+        service="celery-worker",
+        context={
+            "Khách hàng": customer_name or str(customer_id),
+            "Xem tại": customer_link(customer_id),
+            "Mã lỗi gốc": code,
+            "Lần thử": str(attempts),
+        },
+    )
 
 
 async def _finish_without_sending(

@@ -35,6 +35,7 @@ services:
       PORT: 3001
       ZALO_GATEWAY_SECRET: ${ZALO_GATEWAY_SECRET:-dev-gateway-secret}
       BACKEND_EVENT_URL: http://backend:8000/internal/zalo/events
+      BACKEND_ALERT_URL: http://backend:8000/internal/zalo/alerts
       ZALO_EVENT_SECRET: ${ZALO_EVENT_SECRET:-dev-zalo-event-secret}
       ZALO_SESSION_PATH: /data/zalo-session/session.enc
       ZALO_SESSION_SECRET: ${ZALO_SESSION_SECRET:-dev-session-secret-change-me}
@@ -50,6 +51,19 @@ services:
       timeout: 5s
       retries: 6
 
+  # One-shot schema upgrade. Kept out of the API container so two replicas can
+  # never run alembic against the same database at the same time.
+  migrate:
+    build: ./backend
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://zbridge:zbridge@postgres:5432/zbridge}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+
   backend:
     build: ./backend
     restart: unless-stopped
@@ -64,18 +78,31 @@ services:
       ZALO_GATEWAY_SECRET: ${ZALO_GATEWAY_SECRET:-dev-gateway-secret}
       ZALO_EVENT_SECRET: ${ZALO_EVENT_SECRET:-dev-zalo-event-secret}
       APP_URL: ${APP_URL:-http://localhost:5173}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      LOGIN_FAILURE_ALERT_THRESHOLD: ${LOGIN_FAILURE_ALERT_THRESHOLD:-5}
+      ALERT_LINK_BASE_URL: ${ALERT_LINK_BASE_URL:-}
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
+      # Only `started`: the API must stay available (and keep alerting) even when
+      # the Zalo gateway is unhealthy.
       zalo-gateway:
-        condition: service_healthy
+        condition: service_started
     expose: ["8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=5)"]
+      interval: 15s
+      timeout: 8s
+      retries: 5
+      start_period: 20s
     networks: [internal]
 
   celery-worker:
     build: ./backend
     restart: unless-stopped
-    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=${CELERY_CONCURRENCY:-4}"]
+    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=celery", "--concurrency=${CELERY_CONCURRENCY:-4}"]
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://zbridge:zbridge@postgres:5432/zbridge}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -84,17 +111,37 @@ services:
       MENTION_SCHEDULER_INTERVAL_SECONDS: ${MENTION_SCHEDULER_INTERVAL_SECONDS:-15}
       DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS: ${DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS:-60}
       GOOGLE_SERVICE_ACCOUNT_FILE: ${GOOGLE_SERVICE_ACCOUNT_FILE:-/run/secrets/google-service-account.json}
+      ALERT_LINK_BASE_URL: ${ALERT_LINK_BASE_URL:-}
     volumes:
       - ./secrets:/run/secrets:ro
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
       zalo-gateway:
-        condition: service_healthy
-      backend:
         condition: service_started
+    networks: [internal]
+
+  # Alert delivery runs in its own worker so a slow Telegram call can never take
+  # a slot from the debt reminders and mention follow-ups it reports on. It is
+  # also the only container that holds the Telegram token.
+  celery-alerts:
+    build: ./backend
+    restart: unless-stopped
+    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=alerts", "--concurrency=${ALERT_CONCURRENCY:-2}"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://zbridge:zbridge@postgres:5432/zbridge}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      ALERT_MIN_SEVERITY: ${ALERT_MIN_SEVERITY:-WARNING}
+      ALERT_DEDUP_WINDOW_SECONDS: ${ALERT_DEDUP_WINDOW_SECONDS:-900}
+    depends_on:
+      redis:
+        condition: service_healthy
     networks: [internal]
 
   celery-beat:
@@ -109,8 +156,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      backend:
-        condition: service_started
+      migrate:
+        condition: service_completed_successfully
     networks: [internal]
 
   frontend:
@@ -120,7 +167,7 @@ services:
         VITE_API_URL: /api
     restart: unless-stopped
     ports:
-      - "5173:80"
+      - "5173:8080"
     depends_on: [backend]
     networks: [internal]
 

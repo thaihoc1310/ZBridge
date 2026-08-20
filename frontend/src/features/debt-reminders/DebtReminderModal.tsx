@@ -20,6 +20,8 @@ import type {
 import { Button } from "../../components/ui/Button";
 import { Modal } from "../../components/ui/Modal";
 import { formatDate, initials } from "../../lib/format";
+import { PERMISSIONS } from "../../lib/permissions";
+import { usePermissions } from "../../lib/session";
 
 type Props = {
   customerId: string;
@@ -191,6 +193,8 @@ export function DebtReminderModal({
   onClose,
 }: Props) {
   const queryClient = useQueryClient();
+  const { can } = usePermissions();
+  const canEdit = can(PERMISSIONS.debtReminderUpdate);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
   const [dayOfMonth, setDayOfMonth] = useState<number | "">(25);
@@ -545,9 +549,15 @@ export function DebtReminderModal({
             </div>
           )}
 
+          {!canEdit && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+              Vai trò của bạn chỉ được xem cấu hình nhắc công nợ.
+            </div>
+          )}
+
           <div className="flex justify-end gap-3 border-t border-border pt-5">
-            <Button variant="ghost" onClick={onClose}>Hủy</Button>
-            <Button loading={save.isPending} onClick={() => save.mutate()}>Lưu cấu hình</Button>
+            <Button variant="ghost" onClick={onClose}>Đóng</Button>
+            <Button loading={save.isPending} disabled={!canEdit} onClick={() => save.mutate()}>Lưu cấu hình</Button>
           </div>
         </div>
       )}

@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 from sqlalchemy import text
 
 from app.db.database import SessionLocal
@@ -8,17 +8,21 @@ from app.services.zalo_gateway_client import GatewayError, zalo_gateway
 router = APIRouter(tags=["health"])
 
 
-@router.get("/health", response_model=HealthResponse)
-async def health() -> HealthResponse:
-    database = "DOWN"
-    gateway = "DOWN"
-    zalo = "UNAVAILABLE"
+async def _database_reachable() -> bool:
     try:
         async with SessionLocal() as db:
             await db.execute(text("SELECT 1"))
-        database = "UP"
+        return True
     except Exception:
-        pass
+        return False
+
+
+@router.get("/health", response_model=HealthResponse)
+async def health() -> HealthResponse:
+    """Human-facing detail view; always 200 so a partial outage is still readable."""
+    gateway = "DOWN"
+    zalo = "UNAVAILABLE"
+    database = "UP" if await _database_reachable() else "DOWN"
     try:
         gateway_health = await zalo_gateway.health()
         gateway = str(gateway_health.get("gateway", "UP"))
@@ -26,3 +30,22 @@ async def health() -> HealthResponse:
     except GatewayError:
         pass
     return HealthResponse(api="UP", database=database, zalo_gateway=gateway, zalo=zalo)
+
+
+@router.get("/health/live", include_in_schema=False)
+async def live() -> dict[str, str]:
+    """Liveness: deliberately checks nothing external.
+
+    Restarting the API because the database blipped would turn a recoverable
+    outage into a restart loop.
+    """
+    return {"status": "alive"}
+
+
+@router.get("/health/ready", include_in_schema=False)
+async def ready(response: Response) -> dict[str, str]:
+    """Readiness: fail out of the load balancer while the database is unreachable."""
+    if not await _database_reachable():
+        response.status_code = 503
+        return {"status": "unready", "database": "DOWN"}
+    return {"status": "ready", "database": "UP"}
