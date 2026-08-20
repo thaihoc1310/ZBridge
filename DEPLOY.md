@@ -59,8 +59,16 @@ openssl rand -base64 32    # ZALO_GATEWAY_SECRET, ZALO_EVENT_SECRET, ZALO_SESSIO
 - `IMAGE_TAG` nên ghim theo tag đã phát hành thay vì `latest` để redeploy tái lập được.
 
 Đặt credential Google Service Account vào `secrets/google-service-account.json`
-(chỉ `celery-worker` đọc, mount read-only). Share thư mục Drive của từng khách
-hàng cho email service account đó.
+(chỉ `celery-worker` đọc, mount read-only), rồi **đổi chủ sở hữu sang uid của
+container** — nếu không, worker chạy bằng uid 10001 sẽ không đọc được file mode
+600 thuộc `ubuntu`, và mọi lượt nhắc công nợ fail với `GOOGLE_CREDENTIALS_INVALID`:
+
+```bash
+sudo chown 10001:10001 secrets/google-service-account.json
+sudo chmod 400 secrets/google-service-account.json
+```
+
+Share thư mục Drive của từng khách hàng cho email service account đó.
 
 ## 4. Deploy lần đầu
 
