@@ -93,17 +93,20 @@ log "database dump ok (${SIZE} bytes)"
 # Read it through the gateway service so the compose volume prefix never has to
 # be guessed.
 SESSION="$DEST_ABS/zalo-session-$STAMP.tgz$SUFFIX"
+# Test for the file rather than judging by archive size: an empty directory still
+# produces a ~170 byte archive, which would look like a real backup.
 if compose run --rm --no-deps -T zalo-gateway \
-     tar czf - -C /data/zalo-session . 2>/dev/null | encrypt "$SESSION"; then
-  if [ "$(stat -c %s "$SESSION")" -lt 100 ]; then
-    rm -f "$SESSION"
-    log "chưa có session Zalo (bot chưa liên kết) — bỏ qua"
+     test -f /data/zalo-session/session.enc >/dev/null 2>&1; then
+  if compose run --rm --no-deps -T zalo-gateway \
+       tar czf - -C /data/zalo-session . 2>/dev/null | encrypt "$SESSION"; then
+    log "zalo session archived ($(stat -c %s "$SESSION") bytes)"
   else
-    log "zalo session archived"
+    # Only costs a QR re-scan, so never fail the whole backup over it.
+    rm -f "$SESSION"
+    log "WARNING: không đọc được session Zalo — bỏ qua"
   fi
 else
-  rm -f "$SESSION"
-  log "không đọc được session Zalo — bỏ qua"
+  log "chưa có session Zalo (bot chưa liên kết) — bỏ qua"
 fi
 
 # ── Off-site copy ────────────────────────────────────────────────────────────
