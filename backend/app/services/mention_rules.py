@@ -65,6 +65,29 @@ def content_without_mentions(
     return content
 
 
+#: A bare "giá" is deliberately loose — it also catches "đánh giá", "giá trị",
+#: "giá đỗ" — because the classifier is what separates a real quote request from
+#: an incidental word. Tone marks survive normalisation, so "già" and "giả" do
+#: not match.
+PRICE_KEYWORD_TOKENS = ("giá",)
+PRICE_KEYWORD_PHRASES = ("bao nhiêu tiền", "bnh tiền")
+
+
+def mentions_price(event: IncomingGroupMessage) -> bool:
+    """Cheap gate in front of the classifier, not a decision on its own.
+
+    Reads what the sender typed, with the mention labels taken out: a member
+    whose display name happens to contain "giá" should not send every message
+    that tags them to the model.
+    """
+    normalized = normalize_phrase(content_without_mentions(event))
+    if not normalized:
+        return False
+    if any(phrase in normalized for phrase in PRICE_KEYWORD_PHRASES):
+        return True
+    return bool(set(normalized.split()) & set(PRICE_KEYWORD_TOKENS))
+
+
 def is_bare_mention(
     event: IncomingGroupMessage,
     *,

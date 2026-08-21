@@ -73,6 +73,15 @@ class ZaloGatewayClient:
         payload = await self._request("GET", f"/groups/{group_id}/members")
         return list(payload.get("members", []))
 
+    async def get_group_members_batch(
+        self, group_ids: list[str]
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Members of every group in one call, for building the staff roster."""
+        response = await self._request(
+            "POST", "/groups/members", json={"group_ids": group_ids}
+        )
+        return response.get("members", {})
+
     async def send_text(self, group_id: str, content: str) -> dict[str, Any]:
         return await self._request(
             "POST", "/messages/text", json={"group_id": group_id, "content": content}

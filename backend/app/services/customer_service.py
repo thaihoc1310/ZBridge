@@ -34,6 +34,7 @@ async def list_customers(
     db: AsyncSession,
     search: str | None,
     debt: str | None,
+    availability: str,
     page: int,
     limit: int,
 ) -> CustomerListResponse:
@@ -50,6 +51,10 @@ async def list_customers(
         filters.append(Customer.has_debt.is_(True))
     elif debt == "clear":
         filters.append(Customer.has_debt.is_(False))
+    if availability == "available":
+        filters.append(ZaloGroup.is_available.is_(True))
+    elif availability == "unavailable":
+        filters.append(ZaloGroup.is_available.is_(False))
 
     base = select(Customer).join(Customer.group).where(*filters)
     total = int(

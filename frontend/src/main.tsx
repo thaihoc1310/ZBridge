@@ -26,6 +26,7 @@ const LANDING_FALLBACKS: Array<[PermissionCode, string]> = [
   [PERMISSIONS.activityRead, "/activity"],
   [PERMISSIONS.botRead, "/bot"],
   [PERMISSIONS.mentionPolicyManage, "/mention-settings"],
+  [PERMISSIONS.staffManage, "/mention-settings"],
   [PERMISSIONS.userRead, "/users"],
 ];
 
@@ -45,9 +46,11 @@ function NoAccess() {
   </div>;
 }
 
-function Guard({ code, children }: { code: PermissionCode; children: ReactNode }) {
+/** Any one of the listed permissions opens the route. */
+function Guard({ code, children }: { code: PermissionCode | PermissionCode[]; children: ReactNode }) {
   const { can } = usePermissions();
-  return can(code) ? <>{children}</> : <NoAccess />;
+  const codes = Array.isArray(code) ? code : [code];
+  return codes.some((item) => can(item)) ? <>{children}</> : <NoAccess />;
 }
 
 function Landing() {
@@ -67,7 +70,7 @@ function App() {
       <Route path="/customers/:id" element={<Guard code={PERMISSIONS.customerRead}><CustomerDetailPage /></Guard>} />
       <Route path="/activity" element={<Guard code={PERMISSIONS.activityRead}><ActivityPage /></Guard>} />
       <Route path="/users" element={<Guard code={PERMISSIONS.userRead}><UsersPage /></Guard>} />
-      <Route path="/mention-settings" element={<Guard code={PERMISSIONS.mentionPolicyManage}><MentionSettingsPage /></Guard>} />
+      <Route path="/mention-settings" element={<Guard code={[PERMISSIONS.mentionPolicyManage, PERMISSIONS.staffManage, PERMISSIONS.mentionBulkApply]}><MentionSettingsPage /></Guard>} />
       <Route path="/groups" element={<Navigate to="/customers" replace />} />
       <Route path="/groups/:id" element={<LegacyGroupRedirect />} />
     </Route>

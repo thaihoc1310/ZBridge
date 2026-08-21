@@ -13,7 +13,11 @@ from app.models import (
     ZaloAccount,
     ZaloGroup,
 )
-from app.models.entities import MentionFollowupStatus
+from app.models.entities import (
+    MentionFollowupStatus,
+    MentionFollowupTrigger,
+    MentionTargetKind,
+)
 from app.schemas.api import IncomingGroupMessage, IncomingMention
 from app.services import mention_classifier
 from app.services.mention_automation_service import schedule_from_incoming_event
@@ -128,7 +132,7 @@ async def test_ai_skips_only_high_confidence_ack(monkeypatch) -> None:
     monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
     captured_payloads: list[dict[str, object]] = []
 
-    async def classify(payload, *, model=None):
+    async def classify(payload, *, model=None, prompt=None):
         captured_payloads.append(payload)
         return _ModelResult(
             decisions=[
@@ -172,7 +176,7 @@ async def test_ai_error_safely_schedules_followup(monkeypatch) -> None:
     engine, sessions = await _database()
     monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
 
-    async def fail(_payload, *, model=None):
+    async def fail(_payload, *, model=None, prompt=None):
         raise TimeoutError("test timeout")
 
     monkeypatch.setattr(mention_classifier, "classify_payload", fail)
@@ -295,7 +299,7 @@ async def test_stale_duplicate_task_does_not_spend_another_openai_call(monkeypat
     monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
     calls: list[dict] = []
 
-    async def classify(payload, *, model=None):
+    async def classify(payload, *, model=None, prompt=None):
         calls.append(payload)
         return _ModelResult(
             decisions=[
@@ -345,7 +349,7 @@ async def test_low_confidence_ack_is_still_tagged(monkeypatch) -> None:
     monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
     monkeypatch.setattr(mention_classifier.settings, "llm_skip_confidence", 0.70)
 
-    async def classify(_payload, *, model=None):
+    async def classify(_payload, *, model=None, prompt=None):
         return _ModelResult(
             decisions=[
                 MentionDecision(
@@ -376,4 +380,302 @@ async def test_low_confidence_ack_is_still_tagged(monkeypatch) -> None:
         assert followup.classification_result[0]["skipped"] is False
         assert followup.classification_result[0]["confidence"] == 0.65
 
+    await engine.dispose()
+
+
+async def _price_database(*, price_enabled: bool = True):
+    """The same fixture with a separate sales list, as the UI configures it."""
+    engine, sessions = await _database()
+    async with sessions() as db:
+        automation = await db.scalar(select(MentionAutomation))
+        automation.price_inquiry_enabled = price_enabled
+        db.add(
+            MentionTarget(
+                automation_id=automation.id,
+                zalo_user_id="sales-user",
+                display_name="Sales",
+                kind=MentionTargetKind.PRICE,
+            )
+        )
+        await db.commit()
+    return engine, sessions
+
+
+def _plain_event(message_id: str, content: str, sender: str = "sender-user"):
+    return IncomingGroupMessage(
+        group_id="classifier-group",
+        message_id=message_id,
+        sender_id=sender,
+        sender_display_name="Minh",
+        sent_at=datetime.now(UTC),
+        content=content,
+    )
+
+
+async def test_price_keyword_from_a_customer_queues_the_sales_list() -> None:
+    engine, sessions = await _price_database()
+    async with sessions() as db:
+        response = await schedule_from_incoming_event(
+            db, _plain_event("ask", "Báo giá cho anh cái này với")
+        )
+        followup = await db.get(MentionFollowup, response.followup_id)
+        assert followup.trigger == MentionFollowupTrigger.PRICE_INQUIRY
+        assert followup.status == MentionFollowupStatus.CLASSIFYING
+        # The sales list, not the people who chase unanswered mentions.
+        assert followup.target_user_ids == ["sales-user"]
+    await engine.dispose()
+
+
+async def test_price_trigger_ignores_staff_and_messages_without_the_keyword() -> None:
+    engine, sessions = await _price_database()
+    async with sessions() as db:
+        # Staff talking about price among themselves must not summon each other.
+        from_sales = await schedule_from_incoming_event(
+            db, _plain_event("staff", "giá bên mình đang là 200k nhé", sender="sales-user")
+        )
+        assert from_sales.followup_id is None
+        no_keyword = await schedule_from_incoming_event(
+            db, _plain_event("chat", "anh chuyển tiền chưa em")
+        )
+        assert no_keyword.followup_id is None
+    await engine.dispose()
+
+
+async def test_price_trigger_stays_off_until_enabled() -> None:
+    engine, sessions = await _price_database(price_enabled=False)
+    async with sessions() as db:
+        response = await schedule_from_incoming_event(
+            db, _plain_event("ask", "Báo giá cho anh với")
+        )
+        assert response.followup_id is None
+    await engine.dispose()
+
+
+async def test_price_inquiry_tags_only_on_a_confident_yes(monkeypatch) -> None:
+    """The decision inverts here: anything but a confident yes must stay silent."""
+    outcomes = {
+        "yes": (MentionClassification.NEED_RESPONSE, 0.90, MentionFollowupStatus.PENDING),
+        "weak": (MentionClassification.NEED_RESPONSE, 0.40, MentionFollowupStatus.SKIPPED),
+        "unsure": (MentionClassification.UNCERTAIN, 0.99, MentionFollowupStatus.SKIPPED),
+        "incidental": (MentionClassification.FYI, 0.99, MentionFollowupStatus.SKIPPED),
+    }
+    for key, (label, confidence, expected) in outcomes.items():
+        engine, sessions = await _price_database()
+        monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
+        prompts: list[str] = []
+
+        async def classify(
+            _payload, *, model=None, prompt=None, _label=label, _conf=confidence, _seen=prompts
+        ):
+            _seen.append(prompt)
+            return _ModelResult(
+                decisions=[
+                    MentionDecision(
+                        target_id="T1",
+                        classification=_label,
+                        confidence=_conf,
+                        reason_code=MentionReasonCode.QUESTION,
+                    )
+                ],
+                input_tokens=10,
+                output_tokens=5,
+                latency_ms=1,
+            )
+
+        monkeypatch.setattr(mention_classifier, "classify_payload", classify)
+        async with sessions() as db:
+            response = await schedule_from_incoming_event(
+                db, _plain_event(f"ask-{key}", "cái này bao nhiêu tiền v anh")
+            )
+        claimed = await mention_classifier.claim_pending_classifications()
+        await mention_classifier.process_classification(*claimed[0])
+        async with sessions() as db:
+            followup = await db.get(MentionFollowup, response.followup_id)
+            assert followup.status == expected, f"{key}: {followup.status}"
+        # It must be asked the price question, not the mention question.
+        assert prompts == [mention_classifier.PRICE_CLASSIFIER_PROMPT]
+        await engine.dispose()
+
+
+async def test_price_inquiry_stays_silent_when_the_model_fails(monkeypatch) -> None:
+    """A mention falls back to tagging; a price inquiry must fall back to nothing."""
+    engine, sessions = await _price_database()
+    monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
+
+    async def explode(*_args, **_kwargs):
+        raise TimeoutError("model unreachable")
+
+    async def swallow(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(mention_classifier, "classify_payload", explode)
+    monkeypatch.setattr(mention_classifier, "report_async", swallow)
+    async with sessions() as db:
+        response = await schedule_from_incoming_event(
+            db, _plain_event("ask", "báo giá giúp anh")
+        )
+    claimed = await mention_classifier.claim_pending_classifications()
+    await mention_classifier.process_classification(*claimed[0])
+    async with sessions() as db:
+        followup = await db.get(MentionFollowup, response.followup_id)
+        assert followup.status == MentionFollowupStatus.SKIPPED
+        assert followup.target_user_ids == []
+        assert "TimeoutError" in followup.classification_error
+    await engine.dispose()
+
+
+async def test_overdue_price_inquiry_is_dropped_while_a_mention_is_released(
+    monkeypatch,
+) -> None:
+    """The deadline sweep is the other place the two triggers must part ways."""
+    engine, sessions = await _price_database()
+    monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
+
+    async def swallow(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(mention_classifier, "report_async", swallow)
+    stale = datetime.now(UTC) - timedelta(hours=2)
+    async with sessions() as db:
+        automation = await db.scalar(select(MentionAutomation))
+        for trigger, message_id in (
+            (MentionFollowupTrigger.MENTION, "old-mention"),
+            (MentionFollowupTrigger.PRICE_INQUIRY, "old-price"),
+        ):
+            db.add(
+                MentionFollowup(
+                    automation_id=automation.id,
+                    source_message_id=message_id,
+                    trigger=trigger,
+                    target_user_ids=["target-user"],
+                    target_display_names=["Abcd"],
+                    due_at=stale,
+                    status=MentionFollowupStatus.CLASSIFYING,
+                    created_at=stale,
+                )
+            )
+        await db.commit()
+
+    assert await mention_classifier.release_overdue_classifications() == 2
+    async with sessions() as db:
+        rows = {
+            row.source_message_id: row
+            for row in (await db.scalars(select(MentionFollowup))).all()
+        }
+        assert rows["old-mention"].status == MentionFollowupStatus.PENDING
+        assert rows["old-price"].status == MentionFollowupStatus.SKIPPED
+        assert rows["old-price"].target_user_ids == []
+    await engine.dispose()
+
+
+async def test_one_person_waiting_is_not_tagged_twice_over() -> None:
+    """A second follow-up for somebody already waiting would be an identical tag.
+
+    The bot can only send a bare "@Name", so two pending follow-ups for the same
+    person are indistinguishable in the group and only double the noise. They are
+    tagged every cycle anyway, and their first reply clears both.
+    """
+    engine, sessions = await _price_database()
+    async with sessions() as db:
+        automation = await db.scalar(select(MentionAutomation))
+        db.add(
+            MentionTarget(
+                automation_id=automation.id,
+                zalo_user_id="sales-user",
+                display_name="Sales",
+                kind=MentionTargetKind.MENTION,
+            )
+        )
+        await db.commit()
+
+        tagged = await schedule_from_incoming_event(
+            db,
+            IncomingGroupMessage(
+                group_id="classifier-group",
+                message_id="tag-sales",
+                sender_id="sender-user",
+                content="<MENTION:Sales> xem giúp anh cái hợp đồng",
+                mentions=[
+                    IncomingMention(
+                        user_id="sales-user", position=0, length=15, text="<MENTION:Sales>"
+                    )
+                ],
+            ),
+        )
+        assert (await db.get(MentionFollowup, tagged.followup_id)).status in {
+            MentionFollowupStatus.CLASSIFYING,
+            MentionFollowupStatus.PENDING,
+        }
+
+        # A price question arrives while that tag is still unanswered.
+        asked = await schedule_from_incoming_event(
+            db, _plain_event("ask-price", "báo giá cho anh với")
+        )
+        assert asked.followup_id is None
+
+        # One reply from them clears what is waiting, so nothing is stranded.
+        await schedule_from_incoming_event(
+            db,
+            IncomingGroupMessage(
+                group_id="classifier-group",
+                message_id="reply",
+                sender_id="sales-user",
+                content="dạ em xem rồi anh",
+            ),
+        )
+        assert (
+            await db.get(MentionFollowup, tagged.followup_id)
+        ).status == MentionFollowupStatus.CANCELLED
+    await engine.dispose()
+
+
+async def test_a_name_containing_gia_does_not_trigger_the_price_classifier() -> None:
+    """The keyword must come from what the sender typed, not from a display name."""
+    engine, sessions = await _price_database()
+    async with sessions() as db:
+        response = await schedule_from_incoming_event(
+            db,
+            IncomingGroupMessage(
+                group_id="classifier-group",
+                message_id="named",
+                sender_id="sender-user",
+                content="@Giá Nguyễn cho anh hỏi cái này với",
+                mentions=[
+                    IncomingMention(
+                        user_id="nguoi-la", position=0, length=11, text="@Giá Nguyễn"
+                    )
+                ],
+            ),
+        )
+        assert response.followup_id is None
+    await engine.dispose()
+
+
+async def test_tagging_again_keeps_the_first_reminder_running() -> None:
+    """A second tag does not restart the clock, and the usual order still works.
+
+    "@Abcd a cắt cho em nhé" then "@Abcd t2 em lấy nhé" is how people actually
+    write: the request first, details after. The second tag is suppressed, but
+    the first already carries the request so the reminder still happens.
+
+    The reverse order — an acknowledgement first, the request seconds later — is
+    the one case where the second tag is lost. It is left as is: the window is
+    the few seconds a classification takes, and the person still got a direct
+    Zalo notification from the human tag.
+    """
+    engine, sessions = await _price_database()
+    async with sessions() as db:
+        first = await schedule_from_incoming_event(
+            db, _mention_event("m1", "@Abcd a cắt cho em nhé")
+        )
+        again = await schedule_from_incoming_event(
+            db, _mention_event("m2", "@Abcd t2 em lấy nhé")
+        )
+        assert again.followup_id is None
+
+        followups = (await db.scalars(select(MentionFollowup))).all()
+        assert len(followups) == 1
+        # Still pointed at the first message, on its original schedule.
+        assert followups[0].source_message_id == "m1"
+        assert followups[0].id == first.followup_id
     await engine.dispose()

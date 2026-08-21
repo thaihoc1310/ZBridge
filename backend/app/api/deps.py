@@ -60,3 +60,19 @@ def require_permission(*codes: str) -> Callable[..., Awaitable[User]]:
         return user
 
     return dependency
+
+
+def require_any_permission(*codes: str) -> Callable[..., Awaitable[User]]:
+    """Any one of the listed codes is enough.
+
+    For reads shared by two features that are otherwise granted apart — the bulk
+    editor has to see the staff roster to offer it.
+    """
+    allowed = frozenset(codes)
+
+    async def dependency(user: User = Depends(get_current_user)) -> User:
+        if not allowed & user.permission_codes:
+            raise AppError("FORBIDDEN", "Bạn không có quyền thực hiện thao tác này.", 403)
+        return user
+
+    return dependency

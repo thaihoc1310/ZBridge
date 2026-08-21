@@ -26,6 +26,10 @@ MENTION_UPDATE = "mention:update"
 #: reading the policy as well: the page is a settings form with nothing to show
 #: somebody who cannot change it, and one code per tab is what the nav assumes.
 MENTION_POLICY_MANAGE = "mention_policy:manage"
+#: The staff roster and the bulk editor are separate grants again: the roster is
+#: a list of names, while one bulk apply overwrites every customer at once.
+STAFF_MANAGE = "staff:manage"
+MENTION_BULK_APPLY = "mention_bulk:apply"
 
 DEBT_REMINDER_READ = "debt_reminder:read"
 DEBT_REMINDER_UPDATE = "debt_reminder:update"
@@ -70,6 +74,12 @@ PERMISSION_CATALOG: tuple[PermissionDef, ...] = (
     PermissionDef(
         MENTION_POLICY_MANAGE,
         "Xem và đổi chính sách phân loại tag toàn hệ thống",
+        CATEGORY_MENTION,
+    ),
+    PermissionDef(STAFF_MANAGE, "Xem và sửa danh sách nhân sự được tag", CATEGORY_MENTION),
+    PermissionDef(
+        MENTION_BULK_APPLY,
+        "Áp cấu hình tag hàng loạt, ghi đè nhiều khách hàng",
         CATEGORY_MENTION,
     ),
     PermissionDef(DEBT_REMINDER_READ, "Xem cấu hình nhắc công nợ", CATEGORY_DEBT),

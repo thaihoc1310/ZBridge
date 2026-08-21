@@ -1,106 +1,154 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AtSign, BrainCircuit, Save, ShieldCheck } from "lucide-react";
-import { useEffect, useState } from "react";
-import { api, ApiError } from "../api/client";
-import type { MentionClassifierSettings } from "../api/types";
+import { useQuery } from "@tanstack/react-query";
+import { BrainCircuit, ChevronRight, Layers, Users, type LucideIcon } from "lucide-react";
+import { useState } from "react";
+import { api } from "../api/client";
+import type { MentionClassifierSettings, StaffMember } from "../api/types";
 import { PageHeader } from "../components/PageHeader";
-import { Button } from "../components/ui/Button";
+import { Modal } from "../components/ui/Modal";
+import { BulkMentionSection } from "../features/mentions/BulkMentionSection";
+import { ClassifierPolicySection } from "../features/mentions/ClassifierPolicySection";
+import { StaffRosterSection } from "../features/mentions/StaffRosterSection";
 import { PERMISSIONS } from "../lib/permissions";
 import { usePermissions } from "../lib/session";
 
+type Panel = "staff" | "bulk" | "policy";
+
 export function MentionSettingsPage() {
   const { can } = usePermissions();
-  const canUpdate = can(PERMISSIONS.mentionPolicyManage);
-  const queryClient = useQueryClient();
-  const query = useQuery({
+  // One grant per section: the roster is a list of names, one bulk apply
+  // overwrites every customer, and the policy governs the classifier.
+  const canPolicy = can(PERMISSIONS.mentionPolicyManage);
+  const canStaff = can(PERMISSIONS.staffManage);
+  const canBulk = can(PERMISSIONS.mentionBulkApply);
+  const [panel, setPanel] = useState<Panel | null>(null);
+
+  const roster = useQuery({
+    queryKey: ["staff"],
+    queryFn: () => api<StaffMember[]>("/staff"),
+    enabled: canStaff || canBulk,
+  });
+  const policy = useQuery({
     queryKey: ["mention-classifier-settings"],
     queryFn: () => api<MentionClassifierSettings>("/mention-settings"),
-  });
-  const [aiEnabled, setAiEnabled] = useState(true);
-  const [bareMention, setBareMention] = useState(true);
-  const [phrases, setPhrases] = useState("");
-
-  useEffect(() => {
-    if (!query.data) return;
-    setAiEnabled(query.data.ai_classifier_enabled);
-    setBareMention(query.data.bare_mention_requires_response);
-    setPhrases(query.data.skip_phrases.join("\n"));
-  }, [query.data]);
-
-  const save = useMutation({
-    mutationFn: () => api<MentionClassifierSettings>("/mention-settings", {
-      method: "PUT",
-      body: JSON.stringify({
-        ai_classifier_enabled: aiEnabled,
-        bare_mention_requires_response: bareMention,
-        skip_phrases: phrases.split("\n").map((value) => value.trim()).filter(Boolean),
-      }),
-    }),
-    onSuccess: (data) => queryClient.setQueryData(["mention-classifier-settings"], data),
+    enabled: canPolicy,
   });
 
-  const error = query.error ?? save.error;
+  const staffCount = roster.data?.length ?? 0;
   return <div className="mx-auto max-w-5xl">
     <PageHeader
       eyebrow="Global policy"
-      title="Phân loại"
-      highlight="tag tên"
-      description="Một chính sách dùng chung cho toàn bộ nhóm và khách hàng trong hệ thống."
-      action={canUpdate ? <Button onClick={() => save.mutate()} loading={save.isPending} disabled={query.isLoading}><Save className="h-4 w-4" />Lưu cấu hình</Button> : undefined}
+      title="Tag"
+      highlight="tên tự động"
+      description="Nhân sự được tag, cấu hình chung cho nhiều khách hàng, và chính sách phân loại của toàn hệ thống."
     />
 
-    {error && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error instanceof ApiError ? error.message : "Không tải được cấu hình."}</div>}
-    {save.isSuccess && <div className="mb-5 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700"><ShieldCheck className="h-4 w-4" />Đã cập nhật chính sách cho toàn hệ thống.</div>}
-
-    <div className="grid gap-6 lg:grid-cols-[1fr_.9fr]">
-      <section className="card p-6 sm:p-8">
-        <div className="flex items-start gap-4">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50"><BrainCircuit className="h-5 w-5 text-accent" /></span>
-          <div className="min-w-0 flex-1">
-            <h2 className="font-display text-2xl">Bộ phân loại AI</h2>
-            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">AI đọc context gần nhất và chỉ bỏ qua ACKNOWLEDGEMENT/FYI khi đủ chắc chắn. NEED_RESPONSE, UNCERTAIN hoặc lỗi API vẫn được lên lịch.</p>
-          </div>
-          <Toggle checked={aiEnabled} onChange={setAiEnabled} disabled={!canUpdate || query.isLoading} label="Bật bộ phân loại AI" />
-        </div>
-
-        <div className="my-7 border-t border-border" />
-        <div className="flex items-start gap-4">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-50"><AtSign className="h-5 w-5 text-violet-600" /></span>
-          <div className="min-w-0 flex-1">
-            <h3 className="font-semibold">Bare mention luôn cần phản hồi</h3>
-            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">Tin chỉ có <code className="rounded bg-muted px-1.5 py-0.5">@Tên</code> sẽ lên lịch ngay, phù hợp trường hợp câu hỏi nằm ở tin trước.</p>
-          </div>
-          <Toggle checked={bareMention} onChange={setBareMention} disabled={!canUpdate || query.isLoading} label="Bare mention cần phản hồi" />
-        </div>
-      </section>
-
-      <section className="card p-6 sm:p-8">
-        <h2 className="font-display text-2xl">Câu bỏ qua nhanh</h2>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">Mỗi dòng một câu. Sau khi bỏ phần tag tên, nếu nội dung khớp chính xác thì hệ thống skip bằng rule, không gọi AI.</p>
-        <textarea
-          className="mt-5 min-h-72 w-full resize-y rounded-2xl border border-border bg-muted/30 p-4 text-sm leading-7 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15 disabled:opacity-60"
-          value={phrases}
-          onChange={(event) => setPhrases(event.target.value)}
-          disabled={!canUpdate || query.isLoading}
-          placeholder={"ok\noke\ncảm ơn\nnhận được rồi"}
-          aria-label="Các câu bỏ qua nhanh"
-        />
-        <p className="mt-3 text-xs text-muted-foreground">Không phân biệt chữ hoa/thường và khoảng trắng. Câu có thêm yêu cầu, ví dụ “ok, kiểm tra lại giúp anh”, không khớp rule và sẽ chuyển qua AI.</p>
-      </section>
+    <div className="grid gap-4 sm:grid-cols-2">
+      {canStaff && <PanelCard
+        icon={Users}
+        tone="emerald"
+        title="Nhân sự"
+        description="Khai báo một lần những người có thể được tag, dùng lại ở mọi khách hàng."
+        summary={roster.isLoading ? "Đang tải..." : `${staffCount} người`}
+        onClick={() => setPanel("staff")}
+      />}
+      {canBulk && <PanelCard
+        icon={Layers}
+        tone="amber"
+        title="Cấu hình chung"
+        description="Áp một cấu hình tag cho nhiều khách hàng cùng lúc, ghi đè cấu hình cũ."
+        summary="Ghi đè hàng loạt"
+        onClick={() => setPanel("bulk")}
+      />}
+      {canPolicy && <PanelCard
+        icon={BrainCircuit}
+        tone="blue"
+        title="Chính sách phân loại"
+        description="Bộ phân loại AI, bare mention và danh sách câu bỏ qua nhanh."
+        summary={
+          policy.isLoading
+            ? "Đang tải..."
+            : policy.data
+              ? `AI ${policy.data.ai_classifier_enabled ? "đang bật" : "đang tắt"} · ${policy.data.skip_phrases.length} câu bỏ qua`
+              : "Không tải được"
+        }
+        onClick={() => setPanel("policy")}
+      />}
     </div>
+
+    <Modal
+      open={panel === "staff"}
+      onClose={() => setPanel(null)}
+      className="max-w-2xl"
+      title="Nhân sự"
+      description="Những người có thể được tag. Danh sách chọn lấy từ thành viên của tất cả khách hàng."
+    >
+      <StaffRosterSection canEdit={canStaff} />
+    </Modal>
+
+    <Modal
+      open={panel === "bulk"}
+      onClose={() => setPanel(null)}
+      className="max-w-4xl"
+      title="Cấu hình chung"
+      description="Đặt một cấu hình rồi áp cho nhiều khách hàng. Cấu hình cũ của những khách hàng được chọn sẽ bị ghi đè."
+    >
+      <BulkMentionSection canEdit={canBulk} />
+    </Modal>
+
+    <Modal
+      open={panel === "policy"}
+      onClose={() => setPanel(null)}
+      className="max-w-4xl"
+      title="Chính sách phân loại"
+      description="Một chính sách dùng chung cho toàn bộ khách hàng trong hệ thống."
+    >
+      <ClassifierPolicySection canUpdate={canPolicy} />
+    </Modal>
   </div>;
 }
 
-function Toggle({ checked, onChange, disabled, label }: { checked: boolean; onChange: (value: boolean) => void; disabled: boolean; label: string }) {
-  return <button
-    type="button"
-    role="switch"
-    aria-checked={checked}
-    aria-label={label}
-    disabled={disabled}
-    onClick={() => onChange(!checked)}
-    className={`relative mt-1 h-7 w-12 shrink-0 rounded-full transition disabled:opacity-50 ${checked ? "bg-accent" : "bg-slate-300"}`}
-  >
-    <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition ${checked ? "left-6" : "left-1"}`} />
-  </button>;
+const TONES = {
+  emerald: "bg-emerald-50 text-emerald-600",
+  amber: "bg-amber-50 text-amber-600",
+  blue: "bg-blue-50 text-accent",
+} as const;
+
+function PanelCard({
+  icon: Icon,
+  tone,
+  title,
+  description,
+  summary,
+  onClick,
+}: {
+  icon: LucideIcon;
+  tone: keyof typeof TONES;
+  title: string;
+  description: string;
+  summary: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="card flex items-start gap-4 p-6 text-left transition hover:border-accent/40 hover:shadow-lg"
+    >
+      <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${TONES[tone]}`}>
+        <Icon className="h-5 w-5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2">
+          <span className="font-display text-xl">{title}</span>
+          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+        </span>
+        <span className="mt-1 block text-sm leading-relaxed text-muted-foreground">
+          {description}
+        </span>
+        <span className="mt-3 inline-block rounded-lg bg-muted px-2.5 py-1 text-xs font-medium text-foreground">
+          {summary}
+        </span>
+      </span>
+    </button>
+  );
 }

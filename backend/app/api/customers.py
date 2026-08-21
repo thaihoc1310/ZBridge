@@ -51,12 +51,15 @@ router = APIRouter(prefix="/customers", tags=["customers"])
 async def customers(
     search: str | None = Query(default=None, max_length=255),
     debt: str | None = Query(default=None, pattern="^(owed|clear)$"),
+    # Groups the bot has lost access to are noise in day to day use, so the list
+    # hides them unless asked for.
+    availability: str = Query(default="available", pattern="^(available|unavailable|all)$"),
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=25, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     _actor: User = Depends(require_permission(CUSTOMER_READ)),
 ) -> CustomerListResponse:
-    return await list_customers(db, search, debt, page, limit)
+    return await list_customers(db, search, debt, availability, page, limit)
 
 
 @router.post("/sync", response_model=SyncResponse)

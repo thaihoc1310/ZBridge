@@ -170,7 +170,7 @@ export function UserModal({ user, roles, open, isSelf, onClose }: Props) {
             aria-checked={isActive}
             disabled={isSelf}
             onClick={() => { setIsActive((value) => !value); setError(null); }}
-            className="flex min-h-12 w-full items-center justify-between rounded-xl border border-border bg-white px-4 disabled:cursor-not-allowed disabled:bg-muted/60"
+            className="flex min-h-11 w-full items-center justify-between rounded-xl border border-border bg-white px-4 disabled:cursor-not-allowed disabled:bg-muted/60"
           >
             <span className="text-sm">{isActive ? "Đang hoạt động" : "Đã vô hiệu hóa"}</span>
             <span className={`relative h-6 w-11 rounded-full transition ${isActive ? "bg-accent" : "bg-slate-300"}`}>

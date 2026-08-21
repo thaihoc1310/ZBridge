@@ -15,10 +15,12 @@ from app.core.permissions import (
     ADMIN_ROLE_CODE,
     ALL_PERMISSION_CODES,
     CUSTOMER_READ,
+    MENTION_BULK_APPLY,
     MENTION_POLICY_MANAGE,
     MENTION_READ,
     MENTION_UPDATE,
     PERMISSION_CATALOG,
+    STAFF_MANAGE,
     SYSTEM_ROLES,
     USER_MANAGEMENT_PERMISSIONS,
     USER_READ,
@@ -400,6 +402,55 @@ async def test_customer_tagging_rights_do_not_reach_the_global_policy(
     )
     assert allowed.status_code == 200, allowed.text
     assert allowed.json()["ai_classifier_enabled"] is False
+
+
+async def test_each_tag_feature_is_its_own_grant(client, session_factory) -> None:
+    """Editing one customer must not carry the roster or the bulk overwrite.
+
+    A single bulk apply rewrites every customer at once, so it cannot ride along
+    with the permission somebody gets to configure one group.
+    """
+    async with session_factory() as db:
+        role = Role(code="TAG_ONE_CUSTOMER", name="Chỉ sửa từng khách", is_system=False)
+        role.permissions = list(
+            (
+                await db.scalars(
+                    select(Permission).where(
+                        Permission.code.in_([CUSTOMER_READ, MENTION_READ, MENTION_UPDATE])
+                    )
+                )
+            ).all()
+        )
+        db.add(role)
+        await db.flush()
+        db.add(
+            User(
+                email="one@zbridge.vn",
+                password_hash=hash_password("one-password"),
+                role_id=role.id,
+            )
+        )
+        await db.commit()
+
+    session = await _login(client, "one@zbridge.vn", "one-password")
+    held = set(session["role"]["permissions"])
+    assert not held & {STAFF_MANAGE, MENTION_BULK_APPLY, MENTION_POLICY_MANAGE}
+
+    for method, path in (
+        ("GET", "/api/staff"),
+        ("PUT", "/api/staff"),
+        ("GET", "/api/staff/candidates"),
+        ("POST", "/api/staff/bulk-mention/preview"),
+        ("POST", "/api/staff/bulk-mention/apply"),
+        ("PUT", "/api/mention-settings"),
+    ):
+        response = await client.request(method, path, json={})
+        assert response.status_code == 403, f"{method} {path} -> {response.status_code}"
+
+    # The admin holds all three and gets through.
+    client.cookies.clear()
+    await _login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    assert (await client.get("/api/staff")).status_code == 200
 
 
 async def test_admin_is_the_only_locked_role(client) -> None:
