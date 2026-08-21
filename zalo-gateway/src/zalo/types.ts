@@ -80,6 +80,7 @@ export interface ZaloClient {
   getQr(): Promise<{ status: string; qr: string | null; account_name: string | null }>;
   getGroups(): Promise<ZaloGroup[]>;
   getGroupMembers(groupId: string): Promise<ZaloMember[]>;
+  getGroupMembersBatch(groupIds: string[]): Promise<Record<string, ZaloMember[]>>;
   sendText(groupId: string, content: string): Promise<SendResult>;
   sendMention(groupId: string, targets: MentionTarget[]): Promise<SendResult>;
   sendImage(groupId: string, image: ImageAttachment): Promise<SendResult>;

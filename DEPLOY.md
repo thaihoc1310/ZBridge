@@ -233,6 +233,23 @@ Chỉ có **P1/P2** và **T1/T2** được gửi sang LLM; tên thật, user id 
 tầng FPT Cloud trong nước; khi đổi sang `openai` thì request gửi kèm `store=False`
 nên OpenAI không lưu lại.
 
+### Tag khi khách hỏi giá
+
+Tính năng thứ hai trong cùng modal **Tag tên tự động** của từng khách hàng, mặc
+định **tắt**. Khi bật, tin nhắn của người **không** nằm trong danh sách tag mà
+chứa token `giá`, hoặc cụm `bao nhiêu tiền` / `bnh tiền`, sẽ được gửi cho AI hỏi
+xem có phải hỏi giá thật không. Chỉ tag khi AI trả `NEED_RESPONSE` với confidence
+≥ `LLM_PRICE_CONFIDENCE` (mặc định 0.65). Người được tag lấy từ danh sách riêng,
+còn khung giờ và thời gian chờ dùng chung với tag nhắc việc.
+
+> **Nhánh này fail-closed, ngược với tag nhắc việc.** AI lỗi, hết key, hoặc tắt
+> bộ phân loại → **không tag ai**, vì không có ai tag trước cả và chỉ mỗi AI đứng
+> giữa chữ "giá" vô tình với việc bot làm phiền nhóm khách. Hệ quả là khi AI chết
+> thì tính năng tắt câm, nên có cảnh báo Telegram riêng cho trường hợp này.
+
+Đo bằng `backend/bench/price_bench.py` trên 18 case: 0 lần tag sai ở mọi ngưỡng
+từ 0.5 đến 0.95, không bỏ sót ở 0.65.
+
 Bật/tắt và sửa danh sách câu bỏ qua ở menu **Phân loại tag** trong web. Menu chỉ
 hiện với vai trò có quyền `mention_policy:manage` — đây là chính sách chung cho
 mọi nhóm nên tách khỏi `mention:read`/`mention:update` (vốn chỉ là cấu hình tag

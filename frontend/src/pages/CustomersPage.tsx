@@ -15,6 +15,9 @@ export function CustomersPage() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [debt, setDebt] = useState("");
+  // Groups the bot lost access to are hidden by default; they are still
+  // reachable through the filter so nobody has to wonder where they went.
+  const [availability, setAvailability] = useState("available");
   const [page, setPage] = useState(1);
   const [filterOpen, setFilterOpen] = useState(false);
   const [noteCustomer, setNoteCustomer] = useState<Customer | null>(null);
@@ -26,8 +29,8 @@ export function CustomersPage() {
   const canSync = can(PERMISSIONS.customerSync);
   const canUpdate = can(PERMISSIONS.customerUpdate);
   const customers = useQuery({
-    queryKey: ["customers", debouncedSearch, debt, page],
-    queryFn: () => api<CustomerList>(`/customers${queryString({ search: debouncedSearch, debt, page, limit: 25 })}`),
+    queryKey: ["customers", debouncedSearch, debt, availability, page],
+    queryFn: () => api<CustomerList>(`/customers${queryString({ search: debouncedSearch, debt, availability, page, limit: 25 })}`),
     placeholderData: (previousData) => previousData,
   });
   const sync = useMutation({
@@ -47,7 +50,7 @@ export function CustomersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canSync]);
   useEffect(() => { const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 250); return () => window.clearTimeout(timer); }, [search]);
-  useEffect(() => setPage(1), [debouncedSearch, debt]);
+  useEffect(() => setPage(1), [debouncedSearch, debt, availability]);
 
   return <div className="mx-auto max-w-[1600px]">
     <PageHeader eyebrow="Customer directory" title="Khách" highlight="hàng" description="Quản lý công nợ, hồ sơ Drive và các tự động hóa theo từng khách hàng Zalo." action={canSync ? <Button variant="secondary" className="h-11 w-11 p-0" aria-label="Đồng bộ khách hàng" title="Đồng bộ khách hàng từ Zalo" disabled={sync.isPending} onClick={() => sync.mutate()}><RefreshCw className={`h-4 w-4 ${sync.isPending ? "animate-spin" : ""}`} /></Button> : undefined} />
@@ -58,11 +61,12 @@ export function CustomersPage() {
       <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative w-full max-w-xl"><Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input className="field pl-11" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Tìm theo tên khách hàng hoặc ghi chú..." aria-label="Tìm khách hàng" />{search && <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1 text-muted-foreground hover:bg-muted" aria-label="Xóa tìm kiếm"><X className="h-4 w-4" /></button>}</div>
         <div className="relative">
-          <Button variant="secondary" onClick={() => setFilterOpen((open) => !open)}><Filter className="h-4 w-4" />Bộ lọc{debt && <span className="h-2 w-2 rounded-full bg-accent" />}</Button>
+          <Button variant="secondary" onClick={() => setFilterOpen((open) => !open)}><Filter className="h-4 w-4" />Bộ lọc{(debt || availability !== "available") && <span className="h-2 w-2 rounded-full bg-accent" />}</Button>
           {filterOpen && <div className="absolute right-0 top-14 z-20 w-72 rounded-2xl border border-border bg-white p-5 shadow-2xl">
             <div className="flex items-center justify-between"><p className="text-sm font-semibold">Lọc khách hàng</p><SlidersHorizontal className="h-4 w-4 text-accent" /></div>
             <fieldset className="mt-4 space-y-2"><legend className="mb-2 text-xs font-medium text-muted-foreground">Công nợ</legend>{[["", "Tất cả"], ["owed", "Còn nợ"], ["clear", "Đã thanh toán"]].map(([value, label]) => <label key={value} className="flex min-h-10 cursor-pointer items-center gap-3 rounded-lg px-2 text-sm hover:bg-muted"><input type="radio" name="debt" value={value} checked={debt === value} onChange={() => setDebt(value)} className="h-4 w-4 accent-blue-600" />{label}</label>)}</fieldset>
-            <Button variant="ghost" className="mt-3 w-full" onClick={() => { setDebt(""); setFilterOpen(false); }}>Đặt lại bộ lọc</Button>
+            <fieldset className="mt-4 space-y-2"><legend className="mb-2 text-xs font-medium text-muted-foreground">Trạng thái nhóm</legend>{[["available", "Khả dụng"], ["unavailable", "Không khả dụng"], ["all", "Tất cả"]].map(([value, label]) => <label key={value} className="flex min-h-10 cursor-pointer items-center gap-3 rounded-lg px-2 text-sm hover:bg-muted"><input type="radio" name="availability" value={value} checked={availability === value} onChange={() => setAvailability(value)} className="h-4 w-4 accent-blue-600" />{label}</label>)}</fieldset>
+            <Button variant="ghost" className="mt-3 w-full" onClick={() => { setDebt(""); setAvailability("available"); setFilterOpen(false); }}>Đặt lại bộ lọc</Button>
           </div>}
         </div>
       </div>

@@ -54,6 +54,26 @@ class DebtReminderStatus(enum.StrEnum):
     CANCELLED = "CANCELLED"
 
 
+class MentionTargetKind(enum.StrEnum):
+    """Which automation a target is listed for; one person may be in both."""
+
+    MENTION = "MENTION"
+    PRICE = "PRICE"
+
+
+class MentionFollowupTrigger(enum.StrEnum):
+    """What created the follow-up, and therefore how a failed classification ends.
+
+    MENTION fails open — a human already tagged somebody, so tagging again costs
+    one message. PRICE_INQUIRY fails closed — nobody tagged anyone and only the
+    classifier separates "báo giá cho anh" from "đánh giá nhân viên", so a
+    failure here must stay silent rather than spam the customer's group.
+    """
+
+    MENTION = "MENTION"
+    PRICE_INQUIRY = "PRICE_INQUIRY"
+
+
 class MentionFollowupStatus(enum.StrEnum):
     CLASSIFYING = "CLASSIFYING"
     PENDING = "PENDING"
@@ -242,7 +262,11 @@ class MentionAutomation(TimestampMixin, Base):
         unique=True,
         index=True,
     )
+    #: Master switch, kept in step with the two feature flags below so the
+    #: scheduler and classifier can keep asking one question.
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    mention_tag_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    price_inquiry_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     delay_minutes: Mapped[int] = mapped_column(Integer, default=120, nullable=False)
     active_windows: Mapped[list[dict[str, str]]] = mapped_column(
         JSON,
@@ -309,7 +333,9 @@ class MentionContextMessage(Base):
 class MentionTarget(TimestampMixin, Base):
     __tablename__ = "mention_targets"
     __table_args__ = (
-        UniqueConstraint("automation_id", "zalo_user_id", name="uq_mention_target_user"),
+        UniqueConstraint(
+            "automation_id", "zalo_user_id", "kind", name="uq_mention_target_user"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -319,8 +345,31 @@ class MentionTarget(TimestampMixin, Base):
     zalo_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(Text)
+    kind: Mapped[MentionTargetKind] = mapped_column(
+        Enum(MentionTargetKind, native_enum=False),
+        default=MentionTargetKind.MENTION,
+        server_default=MentionTargetKind.MENTION.value,
+        nullable=False,
+    )
 
     automation: Mapped[MentionAutomation] = relationship(back_populates="targets")
+
+
+class StaffMember(TimestampMixin, Base):
+    """The handful of people who get tagged, kept once instead of per customer.
+
+    Picking a target used to mean fetching one group's members from Zalo. A
+    company-wide roster makes the bulk editor instant, and makes "this person is
+    in 6 of 8 customers" answerable without asking the gateway again.
+    """
+
+    __tablename__ = "staff_members"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    zalo_user_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    avatar_url: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(String(255))
 
 
 class MentionFollowup(Base):
@@ -336,6 +385,12 @@ class MentionFollowup(Base):
     )
     source_message_id: Mapped[str] = mapped_column(String(128), nullable=False)
     source_sender_id: Mapped[str | None] = mapped_column(String(128))
+    trigger: Mapped[MentionFollowupTrigger] = mapped_column(
+        Enum(MentionFollowupTrigger, native_enum=False),
+        default=MentionFollowupTrigger.MENTION,
+        server_default=MentionFollowupTrigger.MENTION.value,
+        nullable=False,
+    )
     target_user_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     target_display_names: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

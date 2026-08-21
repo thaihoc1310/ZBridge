@@ -10,14 +10,21 @@ import { PERMISSIONS, type PermissionCode } from "../lib/permissions";
 import { usePermissions, useSession } from "../lib/session";
 import { Button } from "./ui/Button";
 
-type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean; permission: PermissionCode };
+type NavItem = {
+  to: string;
+  label: string;
+  icon: LucideIcon;
+  end?: boolean;
+  /** Any one of these is enough to show the tab. */
+  permission: PermissionCode | PermissionCode[];
+};
 
 const navItems: NavItem[] = [
   { to: "/", label: "Tổng quan", icon: LayoutDashboard, end: true, permission: PERMISSIONS.dashboardRead },
   { to: "/customers", label: "Khách hàng", icon: UsersRound, permission: PERMISSIONS.customerRead },
   { to: "/activity", label: "Nhật ký", icon: ScrollText, permission: PERMISSIONS.activityRead },
   { to: "/bot", label: "Zalo Bot", icon: Bot, permission: PERMISSIONS.botRead },
-  { to: "/mention-settings", label: "Phân loại tag", icon: AtSign, permission: PERMISSIONS.mentionPolicyManage },
+  { to: "/mention-settings", label: "Tag tên", icon: AtSign, permission: [PERMISSIONS.mentionPolicyManage, PERMISSIONS.staffManage, PERMISSIONS.mentionBulkApply] },
   { to: "/users", label: "Người dùng", icon: ShieldCheck, permission: PERMISSIONS.userRead },
 ];
 
@@ -30,7 +37,9 @@ export function AppShell() {
   const queryClient = useQueryClient();
   const user = useSession();
   const { can } = usePermissions();
-  const links = navItems.filter((item) => can(item.permission));
+  const links = navItems.filter((item) =>
+    (Array.isArray(item.permission) ? item.permission : [item.permission]).some((code) => can(code)),
+  );
   const logout = useMutation({
     mutationFn: () => api<void>("/auth/logout", { method: "POST" }),
     onSuccess: () => { queryClient.clear(); navigate("/login", { replace: true }); },

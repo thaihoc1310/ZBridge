@@ -11,6 +11,11 @@ import {
 import { reportGatewayError } from "../alerting.js";
 import { GatewayError } from "../errors.js";
 import { EncryptedSessionStore } from "./session.js";
+
+/** The per-group entry of getGroupInfo, taken from the library so it stays in step. */
+type GroupDetail = NonNullable<
+  Awaited<ReturnType<API["getGroupInfo"]>>["gridInfoMap"][string]
+>;
 import type {
   BotState,
   ImageAttachment,
@@ -181,7 +186,47 @@ export class ZcaJsClient implements ZaloClient {
     if (!group) {
       throw new GatewayError("GROUP_NOT_FOUND", "Không tìm thấy nhóm trên Zalo.", 404);
     }
+    return this.resolveMembers(group);
+  }
 
+  /**
+   * Members of many groups in one round trip.
+   *
+   * getGroupInfo takes a list, so building a company-wide roster costs one call
+   * rather than one per customer. Groups Zalo does not return are omitted rather
+   * than failing the batch: one stale group must not hide every other member.
+   */
+  async getGroupMembersBatch(groupIds: string[]): Promise<Record<string, ZaloMember[]>> {
+    const api = this.requireApi();
+    const unique = [...new Set(groupIds)].filter(Boolean);
+    const result: Record<string, ZaloMember[]> = {};
+    for (let index = 0; index < unique.length; index += 50) {
+      const chunk = unique.slice(index, index + 50);
+      const detail = await api.getGroupInfo(chunk);
+      const present = chunk.filter((groupId) => {
+        if (detail.gridInfoMap[groupId]) return true;
+        console.warn("ZALO_GROUP_MISSING_IN_BATCH group_id=%s", groupId);
+        return false;
+      });
+      // A group whose member list Zalo truncates needs follow-up calls to name
+      // everyone. Resolving groups one after another turns that into a wait
+      // proportional to the customer count, which runs past the caller's
+      // timeout; a small pool keeps it flat without hammering Zalo.
+      let cursor = 0;
+      const workers = Array.from({ length: Math.min(4, present.length) }, async () => {
+        while (cursor < present.length) {
+          const groupId = present[cursor++];
+          if (!groupId) return;
+          result[groupId] = await this.resolveMembers(detail.gridInfoMap[groupId]!);
+        }
+      });
+      await Promise.all(workers);
+    }
+    return result;
+  }
+
+  private async resolveMembers(group: GroupDetail): Promise<ZaloMember[]> {
+    const api = this.requireApi();
     const currentMembers = group.currentMems ?? [];
     const resolved = new Map<string, ZaloMember>();
     for (const member of currentMembers) {
@@ -233,7 +278,7 @@ export class ZcaJsClient implements ZaloClient {
     if (members.length < group.totalMember) {
       console.warn(
         "ZALO_GROUP_MEMBERS_PARTIAL group_id=%s resolved=%d total=%d has_more=%d",
-        groupId,
+        group.groupId,
         members.length,
         group.totalMember,
         group.hasMoreMember,

@@ -99,12 +99,51 @@ export type MentionTimeWindow = {
 export type MentionAutomation = {
   id: string | null;
   group_id: string;
+  /** Derived from the two feature flags; the UI edits those, not this. */
   enabled: boolean;
+  mention_tag_enabled: boolean;
+  price_inquiry_enabled: boolean;
   delay_minutes: number;
   active_windows: MentionTimeWindow[];
   targets: MentionTarget[];
+  price_targets: MentionTarget[];
   pending_followups: number;
   updated_at: string | null;
+};
+
+export type StaffMember = {
+  user_id: string;
+  display_name: string;
+  avatar_url: string | null;
+  note: string | null;
+  mention_customer_count: number;
+  price_customer_count: number;
+};
+
+export type BulkMentionPreviewRow = {
+  customer_id: string;
+  name: string;
+  is_available: boolean;
+  has_automation: boolean;
+  current_target_count: number;
+  active_followups: number;
+  /** False when this customer already has exactly this configuration. */
+  will_change: boolean;
+  missing_members: string[];
+};
+
+export type BulkMentionPreview = {
+  rows: BulkMentionPreviewRow[];
+  gateway_error: string | null;
+};
+
+export type BulkMentionApplyResult = {
+  updated: number;
+  created: number;
+  unchanged: number;
+  skipped: string[];
+  cancelled_followups: number;
+  dropped_members: Record<string, number>;
 };
 
 export type MentionClassifierSettings = {

@@ -103,6 +103,17 @@ app.get("/groups/:groupId/members", asyncRoute(async (req, res) => {
   res.json({ members: await client.getGroupMembers(groupId) });
 }));
 
+const membersBatchSchema = z.object({
+  group_ids: z.array(z.string().min(1).max(128)).min(1).max(500),
+});
+
+// One round trip for every group, so building a staff roster does not fan out
+// into a request per customer.
+app.post("/groups/members", asyncRoute(async (req, res) => {
+  const body = membersBatchSchema.parse(req.body);
+  res.json({ members: await client.getGroupMembersBatch(body.group_ids) });
+}));
+
 const sendTextSchema = z.object({
   group_id: z.string().min(1).max(128),
   content: z.string().trim().min(1).max(5000),

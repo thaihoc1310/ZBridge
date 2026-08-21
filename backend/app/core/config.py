@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # recall at 0.75, while gpt-5.4-nano needs 0.85 before it stops skipping
     # messages that wanted an answer. Raise this alongside LLM_PROVIDER.
     llm_skip_confidence: float = 0.75
+    # The price trigger asks the opposite question, so this is the confidence
+    # needed to TAG rather than to skip. Kept separate because the two decisions
+    # are calibrated against different costs: a wrong skip loses a task, a wrong
+    # price tag spams the customer's group.
+    llm_price_confidence: float = 0.65
     fptai_api_key: str = ""
     openai_api_key: str = ""
     mention_context_messages: int = 8

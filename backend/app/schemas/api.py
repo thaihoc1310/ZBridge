@@ -213,7 +213,9 @@ class MentionTimeWindow(BaseModel):
 
 
 class MentionAutomationUpdate(BaseModel):
-    enabled: bool = True
+    # Two independent features share the delay and the active windows below.
+    mention_tag_enabled: bool = True
+    price_inquiry_enabled: bool = False
     delay_minutes: int = Field(default=120, ge=1, le=10080)
     active_windows: list[MentionTimeWindow] = Field(
         default_factory=lambda: [
@@ -223,7 +225,11 @@ class MentionAutomationUpdate(BaseModel):
         min_length=1,
         max_length=24,
     )
-    targets: list[MentionTargetInput] = Field(min_length=1, max_length=100)
+    # Both lists may be empty and both features may be off: a customer that does
+    # not use tagging yet, or one switched on before anybody was picked, is a
+    # normal state rather than an error.
+    targets: list[MentionTargetInput] = Field(default_factory=list, max_length=100)
+    price_targets: list[MentionTargetInput] = Field(default_factory=list, max_length=100)
 
 
 class MentionTargetResponse(BaseModel):
@@ -236,11 +242,68 @@ class MentionAutomationResponse(BaseModel):
     id: uuid.UUID | None = None
     group_id: uuid.UUID
     enabled: bool
+    mention_tag_enabled: bool = True
+    price_inquiry_enabled: bool = False
     delay_minutes: int
     active_windows: list[MentionTimeWindow]
     targets: list[MentionTargetResponse]
+    price_targets: list[MentionTargetResponse] = Field(default_factory=list)
     pending_followups: int = 0
     updated_at: datetime | None = None
+
+
+class StaffMemberInput(BaseModel):
+    user_id: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(min_length=1, max_length=255)
+    avatar_url: str | None = None
+    note: str | None = Field(default=None, max_length=255)
+
+
+class StaffMemberResponse(StaffMemberInput):
+    mention_customer_count: int = 0
+    price_customer_count: int = 0
+
+
+class StaffRosterUpdate(BaseModel):
+    members: list[StaffMemberInput] = Field(default_factory=list, max_length=200)
+
+
+class BulkMentionUpdate(MentionAutomationUpdate):
+    """The same shape the per-customer form posts, plus who to apply it to."""
+
+    customer_ids: list[uuid.UUID] = Field(default_factory=list, max_length=1000)
+
+
+class BulkMentionPreviewRow(BaseModel):
+    customer_id: uuid.UUID
+    name: str
+    is_available: bool
+    has_automation: bool
+    current_target_count: int
+    #: Reminders this customer would lose, counted only where the configuration
+    #: actually changes — an identical rewrite cancels nothing.
+    active_followups: int
+    will_change: bool = True
+    #: People who would be written here but are not in the Zalo group.
+    missing_members: list[str] = Field(default_factory=list)
+
+
+class BulkMentionPreview(BaseModel):
+    rows: list[BulkMentionPreviewRow]
+    #: Set when membership could not be read, so the warnings above are unknown
+    #: rather than empty.
+    gateway_error: str | None = None
+
+
+class BulkMentionApplyResult(BaseModel):
+    updated: int
+    created: int
+    #: Already had exactly this configuration, so their running reminders were
+    #: left alone rather than cancelled and restarted.
+    unchanged: int = 0
+    skipped: list[str] = Field(default_factory=list)
+    cancelled_followups: int = 0
+    dropped_members: dict[str, int] = Field(default_factory=dict)
 
 
 class MentionClassifierSettingsUpdate(BaseModel):

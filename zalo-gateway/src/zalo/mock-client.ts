@@ -48,6 +48,14 @@ export class MockZaloClient implements ZaloClient {
       { group_id: "mock-group-3", name: "Customer Test", avatar_url: null, member_count: 6 },
     ];
   }
+  async getGroupMembersBatch(groupIds: string[]): Promise<Record<string, ZaloMember[]>> {
+    const result: Record<string, ZaloMember[]> = {};
+    for (const groupId of groupIds) {
+      result[groupId] = await this.getGroupMembers(groupId).catch(() => []);
+    }
+    return result;
+  }
+
   async getGroupMembers(groupId: string): Promise<ZaloMember[]> {
     if (!this.connected) throw new Error("Bot disconnected");
     const members: Record<string, ZaloMember[]> = {

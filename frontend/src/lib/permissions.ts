@@ -11,6 +11,8 @@ export const PERMISSIONS = {
   mentionRead: "mention:read",
   mentionUpdate: "mention:update",
   mentionPolicyManage: "mention_policy:manage",
+  staffManage: "staff:manage",
+  mentionBulkApply: "mention_bulk:apply",
   debtReminderRead: "debt_reminder:read",
   debtReminderUpdate: "debt_reminder:update",
   activityRead: "activity:read",
