@@ -8,7 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.errors import AppError
-from app.models import MentionAutomation, MentionFollowup, MentionTarget, ZaloGroup
+from app.models import (
+    MentionAutomation,
+    MentionContextMessage,
+    MentionFollowup,
+    MentionTarget,
+    ZaloGroup,
+)
 from app.models.entities import MentionFollowupStatus
 from app.schemas.api import (
     GroupMemberResponse,
@@ -20,6 +26,8 @@ from app.schemas.api import (
     MentionTimeWindow,
 )
 from app.services.group_service import get_group
+from app.services.mention_rules import is_bare_mention, matches_skip_phrase
+from app.services.mention_settings_service import get_or_create_mention_settings
 from app.services.mention_time_windows import (
     DEFAULT_MENTION_WINDOWS,
     next_allowed_at,
@@ -68,7 +76,11 @@ async def _to_response(
             .where(
                 MentionFollowup.automation_id == automation.id,
                 MentionFollowup.status.in_(
-                    [MentionFollowupStatus.PENDING, MentionFollowupStatus.PROCESSING]
+                    [
+                        MentionFollowupStatus.CLASSIFYING,
+                        MentionFollowupStatus.PENDING,
+                        MentionFollowupStatus.PROCESSING,
+                    ]
                 ),
             )
         )
@@ -135,7 +147,11 @@ async def save_mention_automation(
                 .where(
                     MentionFollowup.automation_id == automation.id,
                     MentionFollowup.status.in_(
-                        [MentionFollowupStatus.PENDING, MentionFollowupStatus.PROCESSING]
+                        [
+                            MentionFollowupStatus.CLASSIFYING,
+                            MentionFollowupStatus.PENDING,
+                            MentionFollowupStatus.PROCESSING,
+                        ]
                     ),
                 )
                 .values(
@@ -189,6 +205,28 @@ async def schedule_from_incoming_event(
         return IncomingEventResponse(scheduled=False)
 
     now = datetime.now(UTC)
+    sent_at = event.sent_at or now
+    if sent_at.tzinfo is None:
+        sent_at = sent_at.replace(tzinfo=UTC)
+    context_message = await db.scalar(
+        select(MentionContextMessage.id).where(
+            MentionContextMessage.automation_id == automation.id,
+            MentionContextMessage.message_id == event.message_id,
+        )
+    )
+    if context_message is None:
+        db.add(
+            MentionContextMessage(
+                automation_id=automation.id,
+                message_id=event.message_id,
+                sender_id=event.sender_id,
+                sender_display_name=event.sender_display_name,
+                content=event.content,
+                mentions=[mention.model_dump() for mention in event.mentions],
+                sent_at=sent_at,
+            )
+        )
+    global_settings = await get_or_create_mention_settings(db)
     active_followups = list(
         (
             await db.scalars(
@@ -196,7 +234,11 @@ async def schedule_from_incoming_event(
                 .where(
                     MentionFollowup.automation_id == automation.id,
                     MentionFollowup.status.in_(
-                        [MentionFollowupStatus.PENDING, MentionFollowupStatus.PROCESSING]
+                        [
+                            MentionFollowupStatus.CLASSIFYING,
+                            MentionFollowupStatus.PENDING,
+                            MentionFollowupStatus.PROCESSING,
+                        ]
                     ),
                 )
                 .with_for_update()
@@ -233,14 +275,18 @@ async def schedule_from_incoming_event(
         )
     )
     if existing:
-        if acknowledged_followups:
-            await db.commit()
+        await db.commit()
         return IncomingEventResponse(scheduled=False, followup_id=existing)
 
     active_target_ids = {
         user_id
         for followup in active_followups
-        if followup.status in (MentionFollowupStatus.PENDING, MentionFollowupStatus.PROCESSING)
+        if followup.status
+        in (
+            MentionFollowupStatus.CLASSIFYING,
+            MentionFollowupStatus.PENDING,
+            MentionFollowupStatus.PROCESSING,
+        )
         for user_id in followup.target_user_ids
     }
     mentioned_ids = {mention.user_id for mention in event.mentions}
@@ -252,8 +298,8 @@ async def schedule_from_incoming_event(
         and target.zalo_user_id not in active_target_ids
     ]
     if not matched:
+        await db.commit()
         if acknowledged_followups:
-            await db.commit()
             logger.info(
                 "MENTION_FOLLOWUP_ACKNOWLEDGED group_id=%s sender_id=%s followups=%d",
                 event.group_id,
@@ -262,17 +308,65 @@ async def schedule_from_incoming_event(
             )
         return IncomingEventResponse(scheduled=False)
 
+    target_display_names = [target.display_name for target in matched]
+    bare_mention = is_bare_mention(
+        event,
+        target_display_names=target_display_names,
+    )
+    skip_by_rule = matches_skip_phrase(
+        event,
+        global_settings.skip_phrases,
+        target_display_names=target_display_names,
+    )
+    if skip_by_rule:
+        initial_status = MentionFollowupStatus.SKIPPED
+        classification_model = "rules:v1"
+        classification_result = [
+            {
+                "target_user_id": target.zalo_user_id,
+                "classification": "ACKNOWLEDGEMENT",
+                "confidence": 1.0,
+                "reason_code": "CONFIGURED_SKIP_PHRASE",
+                "skipped": True,
+            }
+            for target in matched
+        ]
+    elif bare_mention and global_settings.bare_mention_requires_response:
+        initial_status = MentionFollowupStatus.PENDING
+        classification_model = "rules:v1"
+        classification_result = [
+            {
+                "target_user_id": target.zalo_user_id,
+                "classification": "NEED_RESPONSE",
+                "confidence": 1.0,
+                "reason_code": "BARE_MENTION",
+                "skipped": False,
+            }
+            for target in matched
+        ]
+    elif global_settings.ai_classifier_enabled:
+        initial_status = MentionFollowupStatus.CLASSIFYING
+        classification_model = None
+        classification_result = None
+    else:
+        initial_status = MentionFollowupStatus.PENDING
+        classification_model = "safe-fallback"
+        classification_result = None
+
     followup = MentionFollowup(
         automation_id=automation.id,
         source_message_id=event.message_id,
         source_sender_id=event.sender_id,
         target_user_ids=[target.zalo_user_id for target in matched],
-        target_display_names=[target.display_name for target in matched],
+        target_display_names=target_display_names,
         due_at=next_allowed_at(
             now + timedelta(minutes=automation.delay_minutes),
             automation.active_windows,
         ),
-        status=MentionFollowupStatus.PENDING,
+        status=initial_status,
+        processed_at=now if initial_status == MentionFollowupStatus.SKIPPED else None,
+        classification_model=classification_model,
+        classification_result=classification_result,
     )
     automation_id = automation.id
     db.add(followup)
@@ -289,14 +383,15 @@ async def schedule_from_incoming_event(
         return IncomingEventResponse(scheduled=False, followup_id=existing)
     await db.refresh(followup)
     logger.info(
-        "MENTION_FOLLOWUP_SCHEDULED followup_id=%s group_id=%s targets=%d due_at=%s",
+        "MENTION_FOLLOWUP_CREATED followup_id=%s group_id=%s status=%s targets=%d due_at=%s",
         followup.id,
         automation.zalo_group_id,
+        followup.status.value,
         len(matched),
         followup.due_at.isoformat(),
     )
     return IncomingEventResponse(
-        scheduled=True,
+        scheduled=initial_status != MentionFollowupStatus.SKIPPED,
         followup_id=followup.id,
         matched_targets=len(matched),
     )

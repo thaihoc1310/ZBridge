@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -23,7 +24,26 @@ class Settings(BaseSettings):
     zalo_event_secret: str = "dev-zalo-event-secret"
     gateway_timeout_seconds: float = 30.0
     mention_scheduler_interval_seconds: int = 15
+    mention_classifier_interval_seconds: int = 5
     debt_reminder_scheduler_interval_seconds: int = 60
+    # Mention classifier LLM. FPT Cloud / DeepSeek-V4-Flash is the default:
+    # backend/bench measured zero wrong skips at every threshold and 48 of 51
+    # worthwhile skips, against 36 of 51 and two wrong skips for gpt-5.4-nano,
+    # at roughly 40% of the cost. LLM_PROVIDER=openai is the way back.
+    llm_provider: Literal["fptcloud", "openai"] = "fptcloud"
+    llm_base_url: str = "https://mkp-api.fptcloud.com"
+    llm_model: str = "DeepSeek-V4-Flash"
+    llm_timeout_seconds: float = 30.0
+    # Calibration differs per model: DeepSeek stays clean up to 0.85 but peaks in
+    # recall at 0.75, while gpt-5.4-nano needs 0.85 before it stops skipping
+    # messages that wanted an answer. Raise this alongside LLM_PROVIDER.
+    llm_skip_confidence: float = 0.75
+    fptai_api_key: str = ""
+    openai_api_key: str = ""
+    mention_context_messages: int = 8
+    mention_context_window_minutes: int = 15
+    mention_context_retention_hours: int = 24
+    mention_classification_deadline_minutes: int = 15
     google_service_account_file: str | None = None
     google_api_timeout_seconds: float = 90.0
 
@@ -40,6 +60,10 @@ class Settings(BaseSettings):
     alert_heartbeat_interval_seconds: int = 120
     login_failure_alert_threshold: int = 5
     login_failure_window_seconds: int = 600
+
+    @property
+    def llm_api_key(self) -> str:
+        return self.openai_api_key if self.llm_provider == "openai" else self.fptai_api_key
 
     @property
     def cors_origins(self) -> list[str]:

@@ -24,13 +24,20 @@ celery_app.conf.update(
     task_default_queue="celery",
     # Alerts run on their own worker: a blocking Telegram call must never take a
     # slot away from the debt reminders and mention follow-ups it is reporting on.
-    task_routes={"zbridge.alerts.*": {"queue": "alerts"}},
+    task_routes={
+        "zbridge.alerts.*": {"queue": "alerts"},
+        "zbridge.mentions.classify": {"queue": "ai"},
+    },
     task_ignore_result=True,
     task_serializer="json",
     accept_content=["json"],
     timezone="Asia/Ho_Chi_Minh",
     enable_utc=True,
     beat_schedule={
+        "dispatch-mention-classifications": {
+            "task": "zbridge.mentions.dispatch_classifications",
+            "schedule": settings.mention_classifier_interval_seconds,
+        },
         "dispatch-due-mention-followups": {
             "task": "zbridge.mentions.dispatch_due",
             "schedule": settings.mention_scheduler_interval_seconds,
@@ -46,6 +53,10 @@ celery_app.conf.update(
         "purge-expired-delivery-logs": {
             "task": "zbridge.maintenance.purge_expired_delivery_logs",
             "schedule": crontab(minute=0, hour=2, day_of_week="monday"),
+        },
+        "purge-expired-mention-context": {
+            "task": "zbridge.maintenance.purge_expired_mention_context",
+            "schedule": crontab(minute=20, hour="*"),
         },
     },
 )

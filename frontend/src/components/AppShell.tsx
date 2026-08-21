@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Bot, KeyRound, LayoutDashboard, LogOut, Menu, ScrollText, ShieldCheck, UsersRound, X, Zap, type LucideIcon } from "lucide-react";
+import { AtSign, Bot, KeyRound, LayoutDashboard, LogOut, Menu, ScrollText, ShieldCheck, UsersRound, X, Zap, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
@@ -17,6 +17,7 @@ const navItems: NavItem[] = [
   { to: "/customers", label: "Khách hàng", icon: UsersRound, permission: PERMISSIONS.customerRead },
   { to: "/activity", label: "Nhật ký", icon: ScrollText, permission: PERMISSIONS.activityRead },
   { to: "/bot", label: "Zalo Bot", icon: Bot, permission: PERMISSIONS.botRead },
+  { to: "/mention-settings", label: "Phân loại tag", icon: AtSign, permission: PERMISSIONS.mentionPolicyManage },
   { to: "/users", label: "Người dùng", icon: ShieldCheck, permission: PERMISSIONS.userRead },
 ];
 

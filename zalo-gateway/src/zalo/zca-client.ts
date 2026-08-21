@@ -26,7 +26,7 @@ import type {
 
 type EventSink = (event: IncomingGroupMessageEvent) => Promise<void>;
 
-/** The backend never reads message bodies, so a generous cap avoids 422s on long messages. */
+/** Context classification needs bodies, while the cap still prevents oversized events. */
 const MAX_EVENT_CONTENT_LENGTH = 2_000;
 const MAX_EVENT_MENTIONS = 1_000;
 const LISTENER_RECOVERY_DELAYS_MS = [10_000, 30_000, 60_000, 120_000, 300_000];
@@ -42,6 +42,7 @@ export class ZcaJsClient implements ZaloClient {
   private lastError: string | null = null;
   private loginTask: Promise<void> | null = null;
   private outboundTail: Promise<void> = Promise.resolve();
+  private readonly inboundTails = new Map<string, Promise<void>>();
   private listenerStatus: ListenerStatus = "IDLE";
   private listenerAttached = false;
   private recoveryTimer: NodeJS.Timeout | null = null;
@@ -627,10 +628,19 @@ export class ZcaJsClient implements ZaloClient {
     if (!messageId) return;
     const content =
       typeof message.data.content === "string" ? message.data.content : "";
+    const timestamp = Number(message.data.ts);
+    const sentAtDate = Number.isFinite(timestamp)
+      ? new Date(timestamp < 10_000_000_000 ? timestamp * 1_000 : timestamp)
+      : null;
+    const sentAt = sentAtDate && !Number.isNaN(sentAtDate.getTime())
+      ? sentAtDate.toISOString()
+      : null;
     const event: IncomingGroupMessageEvent = {
       group_id: message.threadId,
       message_id: messageId,
       sender_id: this.normalizeMemberId(message.data.uidFrom),
+      sender_display_name: message.data.dName || null,
+      sent_at: sentAt,
       // Trimmed on purpose: an oversized body would be rejected by the backend
       // and the reply acknowledgement it carries would be lost for good.
       content: content.slice(0, MAX_EVENT_CONTENT_LENGTH),
@@ -638,12 +648,22 @@ export class ZcaJsClient implements ZaloClient {
         user_id: this.normalizeMemberId(mention.uid),
         position: mention.pos,
         length: mention.len,
+        text: content.slice(mention.pos, mention.pos + mention.len),
       })),
     };
-    void this.eventSink(event).catch((error) => {
+    this.forwardEventInOrder(event);
+  }
+
+  private forwardEventInOrder(event: IncomingGroupMessageEvent): void {
+    const previous = this.inboundTails.get(event.group_id) ?? Promise.resolve();
+    const current = previous
+      .catch(() => undefined)
+      .then(() => this.eventSink(event));
+    this.inboundTails.set(event.group_id, current);
+    void current.catch((error) => {
       console.error(
         "ZALO_EVENT_FORWARD_FAILED group_id=%s error=%s",
-        message.threadId,
+        event.group_id,
         this.safeError(error),
       );
       // A dropped event means a customer reply was never acknowledged, so the
@@ -653,8 +673,12 @@ export class ZcaJsClient implements ZaloClient {
         `Không đẩy được tin nhắn đến sang backend: ${this.safeError(error)}.`
           + " Có thể bỏ sót phản hồi của khách và tag lại người đã trả lời.",
         "CRITICAL",
-        { zalo_group_id: message.threadId },
+        { zalo_group_id: event.group_id },
       );
+    }).finally(() => {
+      if (this.inboundTails.get(event.group_id) === current) {
+        this.inboundTails.delete(event.group_id);
+      }
     });
   }
 

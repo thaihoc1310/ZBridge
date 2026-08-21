@@ -15,6 +15,7 @@ import { CustomersPage } from "./pages/CustomersPage";
 import { CustomerDetailPage } from "./pages/CustomerDetailPage";
 import { ActivityPage } from "./pages/ActivityPage";
 import { UsersPage } from "./pages/UsersPage";
+import { MentionSettingsPage } from "./pages/MentionSettingsPage";
 import "./index.css";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 15_000, refetchOnWindowFocus: false } } });
@@ -24,6 +25,7 @@ const LANDING_FALLBACKS: Array<[PermissionCode, string]> = [
   [PERMISSIONS.customerRead, "/customers"],
   [PERMISSIONS.activityRead, "/activity"],
   [PERMISSIONS.botRead, "/bot"],
+  [PERMISSIONS.mentionPolicyManage, "/mention-settings"],
   [PERMISSIONS.userRead, "/users"],
 ];
 
@@ -65,6 +67,7 @@ function App() {
       <Route path="/customers/:id" element={<Guard code={PERMISSIONS.customerRead}><CustomerDetailPage /></Guard>} />
       <Route path="/activity" element={<Guard code={PERMISSIONS.activityRead}><ActivityPage /></Guard>} />
       <Route path="/users" element={<Guard code={PERMISSIONS.userRead}><UsersPage /></Guard>} />
+      <Route path="/mention-settings" element={<Guard code={PERMISSIONS.mentionPolicyManage}><MentionSettingsPage /></Guard>} />
       <Route path="/groups" element={<Navigate to="/customers" replace />} />
       <Route path="/groups/:id" element={<LegacyGroupRedirect />} />
     </Route>

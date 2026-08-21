@@ -11,6 +11,7 @@ dependencies = [
   "fastapi>=0.115,<1",
   "google-auth[requests]>=2.35,<3",
   "httpx>=0.27,<1",
+  "openai>=2,<3",
   "pillow>=11,<12",
   "pypdfium2>=4.30,<5",
   "pwdlib[argon2]>=0.2,<1",

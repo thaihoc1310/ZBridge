@@ -104,6 +104,7 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       ALERT_LINK_BASE_URL: ${ALERT_LINK_BASE_URL:-}
       LOGIN_FAILURE_ALERT_THRESHOLD: ${LOGIN_FAILURE_ALERT_THRESHOLD:-5}
+      LOGIN_FAILURE_WINDOW_SECONDS: ${LOGIN_FAILURE_WINDOW_SECONDS:-600}
       TZ: ${TZ:-Asia/Ho_Chi_Minh}
     depends_on:
       migrate:
@@ -135,6 +136,9 @@ services:
       MENTION_SCHEDULER_INTERVAL_SECONDS: ${MENTION_SCHEDULER_INTERVAL_SECONDS:-15}
       DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS: ${DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS:-60}
       GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google-service-account.json
+      MENTION_CLASSIFICATION_DEADLINE_MINUTES: ${MENTION_CLASSIFICATION_DEADLINE_MINUTES:-15}
+      MENTION_CONTEXT_RETENTION_HOURS: ${MENTION_CONTEXT_RETENTION_HOURS:-24}
+      GOOGLE_API_TIMEOUT_SECONDS: ${GOOGLE_API_TIMEOUT_SECONDS:-90}
       APP_URL: ${APP_URL}
       ALERT_LINK_BASE_URL: ${ALERT_LINK_BASE_URL:-}
       TZ: ${TZ:-Asia/Ho_Chi_Minh}
@@ -151,6 +155,35 @@ services:
         condition: service_started
     # Rendering a Google Sheet to PNG is the memory-hungry step here.
     mem_limit: ${WORKER_MEM_LIMIT:-2g}
+    logging: *logging
+    networks: [internal]
+
+  celery-ai:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/zbridge-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=ai", "--concurrency=${AI_CONCURRENCY:-4}"]
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      LLM_PROVIDER: ${LLM_PROVIDER:-fptcloud}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://mkp-api.fptcloud.com}
+      LLM_MODEL: ${LLM_MODEL:-DeepSeek-V4-Flash}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30}
+      LLM_SKIP_CONFIDENCE: ${LLM_SKIP_CONFIDENCE:-0.75}
+      FPTAI_API_KEY: ${FPTAI_API_KEY:?FPTAI_API_KEY is required}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MENTION_CONTEXT_MESSAGES: ${MENTION_CONTEXT_MESSAGES:-8}
+      MENTION_CONTEXT_WINDOW_MINUTES: ${MENTION_CONTEXT_WINDOW_MINUTES:-15}
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    mem_limit: ${AI_WORKER_MEM_LIMIT:-384m}
     logging: *logging
     networks: [internal]
 
@@ -185,6 +218,8 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       MENTION_SCHEDULER_INTERVAL_SECONDS: ${MENTION_SCHEDULER_INTERVAL_SECONDS:-15}
+      MENTION_CLASSIFIER_INTERVAL_SECONDS: ${MENTION_CLASSIFIER_INTERVAL_SECONDS:-5}
+      ALERT_HEARTBEAT_INTERVAL_SECONDS: ${ALERT_HEARTBEAT_INTERVAL_SECONDS:-120}
       DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS: ${DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS:-60}
       TZ: ${TZ:-Asia/Ho_Chi_Minh}
     depends_on:
