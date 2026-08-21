@@ -42,7 +42,8 @@ async def sync_rbac(db: AsyncSession) -> None:
     """Mirror the code-defined catalog into the database.
 
     System roles are re-synced on every boot so a newly shipped permission is
-    granted without a manual step. Custom roles are never touched here.
+    granted without a manual step. Custom roles are never touched here, and a
+    role that leaves the catalog is demoted into one rather than deleted.
     """
     stored = {
         permission.code: permission
@@ -90,6 +91,20 @@ async def sync_rbac(db: AsyncSession) -> None:
             role.description = definition.description
             role.is_system = True
             role.permissions = granted
+
+    reserved = {definition.code for definition in SYSTEM_ROLES}
+    demoted = [
+        role for code, role in roles.items() if role.is_system and code not in reserved
+    ]
+    for role in demoted:
+        # Dropped from the catalog: keep its grants and the people assigned to
+        # it, but stop reserving it so an admin can edit or remove it by hand.
+        role.is_system = False
+    if demoted:
+        logger.info(
+            "RBAC_ROLES_DEMOTED codes=%s",
+            ",".join(sorted(role.code for role in demoted)),
+        )
     await db.commit()
     logger.info(
         "RBAC_SYNCED permissions=%d system_roles=%d", len(stored), len(SYSTEM_ROLES)

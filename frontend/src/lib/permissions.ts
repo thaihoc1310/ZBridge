@@ -10,6 +10,7 @@ export const PERMISSIONS = {
   messageSend: "message:send",
   mentionRead: "mention:read",
   mentionUpdate: "mention:update",
+  mentionPolicyManage: "mention_policy:manage",
   debtReminderRead: "debt_reminder:read",
   debtReminderUpdate: "debt_reminder:update",
   activityRead: "activity:read",

@@ -243,6 +243,22 @@ class MentionAutomationResponse(BaseModel):
     updated_at: datetime | None = None
 
 
+class MentionClassifierSettingsUpdate(BaseModel):
+    ai_classifier_enabled: bool = True
+    bare_mention_requires_response: bool = True
+    skip_phrases: list[str] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_skip_phrases(self):
+        if any(not phrase.strip() or len(phrase) > 100 for phrase in self.skip_phrases):
+            raise ValueError("Mỗi câu bỏ qua phải có từ 1 đến 100 ký tự.")
+        return self
+
+
+class MentionClassifierSettingsResponse(MentionClassifierSettingsUpdate):
+    updated_at: datetime | None = None
+
+
 class DebtReminderTextPart(BaseModel):
     type: Literal["text"]
     text: str = Field(min_length=1, max_length=5000)
@@ -296,12 +312,15 @@ class IncomingMention(BaseModel):
     user_id: str = Field(min_length=1, max_length=128)
     position: int = Field(ge=0)
     length: int = Field(ge=1)
+    text: str | None = Field(default=None, max_length=255)
 
 
 class IncomingGroupMessage(BaseModel):
     group_id: str = Field(min_length=1, max_length=128)
     message_id: str = Field(min_length=1, max_length=128)
     sender_id: str | None = Field(default=None, max_length=128)
+    sender_display_name: str | None = Field(default=None, max_length=255)
+    sent_at: datetime | None = None
     content: str = Field(default="", max_length=10000)
     # Generous on purpose: rejecting an event would also drop the reply
     # acknowledgement it carries, leaving the follow-up loop running forever.

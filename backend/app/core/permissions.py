@@ -20,6 +20,12 @@ MESSAGE_SEND = "message:send"
 
 MENTION_READ = "mention:read"
 MENTION_UPDATE = "mention:update"
+#: The per-customer codes above cover one group each. This one covers the policy
+#: every group is judged by, so switching the classifier off or mistyping a skip
+#: phrase silently changes behaviour system-wide — worth its own grant. It gates
+#: reading the policy as well: the page is a settings form with nothing to show
+#: somebody who cannot change it, and one code per tab is what the nav assumes.
+MENTION_POLICY_MANAGE = "mention_policy:manage"
 
 DEBT_REMINDER_READ = "debt_reminder:read"
 DEBT_REMINDER_UPDATE = "debt_reminder:update"
@@ -61,6 +67,11 @@ PERMISSION_CATALOG: tuple[PermissionDef, ...] = (
     PermissionDef(MESSAGE_SEND, "Gửi tin nhắn thủ công vào nhóm", CATEGORY_MESSAGE),
     PermissionDef(MENTION_READ, "Xem cấu hình tag tên tự động", CATEGORY_MENTION),
     PermissionDef(MENTION_UPDATE, "Thay đổi cấu hình tag tên tự động", CATEGORY_MENTION),
+    PermissionDef(
+        MENTION_POLICY_MANAGE,
+        "Xem và đổi chính sách phân loại tag toàn hệ thống",
+        CATEGORY_MENTION,
+    ),
     PermissionDef(DEBT_REMINDER_READ, "Xem cấu hình nhắc công nợ", CATEGORY_DEBT),
     PermissionDef(DEBT_REMINDER_UPDATE, "Thay đổi cấu hình nhắc công nợ", CATEGORY_DEBT),
     PermissionDef(ACTIVITY_READ, "Xem nhật ký gửi tin", CATEGORY_ACTIVITY),
@@ -82,7 +93,6 @@ USER_MANAGEMENT_PERMISSIONS: frozenset[str] = frozenset(
 )
 
 ADMIN_ROLE_CODE = "ADMIN"
-BUSINESS_OWNER_ROLE_CODE = "BUSINESS_OWNER"
 
 
 @dataclass(frozen=True)
@@ -93,18 +103,16 @@ class SystemRoleDef:
     permissions: frozenset[str]
 
 
+#: Reserved roles, resynced on every boot and locked against editing. Keep this
+#: to the one role that must never lose a permission — everything else belongs
+#: to the operator, who can shape it in the UI. A role dropped from here is not
+#: deleted: `sync_rbac` hands it over as an ordinary editable role.
 SYSTEM_ROLES: tuple[SystemRoleDef, ...] = (
     SystemRoleDef(
         ADMIN_ROLE_CODE,
         "Quản trị hệ thống",
         "Toàn quyền vận hành, kèm quản lý người dùng và phân quyền.",
         ALL_PERMISSION_CODES,
-    ),
-    SystemRoleDef(
-        BUSINESS_OWNER_ROLE_CODE,
-        "Chủ doanh nghiệp",
-        "Toàn quyền vận hành khách hàng và tự động hóa, không quản lý người dùng.",
-        ALL_PERMISSION_CODES - USER_MANAGEMENT_PERMISSIONS,
     ),
 )
 

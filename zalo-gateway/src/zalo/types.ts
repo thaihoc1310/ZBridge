@@ -61,8 +61,10 @@ export type IncomingGroupMessageEvent = {
   group_id: string;
   message_id: string;
   sender_id: string;
+  sender_display_name: string | null;
+  sent_at: string | null;
   content: string;
-  mentions: Array<{ user_id: string; position: number; length: number }>;
+  mentions: Array<{ user_id: string; position: number; length: number; text: string }>;
 };
 
 export type SendResult = {

@@ -9,7 +9,7 @@ Nền tảng quản trị và tự động hóa công việc lặp lại trong c
 - `zalo-gateway`: Node.js + TypeScript, adapter cô lập `zca-js` 2.1.2.
 - `postgres`: nguồn dữ liệu bền vững cho tài khoản, nhóm, lịch sử và lịch tự động hóa.
 - `redis`: hàng đợi tác vụ nhanh, bật AOF để tăng khả năng phục hồi.
-- `celery-worker` và `celery-beat`: thực thi tác vụ nền, retry và đánh thức lịch đến hạn.
+- `celery-worker`, `celery-ai` và `celery-beat`: thực thi tác vụ nền, phân loại mention, retry và đánh thức lịch đến hạn.
 
 Browser chỉ giao tiếp với FastAPI. Zalo Gateway không publish port ra host trong Docker Compose.
 
@@ -58,9 +58,27 @@ Mỗi khách hàng cần có link thư mục Drive trong hồ sơ. File dùng đ
 3. Quét QR bằng ứng dụng Zalo trên điện thoại.
 4. Mở **Khách hàng**; hệ thống tự sync khi vào trang, hoặc dùng nút refresh.
 5. Mở một khách hàng → **Tag tên tự động** → chọn thành viên và thời gian chờ.
-6. Với khách còn nợ, thêm thư mục Drive rồi mở **Nhắc thanh toán công nợ** để đặt ngày, giờ và nội dung gửi hàng tháng.
+6. Mở **Phân loại tag** để chỉnh chính sách AI, bare mention và câu bỏ qua. Đây là cấu hình global, áp dụng cho mọi nhóm/khách hàng.
+7. Với khách còn nợ, thêm thư mục Drive rồi mở **Nhắc thanh toán công nợ** để đặt ngày, giờ và nội dung gửi hàng tháng.
 
-Khi một tin nhắn trong nhóm tag người đã chọn, gateway chuyển sự kiện nội bộ cho backend. Lịch tag lại được lưu trong PostgreSQL; Celery Beat đưa lịch đến hạn qua Redis và Celery worker gửi tag qua gateway. Tin do bot gửi được bỏ qua để không tạo vòng lặp.
+Khi một tin nhắn trong nhóm tag người đã chọn, gateway chuyển sự kiện cùng context gần nhất cho backend. Bare mention luôn được lên lịch; các câu bỏ qua khớp chính xác dùng rule; phần còn lại được `celery-ai` phân loại bằng LLM. Chỉ `ACKNOWLEDGEMENT`/`FYI` đủ confidence mới bị skip; `NEED_RESPONSE`, `UNCERTAIN`, thiếu key hoặc lỗi API đều lên lịch an toàn. Context chỉ được lưu ngắn hạn và tự xóa sau 24 giờ.
+
+Mặc định dùng DeepSeek-V4-Flash trên FPT Cloud. Đặt API key chính chủ trong `.env` (không commit file này):
+
+```text
+FPTAI_API_KEY=...
+```
+
+Muốn quay về OpenAI thì đổi ba biến, không cần sửa code:
+
+```text
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-5.4-nano-2026-03-17
+LLM_SKIP_CONFIDENCE=0.85
+OPENAI_API_KEY=...
+```
+
+So sánh hai model đo bằng `backend/bench` — xem README trong thư mục đó.
 
 Credential (`cookie`, `imei`, `userAgent`) được mã hóa AES-256-GCM tại `/data/zalo-session/session.enc` bằng `ZALO_SESSION_SECRET`. File session và secret không được trả về frontend hoặc ghi log.
 
@@ -85,6 +103,7 @@ Worker nền cần Redis:
 
 ```bash
 celery -A app.celery_app:celery_app worker --loglevel=INFO
+celery -A app.celery_app:celery_app worker --loglevel=INFO --queues=ai
 celery -A app.celery_app:celery_app beat --loglevel=INFO
 ```
 
@@ -113,6 +132,7 @@ npm run dev
 - `GET /api/customers`, `POST /api/customers/sync`, `GET /api/customers/{id}`
 - `GET /api/customers/{id}/members`
 - `GET /api/customers/{id}/mention-automation`, `PUT /api/customers/{id}/mention-automation`
+- `GET /api/mention-settings`, `PUT /api/mention-settings` (một cấu hình global)
 - `GET /api/customers/{id}/debt-reminder`, `PUT /api/customers/{id}/debt-reminder`
 - `GET /health`
 

@@ -6,6 +6,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.orm import selectinload
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
@@ -13,7 +14,10 @@ from app.core.errors import AppError
 from app.core.permissions import (
     ADMIN_ROLE_CODE,
     ALL_PERMISSION_CODES,
-    BUSINESS_OWNER_ROLE_CODE,
+    CUSTOMER_READ,
+    MENTION_POLICY_MANAGE,
+    MENTION_READ,
+    MENTION_UPDATE,
     PERMISSION_CATALOG,
     SYSTEM_ROLES,
     USER_MANAGEMENT_PERMISSIONS,
@@ -31,6 +35,7 @@ ADMIN_EMAIL = "admin@zbridge.vn"
 ADMIN_PASSWORD = "admin-password"
 OWNER_EMAIL = "owner@zbridge.vn"
 OWNER_PASSWORD = "owner-password"
+OWNER_ROLE_CODE = "BUSINESS_OWNER"
 
 # Endpoints that must stay reachable without a session.
 PUBLIC_ROUTES = {("POST", "/api/auth/login"), ("POST", "/api/auth/logout"), ("GET", "/health")}
@@ -43,11 +48,10 @@ def test_permission_catalog_is_consistent() -> None:
         assert role.permissions <= ALL_PERMISSION_CODES
 
     by_code = {role.code: role for role in SYSTEM_ROLES}
+    # ADMIN is the only reserved role: everything else is the operator's to
+    # shape, so nothing but ADMIN may be locked against editing.
+    assert set(by_code) == {ADMIN_ROLE_CODE}
     assert by_code[ADMIN_ROLE_CODE].permissions == ALL_PERMISSION_CODES
-    assert by_code[BUSINESS_OWNER_ROLE_CODE].permissions == (
-        ALL_PERMISSION_CODES - USER_MANAGEMENT_PERMISSIONS
-    )
-    assert not (by_code[BUSINESS_OWNER_ROLE_CODE].permissions & USER_MANAGEMENT_PERMISSIONS)
 
 
 @pytest.fixture
@@ -64,8 +68,28 @@ async def session_factory():
     async with factory() as db:
         await sync_rbac(db)
         admin_role = await db.scalar(select(Role).where(Role.code == ADMIN_ROLE_CODE))
-        owner_role = await db.scalar(select(Role).where(Role.code == BUSINESS_OWNER_ROLE_CODE))
-        assert admin_role is not None and owner_role is not None
+        assert admin_role is not None
+        # Not bootstrapped any more: an operator role is something the admin
+        # builds, so build one the way the API would.
+        owner_role = Role(
+            code=OWNER_ROLE_CODE,
+            name="Chủ doanh nghiệp",
+            description="Toàn quyền vận hành, không quản lý người dùng.",
+            is_system=False,
+        )
+        owner_role.permissions = list(
+            (
+                await db.scalars(
+                    select(Permission).where(
+                        Permission.code.in_(
+                            sorted(ALL_PERMISSION_CODES - USER_MANAGEMENT_PERMISSIONS)
+                        )
+                    )
+                )
+            ).all()
+        )
+        db.add(owner_role)
+        await db.flush()
         db.add_all(
             [
                 User(
@@ -110,6 +134,25 @@ async def _login(client: AsyncClient, email: str, password: str) -> dict:
     return response.json()
 
 
+async def test_mention_classifier_settings_are_global_for_owner_and_admin(client) -> None:
+    await _login(client, OWNER_EMAIL, OWNER_PASSWORD)
+    updated = await client.put(
+        "/api/mention-settings",
+        json={
+            "ai_classifier_enabled": True,
+            "bare_mention_requires_response": True,
+            "skip_phrases": ["ok", "cảm ơn"],
+        },
+    )
+    assert updated.status_code == 200, updated.text
+
+    client.cookies.clear()
+    await _login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    fetched = await client.get("/api/mention-settings")
+    assert fetched.status_code == 200
+    assert fetched.json()["skip_phrases"] == ["ok", "cảm ơn"]
+
+
 async def test_every_api_route_requires_a_session(client) -> None:
     """A new endpoint that forgets its permission dependency fails here."""
     checked = 0
@@ -134,8 +177,8 @@ async def test_business_owner_runs_operations_but_cannot_manage_users(client) ->
     session = await _login(client, OWNER_EMAIL, OWNER_PASSWORD)
     permissions = set(session["role"]["permissions"])
 
-    assert session["role"]["code"] == BUSINESS_OWNER_ROLE_CODE
-    assert session["role"]["is_system"] is True
+    assert session["role"]["code"] == OWNER_ROLE_CODE
+    assert session["role"]["is_system"] is False
     assert {"customer:read", "customer:update", "message:send", "debt_reminder:update"} <= (
         permissions
     )
@@ -156,7 +199,7 @@ async def test_admin_creates_a_user_who_can_then_sign_in(client) -> None:
     roles = await client.get("/api/roles")
     assert roles.status_code == 200
     owner_role_id = next(
-        role["id"] for role in roles.json() if role["code"] == BUSINESS_OWNER_ROLE_CODE
+        role["id"] for role in roles.json() if role["code"] == OWNER_ROLE_CODE
     )
 
     created = await client.post(
@@ -170,7 +213,7 @@ async def test_admin_creates_a_user_who_can_then_sign_in(client) -> None:
     )
     assert created.status_code == 201, created.text
     assert created.json()["email"] == "staff@zbridge.vn"
-    assert created.json()["role"]["code"] == BUSINESS_OWNER_ROLE_CODE
+    assert created.json()["role"]["code"] == OWNER_ROLE_CODE
 
     duplicate = await client.post(
         "/api/users",
@@ -195,7 +238,7 @@ async def test_admin_cannot_lock_itself_out(client) -> None:
     session = await _login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
     roles = (await client.get("/api/roles")).json()
     owner_role_id = next(
-        role["id"] for role in roles if role["code"] == BUSINESS_OWNER_ROLE_CODE
+        role["id"] for role in roles if role["code"] == OWNER_ROLE_CODE
     )
 
     demote_self = await client.patch(
@@ -289,6 +332,121 @@ async def test_password_change_keeps_this_session_and_kills_older_tokens(client)
         )
     ).status_code == 401
     await _login(client, OWNER_EMAIL, "brand-new-password")
+
+
+async def test_customer_tagging_rights_do_not_reach_the_global_policy(
+    client, session_factory
+) -> None:
+    """One customer's tagging config and the system-wide policy are separate grants.
+
+    They shared `mention:update` before, so anyone trusted to set up tagging for
+    a single group could also switch the classifier off for every group.
+    """
+    async with session_factory() as db:
+        role = Role(code="TAG_OPERATOR", name="Vận hành tag", is_system=False)
+        role.permissions = list(
+            (
+                await db.scalars(
+                    select(Permission).where(
+                        Permission.code.in_(
+                        [CUSTOMER_READ, MENTION_READ, MENTION_UPDATE]
+                    )
+                    )
+                )
+            ).all()
+        )
+        db.add(role)
+        await db.flush()
+        db.add(
+            User(
+                email="tagger@zbridge.vn",
+                password_hash=hash_password("tagger-password"),
+                role_id=role.id,
+            )
+        )
+        await db.commit()
+
+    session = await _login(client, "tagger@zbridge.vn", "tagger-password")
+    # The nav hides a tab whose permission is missing, so the whole page has to
+    # be behind one code — a readable page with a dead Save button would just
+    # be a tab this role can see but never use.
+    assert MENTION_POLICY_MANAGE not in session["role"]["permissions"]
+    assert (await client.get("/api/mention-settings")).status_code == 403
+
+    blocked = await client.put(
+        "/api/mention-settings",
+        json={
+            "ai_classifier_enabled": False,
+            "bare_mention_requires_response": True,
+            "skip_phrases": [],
+        },
+    )
+    assert blocked.status_code == 403
+    assert blocked.json()["error"]["code"] == "FORBIDDEN"
+
+    # Per-customer tagging config is a separate grant and still works.
+    assert (await client.get("/api/customers")).status_code == 200
+
+    # The admin, who holds the new code, still gets through.
+    client.cookies.clear()
+    await _login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    allowed = await client.put(
+        "/api/mention-settings",
+        json={
+            "ai_classifier_enabled": False,
+            "bare_mention_requires_response": True,
+            "skip_phrases": ["ok"],
+        },
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["ai_classifier_enabled"] is False
+
+
+async def test_admin_is_the_only_locked_role(client) -> None:
+    """Every seeded role except ADMIN must be editable in the UI.
+
+    The frontend gates its edit and delete buttons on `is_system`, so anything
+    left reserved here silently becomes unmanageable for the operator.
+    """
+    await _login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    roles = (await client.get("/api/roles")).json()
+    assert [role["code"] for role in roles if role["is_system"]] == [ADMIN_ROLE_CODE]
+
+    owner = next(role for role in roles if role["code"] == OWNER_ROLE_CODE)
+    trimmed = await client.patch(
+        f"/api/roles/{owner['id']}", json={"permissions": ["customer:read"]}
+    )
+    assert trimmed.status_code == 200, trimmed.text
+    assert trimmed.json()["permissions"] == ["customer:read"]
+
+
+async def test_a_role_dropped_from_the_catalog_is_demoted_not_deleted(
+    session_factory,
+) -> None:
+    """Retiring a system role must not strand the accounts assigned to it."""
+    async with session_factory() as db:
+        reserved = Role(code="RETIRED_ROLE", name="Sắp nghỉ hưu", is_system=True)
+        reserved.permissions = list(
+            (await db.scalars(select(Permission).where(Permission.code == USER_READ))).all()
+        )
+        db.add(reserved)
+        await db.commit()
+        role_id = reserved.id
+
+    # RETIRED_ROLE is not in SYSTEM_ROLES, so the next boot should hand it over.
+    async with session_factory() as db:
+        await sync_rbac(db)
+
+    async with session_factory() as db:
+        role = await db.scalar(
+            select(Role).options(selectinload(Role.permissions)).where(Role.id == role_id)
+        )
+        assert role is not None, "a retired role must survive the sync"
+        assert role.is_system is False
+        assert [permission.code for permission in role.permissions] == [USER_READ]
+
+        admin = await db.scalar(select(Role).where(Role.code == ADMIN_ROLE_CODE))
+        assert admin is not None and admin.is_system is True
 
 
 async def test_custom_roles_are_editable_and_system_roles_are_not(client) -> None:

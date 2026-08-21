@@ -55,10 +55,12 @@ class DebtReminderStatus(enum.StrEnum):
 
 
 class MentionFollowupStatus(enum.StrEnum):
+    CLASSIFYING = "CLASSIFYING"
     PENDING = "PENDING"
     PROCESSING = "PROCESSING"
     SENT = "SENT"
     FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
     CANCELLED = "CANCELLED"
 
 
@@ -260,6 +262,48 @@ class MentionAutomation(TimestampMixin, Base):
     followups: Mapped[list[MentionFollowup]] = relationship(
         back_populates="automation", cascade="all, delete-orphan"
     )
+    context_messages: Mapped[list[MentionContextMessage]] = relationship(
+        back_populates="automation", cascade="all, delete-orphan"
+    )
+
+
+class MentionClassifierSettings(TimestampMixin, Base):
+    """One global policy shared by every mention automation."""
+
+    __tablename__ = "mention_classifier_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    ai_classifier_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    bare_mention_requires_response: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False
+    )
+    skip_phrases: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+
+
+class MentionContextMessage(Base):
+    """Short-lived inbound message history used only by the mention classifier."""
+
+    __tablename__ = "mention_context_messages"
+    __table_args__ = (
+        UniqueConstraint("automation_id", "message_id", name="uq_mention_context_message"),
+        Index("ix_mention_context_group_sent", "automation_id", "sent_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    automation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("mention_automations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    message_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    sender_id: Mapped[str | None] = mapped_column(String(128))
+    sender_display_name: Mapped[str | None] = mapped_column(String(255))
+    content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    mentions: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list, nullable=False)
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    automation: Mapped[MentionAutomation] = relationship(back_populates="context_messages")
 
 
 class MentionTarget(TimestampMixin, Base):
@@ -305,6 +349,12 @@ class MentionFollowup(Base):
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_message_id: Mapped[str | None] = mapped_column(String(128))
     error_message: Mapped[str | None] = mapped_column(Text)
+    classification_model: Mapped[str | None] = mapped_column(String(128))
+    classification_result: Mapped[list[dict[str, object]] | None] = mapped_column(JSON)
+    classification_error: Mapped[str | None] = mapped_column(Text)
+    classification_input_tokens: Mapped[int | None] = mapped_column(Integer)
+    classification_output_tokens: Mapped[int | None] = mapped_column(Integer)
+    classification_latency_ms: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

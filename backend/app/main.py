@@ -13,6 +13,7 @@ from app.api import (
     dashboard,
     health,
     internal_events,
+    mention_settings,
     roles,
     users,
 )
@@ -87,5 +88,6 @@ app.include_router(dashboard.router, prefix=settings.api_prefix)
 app.include_router(bot.router, prefix=settings.api_prefix)
 app.include_router(customers.router, prefix=settings.api_prefix)
 app.include_router(activity.router, prefix=settings.api_prefix)
+app.include_router(mention_settings.router, prefix=settings.api_prefix)
 app.include_router(users.router, prefix=settings.api_prefix)
 app.include_router(roles.router, prefix=settings.api_prefix)

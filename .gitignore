@@ -15,6 +15,7 @@
 *.pyo
 *.sqlite3
 data/
+backend/bench/results.json
 zalo-session/
 secrets/*
 !secrets/.gitignore

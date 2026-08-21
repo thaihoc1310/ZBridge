@@ -107,6 +107,13 @@ export type MentionAutomation = {
   updated_at: string | null;
 };
 
+export type MentionClassifierSettings = {
+  ai_classifier_enabled: boolean;
+  bare_mention_requires_response: boolean;
+  skip_phrases: string[];
+  updated_at: string | null;
+};
+
 export type DebtReminderPart =
   | { type: "text"; text: string }
   | { type: "mention"; user_id: string; display_name: string };
