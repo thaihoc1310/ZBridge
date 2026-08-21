@@ -3,7 +3,7 @@
 import logging
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -35,9 +35,31 @@ logger = logging.getLogger("zbridge.staff")
 
 
 async def _usage_counts(db: AsyncSession) -> dict[str, tuple[int, int]]:
+    """Where each person is actually being tagged, not merely listed.
+
+    A name left in a customer whose feature is switched off, or whose group the
+    bot has lost, tags nobody — counting those read as "reminding 1 customer"
+    when nothing was happening.
+    """
     rows = (
         await db.execute(
             select(MentionTarget.zalo_user_id, MentionTarget.kind, func.count())
+            .join(MentionAutomation, MentionAutomation.id == MentionTarget.automation_id)
+            .join(ZaloGroup, ZaloGroup.id == MentionAutomation.zalo_group_id)
+            .where(
+                ZaloGroup.is_available.is_(True),
+                MentionAutomation.enabled.is_(True),
+                or_(
+                    and_(
+                        MentionTarget.kind == MentionTargetKind.MENTION,
+                        MentionAutomation.mention_tag_enabled.is_(True),
+                    ),
+                    and_(
+                        MentionTarget.kind == MentionTargetKind.PRICE,
+                        MentionAutomation.price_inquiry_enabled.is_(True),
+                    ),
+                ),
+            )
             .group_by(MentionTarget.zalo_user_id, MentionTarget.kind)
         )
     ).all()

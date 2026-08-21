@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.errors import AppError
@@ -531,4 +531,48 @@ async def test_bulk_apply_ends_only_the_reminders_it_should(
             MentionFollowupStatus.PENDING if survives else MentionFollowupStatus.CANCELLED
         )
         assert followup.status == expected, label
+    await engine.dispose()
+
+
+async def test_roster_counts_only_where_tagging_is_actually_on(monkeypatch) -> None:
+    """A name left behind in a switched-off customer is tagging nobody.
+
+    The roster read "Nhắc việc: 1 khách hàng" for somebody whose only customer
+    had the feature turned off, which describes a reminder that never happens.
+    """
+    engine, sessions = await _database()
+    _stub_gateway(monkeypatch)
+    async with sessions() as db:
+        await staff_service.save_staff(
+            db,
+            StaffRosterUpdate(
+                members=[StaffMemberInput(user_id="u-ketoan", display_name="Ngọc Anh")]
+            ),
+        )
+        ids = await _customer_ids(db)
+        await staff_service.apply_bulk_mention(
+            db, _payload([ids["g-hoaphat"]], targets=[KETOAN], price_targets=[])
+        )
+        roster = {member.user_id: member for member in await staff_service.list_staff(db)}
+        assert roster["u-ketoan"].mention_customer_count == 1
+
+        # Switch the feature off; the target row stays but nothing is tagged.
+        automation = await db.scalar(
+            select(MentionAutomation)
+            .join(ZaloGroup, ZaloGroup.id == MentionAutomation.zalo_group_id)
+            .where(ZaloGroup.zalo_group_id == "g-hoaphat")
+        )
+        automation.mention_tag_enabled = False
+        automation.enabled = False
+        await db.commit()
+
+        roster = {member.user_id: member for member in await staff_service.list_staff(db)}
+        assert roster["u-ketoan"].mention_customer_count == 0
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(MentionTarget)
+                .where(MentionTarget.automation_id == automation.id)
+            )
+        ) == 1, "hàng target vẫn còn, chỉ là không được tính"
     await engine.dispose()
