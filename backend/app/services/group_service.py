@@ -2,7 +2,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
@@ -14,6 +14,7 @@ from app.services.customer_service import ensure_customers_for_groups
 from app.services.zalo_gateway_client import GatewayError, zalo_gateway
 
 logger = logging.getLogger("zbridge.groups")
+MISSING_SYNCS_BEFORE_UNAVAILABLE = 3
 
 
 async def get_group(db: AsyncSession, group_id: uuid.UUID) -> ZaloGroup:
@@ -41,6 +42,12 @@ async def sync_groups(db: AsyncSession) -> SyncResponse:
             await db.scalars(select(ZaloGroup).where(ZaloGroup.zalo_account_id == account.id))
         ).all()
     }
+    if existing and not remote_groups:
+        raise AppError(
+            "GROUP_SYNC_INCOMPLETE",
+            "Zalo trả về danh sách nhóm rỗng; hệ thống giữ nguyên dữ liệu cũ.",
+            503,
+        )
     seen: set[str] = set()
     inserted = updated = 0
     for remote in remote_groups:
@@ -56,6 +63,7 @@ async def sync_groups(db: AsyncSession) -> SyncResponse:
                     avatar_url=remote.get("avatar_url"),
                     member_count=int(remote.get("member_count") or 0),
                     is_available=True,
+                    missing_sync_count=0,
                     last_synced_at=now,
                 )
             )
@@ -71,20 +79,18 @@ async def sync_groups(db: AsyncSession) -> SyncResponse:
             group.avatar_url = remote.get("avatar_url")
             group.member_count = int(remote.get("member_count") or 0)
             group.is_available = True
+            group.missing_sync_count = 0
             group.last_synced_at = now
             updated += int(changed)
 
-    stale_ids = [
-        group.id
-        for remote_id, group in existing.items()
-        if remote_id not in seen and group.is_available
-    ]
-    if stale_ids:
-        await db.execute(
-            update(ZaloGroup)
-            .where(ZaloGroup.id.in_(stale_ids))
-            .values(is_available=False, last_synced_at=now)
-        )
+    stale_ids: list[uuid.UUID] = []
+    for remote_id, group in existing.items():
+        if remote_id in seen or not group.is_available:
+            continue
+        group.missing_sync_count += 1
+        if group.missing_sync_count >= MISSING_SYNCS_BEFORE_UNAVAILABLE:
+            group.is_available = False
+            stale_ids.append(group.id)
     await db.flush()
     await ensure_customers_for_groups(db)
     account.status = BotStatus.CONNECTED

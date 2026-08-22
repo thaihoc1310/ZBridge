@@ -188,6 +188,9 @@ class HealthResponse(BaseModel):
     database: str
     zalo_gateway: str
     zalo: str
+    listener_status: str | None = None
+    events_healthy: bool = False
+    event_backlog: int = 0
 
 
 class GroupMemberResponse(BaseModel):
@@ -380,6 +383,8 @@ class IncomingMention(BaseModel):
 
 
 class IncomingGroupMessage(BaseModel):
+    # Default keeps requests from an older gateway compatible during rollout.
+    event_type: Literal["message"] = "message"
     group_id: str = Field(min_length=1, max_length=128)
     message_id: str = Field(min_length=1, max_length=128)
     sender_id: str | None = Field(default=None, max_length=128)
@@ -389,6 +394,15 @@ class IncomingGroupMessage(BaseModel):
     # Generous on purpose: rejecting an event would also drop the reply
     # acknowledgement it carries, leaving the follow-up loop running forever.
     mentions: list[IncomingMention] = Field(default_factory=list, max_length=1000)
+
+
+class IncomingGroupReaction(BaseModel):
+    event_type: Literal["reaction"]
+    group_id: str = Field(min_length=1, max_length=128)
+    reactor_id: str = Field(min_length=1, max_length=128)
+    reactor_display_name: str | None = Field(default=None, max_length=255)
+    reacted_at: datetime | None = None
+    reaction: str = Field(min_length=1, max_length=32)
 
 
 class GatewayAlert(BaseModel):
@@ -404,3 +418,4 @@ class IncomingEventResponse(BaseModel):
     scheduled: bool
     followup_id: uuid.UUID | None = None
     matched_targets: int = 0
+    acknowledged_followups: int = 0

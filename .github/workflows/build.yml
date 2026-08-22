@@ -34,10 +34,11 @@ jobs:
           npm ci
           npx tsc -b
           npx eslint src --max-warnings=0
-      - name: Gateway typecheck
+      - name: Gateway tests and typecheck
         working-directory: zalo-gateway
         run: |
           npm ci
+          npm test
           npx tsc --noEmit
 
   build:

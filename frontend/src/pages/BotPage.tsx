@@ -32,7 +32,7 @@ export function BotPage() {
     {action.isError && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{action.error instanceof ApiError ? action.error.message : "Không thể thực hiện yêu cầu."}</div>}
     {bot?.status === "CONNECTED" && !bot.events_healthy && <div className="mb-5 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800" role="alert">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-      <span>Bot vẫn gửi được tin nhắn nhưng đang <strong>mất kênh nhận tin nhắn đến</strong> từ Zalo{bot.listener_status ? ` (${bot.listener_status})` : ""}. Gateway đang tự kết nối lại; trong lúc đó tag tên tự động được tạm dừng để không nhắc lại người đã trả lời.</span>
+      <span>Bot vẫn gửi được tin nhắn nhưng đang <strong>mất kênh nhận sự kiện</strong> từ Zalo{bot.listener_status ? ` (${bot.listener_status})` : ""}. Gateway đang tự kết nối lại; trong lúc đó tag tên tự động được tạm dừng để không nhắc lại người đã phản hồi.</span>
     </div>}
     <div className="grid gap-6 lg:grid-cols-[1.15fr_.85fr]">
       <section className="card relative overflow-hidden p-7 sm:p-9">

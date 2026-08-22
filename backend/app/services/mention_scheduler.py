@@ -41,6 +41,7 @@ class _FollowupJob:
     delay_minutes: int
     active_windows: list[dict[str, str]]
     targets: list[dict[str, str]]
+    idempotency_key: str = ""
 
 
 async def claim_due_followups() -> list[uuid.UUID]:
@@ -135,6 +136,7 @@ async def _prepare_job(followup_id: uuid.UUID) -> _FollowupJob | None:
             customer_name=group.name,
             delay_minutes=automation.delay_minutes,
             active_windows=list(automation.active_windows),
+            idempotency_key=f"mention:{followup.id}:{followup.due_at.isoformat()}",
             targets=[
                 {"user_id": user_id, "display_name": display_name}
                 for user_id, display_name in zip(
@@ -191,7 +193,7 @@ def _alert_context(job: _FollowupJob) -> dict[str, str]:
 
 
 async def _gateway_ready() -> tuple[bool, str]:
-    """Mention follow-ups are only safe to send while replies are observable."""
+    """Mention follow-ups are only safe to send while replies/reactions are observable."""
     try:
         state = await zalo_gateway.get_status()
     except GatewayError as exc:
@@ -200,7 +202,7 @@ async def _gateway_ready() -> tuple[bool, str]:
         return False, "Bot Zalo chưa kết nối nên chưa thể tag lại."
     if not state.get("events_healthy", True):
         return False, (
-            "Gateway đang mất kênh sự kiện Zalo nên không nhận biết được khách đã trả lời."
+            "Gateway đang mất kênh sự kiện Zalo nên không nhận biết được khách đã phản hồi."
         )
     return True, ""
 
@@ -309,7 +311,11 @@ async def process_followup(followup_id: uuid.UUID) -> None:
         return
 
     try:
-        result = await zalo_gateway.send_mention(job.zalo_group_id, job.targets)
+        result = await zalo_gateway.send_mention(
+            job.zalo_group_id,
+            job.targets,
+            idempotency_key=job.idempotency_key,
+        )
     except GatewayError as exc:
         await _record_failure(job, exc.code, exc.message)
         return

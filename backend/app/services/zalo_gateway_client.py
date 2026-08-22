@@ -82,14 +82,32 @@ class ZaloGatewayClient:
         )
         return response.get("members", {})
 
-    async def send_text(self, group_id: str, content: str) -> dict[str, Any]:
+    async def send_text(
+        self, group_id: str, content: str, *, idempotency_key: str | None = None
+    ) -> dict[str, Any]:
+        payload = {"group_id": group_id, "content": content}
+        if idempotency_key:
+            payload["idempotency_key"] = idempotency_key
         return await self._request(
-            "POST", "/messages/text", json={"group_id": group_id, "content": content}
+            "POST",
+            "/messages/text",
+            json=payload,
         )
 
-    async def send_mention(self, group_id: str, targets: list[dict[str, str]]) -> dict[str, Any]:
+    async def send_mention(
+        self,
+        group_id: str,
+        targets: list[dict[str, str]],
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"group_id": group_id, "targets": targets}
+        if idempotency_key:
+            payload["idempotency_key"] = idempotency_key
         return await self._request(
-            "POST", "/messages/mention", json={"group_id": group_id, "targets": targets}
+            "POST",
+            "/messages/mention",
+            json=payload,
         )
 
     async def send_image(
@@ -99,25 +117,47 @@ class ZaloGatewayClient:
         *,
         width: int,
         height: int,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         return await self._request(
             "POST",
             "/messages/image",
-            params={"group_id": group_id, "width": width, "height": height},
+            params={
+                "group_id": group_id,
+                "width": width,
+                "height": height,
+                **({"idempotency_key": idempotency_key} if idempotency_key else {}),
+            },
             content=image,
             headers={"Content-Type": "image/png"},
         )
 
-    async def send_link(self, group_id: str, link: str) -> dict[str, Any]:
+    async def send_link(
+        self, group_id: str, link: str, *, idempotency_key: str | None = None
+    ) -> dict[str, Any]:
+        payload = {"group_id": group_id, "link": link}
+        if idempotency_key:
+            payload["idempotency_key"] = idempotency_key
         return await self._request(
-            "POST", "/messages/link", json={"group_id": group_id, "link": link}
+            "POST",
+            "/messages/link",
+            json=payload,
         )
 
     async def send_rich_text(
-        self, group_id: str, parts: list[dict[str, str]]
+        self,
+        group_id: str,
+        parts: list[dict[str, str]],
+        *,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"group_id": group_id, "parts": parts}
+        if idempotency_key:
+            payload["idempotency_key"] = idempotency_key
         return await self._request(
-            "POST", "/messages/rich-text", json={"group_id": group_id, "parts": parts}
+            "POST",
+            "/messages/rich-text",
+            json=payload,
         )
 
 

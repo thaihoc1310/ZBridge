@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     alert_heartbeat_interval_seconds: int = 120
     login_failure_alert_threshold: int = 5
     login_failure_window_seconds: int = 600
+    login_rate_limit_window_seconds: int = 600
+    login_rate_limit_ip_attempts: int = 30
+    login_rate_limit_account_attempts: int = 20
 
     @property
     def llm_api_key(self) -> str:

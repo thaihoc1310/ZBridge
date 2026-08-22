@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, Response
+import asyncio
+import secrets
+
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -7,14 +10,20 @@ from app.api.deps import get_current_user
 from app.core.alerts import Severity
 from app.core.config import settings
 from app.core.errors import AppError
-from app.core.security import create_access_token, verify_password
+from app.core.security import create_access_token, hash_password, verify_password
 from app.db.database import get_db
 from app.models import Role, User
 from app.schemas.api import ChangePasswordRequest, LoginRequest, UserResponse
 from app.services.alerting import report_async
+from app.services.login_rate_limit import (
+    clear_login_account_limit,
+    login_attempt_allowed,
+    record_login_failure,
+)
 from app.services.user_service import change_password, get_user, user_response
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+DUMMY_LOGIN_HASH = hash_password(secrets.token_urlsafe(32))
 
 
 def _set_session_cookie(response: Response, user: User) -> None:
@@ -31,29 +40,52 @@ def _set_session_cookie(response: Response, user: User) -> None:
 
 @router.post("/login", response_model=UserResponse)
 async def login(
-    data: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)
+    data: LoginRequest,
+    response: Response,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
+    email = data.email.lower()
+    client_ip = (
+        request.headers.get("cf-connecting-ip")
+        or request.headers.get("x-real-ip")
+        or (request.client.host if request.client else "unknown")
+    )[:255]
+    if not await login_attempt_allowed(client_ip, email):
+        raise AppError(
+            "LOGIN_RATE_LIMITED",
+            "Đăng nhập quá nhiều lần. Hãy thử lại sau ít phút.",
+            429,
+        )
     user = await db.scalar(
         select(User)
         .options(selectinload(User.role).selectinload(Role.permissions))
-        .where(User.email == data.email.lower())
+        .where(User.email == email)
     )
-    if not user or not verify_password(data.password, user.password_hash):
+    valid_password = await asyncio.to_thread(
+        verify_password,
+        data.password,
+        user.password_hash if user else DUMMY_LOGIN_HASH,
+    )
+    if not user or not valid_password:
+        await record_login_failure(client_ip, email)
         # A single typo is normal; repeated failures for one account are not, so the
         # alert only fires once the counter passes the threshold.
         await report_async(
             "LOGIN_REPEATEDLY_FAILED",
-            f"Đăng nhập sai liên tiếp cho {data.email.lower()}"
+            f"Đăng nhập sai liên tiếp cho {email}"
             f" (từ {settings.login_failure_alert_threshold} lần trở lên).",
             severity=Severity.ERROR,
-            context={"Tài khoản": data.email.lower()},
-            dedup_key=f"backend:LOGIN_FAILED:{data.email.lower()}",
+            context={"Tài khoản": email},
+            dedup_key=f"backend:LOGIN_FAILED:{email}",
             notify_from=settings.login_failure_alert_threshold,
             window_seconds=settings.login_failure_window_seconds,
         )
         raise AppError("INVALID_CREDENTIALS", "Email hoặc mật khẩu không đúng.", 401)
     if not user.is_active:
+        await record_login_failure(client_ip, email)
         raise AppError("ACCOUNT_DISABLED", "Tài khoản đã bị vô hiệu hóa.", 403)
+    await clear_login_account_limit(email)
     _set_session_cookie(response, user)
     return user_response(user)
 

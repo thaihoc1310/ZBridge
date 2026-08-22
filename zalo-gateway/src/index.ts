@@ -5,17 +5,17 @@ import { z } from "zod";
 import { reportGatewayError } from "./alerting.js";
 import { config } from "./config.js";
 import { GatewayError } from "./errors.js";
+import { DurableEventOutbox } from "./event-outbox.js";
+import { SendIdempotencyStore } from "./send-idempotency.js";
 import { MockZaloClient } from "./zalo/mock-client.js";
 import { EncryptedSessionStore } from "./zalo/session.js";
 import type { ZaloClient } from "./zalo/types.js";
-import type { IncomingGroupMessageEvent } from "./zalo/types.js";
+import type { IncomingGroupEvent } from "./zalo/types.js";
 import { ZcaJsClient } from "./zalo/zca-client.js";
 
 const app = express();
 app.use(helmet());
 app.use(express.json({ limit: "32kb" }));
-
-const EVENT_FORWARD_ATTEMPTS = 5;
 
 type AsyncRoute = (req: Request, res: Response) => Promise<unknown>;
 
@@ -33,55 +33,45 @@ function secretMatches(provided: string | undefined, expected: string): boolean 
   return timingSafeEqual(left, right);
 }
 
+async function postGroupEvent(event: IncomingGroupEvent): Promise<void> {
+  const response = await fetch(config.backendEventUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Zalo-Event-Secret": config.zaloEventSecret,
+    },
+    body: JSON.stringify(event),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Backend rejected Zalo event with status ${response.status}`);
+  }
+}
+
+const eventOutbox = new DurableEventOutbox(
+  config.eventOutboxPath,
+  config.sessionSecret,
+  postGroupEvent,
+);
+const sendReceipts = new SendIdempotencyStore(config.sendReceiptPath);
 const client: ZaloClient = config.mock
   ? new MockZaloClient()
   : new ZcaJsClient(
       new EncryptedSessionStore(config.sessionPath, config.sessionSecret),
-      forwardGroupMessageEvent,
+      (event) => eventOutbox.enqueue(event),
       config.sendIntervalMs,
+      () => eventOutbox.status(),
     );
-
-/**
- * A dropped event means a customer's reply is never acknowledged and the bot
- * keeps tagging them, so retry generously — but never on a 4xx, which will
- * fail identically forever.
- */
-async function forwardGroupMessageEvent(event: IncomingGroupMessageEvent): Promise<void> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= EVENT_FORWARD_ATTEMPTS; attempt += 1) {
-    try {
-      const response = await fetch(config.backendEventUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Zalo-Event-Secret": config.zaloEventSecret,
-        },
-        body: JSON.stringify(event),
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (response.ok) return;
-      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
-        throw new GatewayError(
-          "EVENT_REJECTED",
-          `Backend rejected Zalo event with status ${response.status}`,
-          response.status,
-        );
-      }
-      throw new Error(`Backend rejected Zalo event with status ${response.status}`);
-    } catch (error) {
-      lastError = error;
-      if (error instanceof GatewayError) break;
-      if (attempt < EVENT_FORWARD_ATTEMPTS) {
-        await new Promise((resolve) => setTimeout(resolve, 2 ** (attempt - 1) * 1_000));
-      }
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error("Could not forward Zalo event");
-}
 
 app.get("/health", asyncRoute(async (_req, res) => {
   const state = await client.getStatus();
-  res.json({ gateway: "UP", zalo: state.status, listener: state.listener_status });
+  res.json({
+    gateway: "UP",
+    zalo: state.status,
+    listener: state.listener_status,
+    events_healthy: state.events_healthy,
+    event_backlog: state.event_backlog,
+  });
 }));
 
 app.use((req, res, next) => {
@@ -117,15 +107,20 @@ app.post("/groups/members", asyncRoute(async (req, res) => {
 const sendTextSchema = z.object({
   group_id: z.string().min(1).max(128),
   content: z.string().trim().min(1).max(5000),
+  idempotency_key: z.string().min(1).max(255).optional(),
 });
 
 app.post("/messages/text", asyncRoute(async (req, res) => {
   const body = sendTextSchema.parse(req.body);
-  res.json(await client.sendText(body.group_id, body.content));
+  res.json(await sendReceipts.run(
+    body.idempotency_key,
+    () => client.sendText(body.group_id, body.content),
+  ));
 }));
 
 const sendMentionSchema = z.object({
   group_id: z.string().min(1).max(128),
+  idempotency_key: z.string().min(1).max(255).optional(),
   targets: z
     .array(
       z.object({
@@ -139,13 +134,17 @@ const sendMentionSchema = z.object({
 
 app.post("/messages/mention", asyncRoute(async (req, res) => {
   const body = sendMentionSchema.parse(req.body);
-  res.json(await client.sendMention(body.group_id, body.targets));
+  res.json(await sendReceipts.run(
+    body.idempotency_key,
+    () => client.sendMention(body.group_id, body.targets),
+  ));
 }));
 
 const sendImageQuerySchema = z.object({
   group_id: z.string().min(1).max(128),
   width: z.coerce.number().int().min(1).max(20_000),
   height: z.coerce.number().int().min(1).max(20_000),
+  idempotency_key: z.string().min(1).max(255).optional(),
 });
 
 app.post(
@@ -156,24 +155,29 @@ app.post(
     if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
       throw new GatewayError("VALIDATION_ERROR", "Ảnh PNG không được để trống.", 422);
     }
-    res.json(
-      await client.sendImage(query.group_id, {
+    res.json(await sendReceipts.run(
+      query.idempotency_key,
+      () => client.sendImage(query.group_id, {
         data: req.body,
         width: query.width,
         height: query.height,
       }),
-    );
+    ));
   }),
 );
 
 const sendLinkSchema = z.object({
   group_id: z.string().min(1).max(128),
   link: z.string().url().max(2000),
+  idempotency_key: z.string().min(1).max(255).optional(),
 });
 
 app.post("/messages/link", asyncRoute(async (req, res) => {
   const body = sendLinkSchema.parse(req.body);
-  res.json(await client.sendLink(body.group_id, body.link));
+  res.json(await sendReceipts.run(
+    body.idempotency_key,
+    () => client.sendLink(body.group_id, body.link),
+  ));
 }));
 
 const richTextPartSchema = z.discriminatedUnion("type", [
@@ -187,11 +191,15 @@ const richTextPartSchema = z.discriminatedUnion("type", [
 const sendRichTextSchema = z.object({
   group_id: z.string().min(1).max(128),
   parts: z.array(richTextPartSchema).min(1).max(200),
+  idempotency_key: z.string().min(1).max(255).optional(),
 });
 
 app.post("/messages/rich-text", asyncRoute(async (req, res) => {
   const body = sendRichTextSchema.parse(req.body);
-  res.json(await client.sendRichText(body.group_id, body.parts));
+  res.json(await sendReceipts.run(
+    body.idempotency_key,
+    () => client.sendRichText(body.group_id, body.parts),
+  ));
 }));
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
@@ -217,9 +225,10 @@ app.listen(config.port, "0.0.0.0", () => {
   console.info(`Zalo Gateway listening on port ${config.port} mock=${config.mock}`);
 });
 
-void client.initialize().catch((error: unknown) => {
+void Promise.all([eventOutbox.initialize(), sendReceipts.initialize()])
+  .then(() => client.initialize()).catch((error: unknown) => {
   console.error(
     "ZALO_INITIALIZE_FAILED",
     error instanceof Error ? error.message : "unknown error",
   );
-});
+  });

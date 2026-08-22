@@ -16,6 +16,7 @@ from app.models import (
 from app.models.entities import DeliveryStatus, DeliveryType, MentionFollowupStatus
 from app.schemas.api import (
     IncomingGroupMessage,
+    IncomingGroupReaction,
     IncomingMention,
     MentionAutomationUpdate,
     MentionTargetInput,
@@ -23,6 +24,7 @@ from app.schemas.api import (
 )
 from app.services import mention_scheduler
 from app.services.mention_automation_service import (
+    acknowledge_from_reaction,
     save_mention_automation,
     schedule_from_incoming_event,
 )
@@ -218,6 +220,181 @@ async def test_member_message_stops_only_their_active_reminders() -> None:
     await engine.dispose()
 
 
+async def test_heart_and_like_stop_only_the_reactors_active_reminders() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with session_factory() as db:
+        account = ZaloAccount()
+        db.add(account)
+        await db.flush()
+        group = ZaloGroup(
+            zalo_account_id=account.id,
+            zalo_group_id="group-reaction-ack",
+            name="Nhóm xác nhận bằng reaction",
+            member_count=4,
+            is_available=True,
+            last_synced_at=datetime.now(UTC),
+        )
+        db.add(group)
+        await db.flush()
+        db.add(Customer(zalo_group_id=group.id))
+        automation = MentionAutomation(
+            zalo_group_id=group.id,
+            enabled=True,
+            delay_minutes=1,
+            active_windows=[{"start": "00:00", "end": "23:59"}],
+        )
+        db.add(automation)
+        await db.flush()
+        both = MentionFollowup(
+            automation_id=automation.id,
+            source_message_id="source-both-reaction",
+            target_user_ids=["target-a", "target-b"],
+            target_display_names=["Thành viên A", "Thành viên B"],
+            due_at=datetime.now(UTC),
+            status=MentionFollowupStatus.PROCESSING,
+            claimed_at=datetime.now(UTC),
+        )
+        only_a = MentionFollowup(
+            automation_id=automation.id,
+            source_message_id="source-a-reaction",
+            target_user_ids=["target-a"],
+            target_display_names=["Thành viên A"],
+            due_at=datetime.now(UTC),
+            status=MentionFollowupStatus.PROCESSING,
+            claimed_at=datetime.now(UTC),
+        )
+        db.add_all([both, only_a])
+        await db.commit()
+
+        heart = await acknowledge_from_reaction(
+            db,
+            IncomingGroupReaction(
+                event_type="reaction",
+                group_id="group-reaction-ack",
+                reactor_id="target-a",
+                reaction="heart",
+            ),
+        )
+        await db.refresh(both)
+        await db.refresh(only_a)
+        assert heart.acknowledged_followups == 2
+        assert both.status == MentionFollowupStatus.PENDING
+        assert both.claimed_at is None
+        assert both.target_user_ids == ["target-b"]
+        assert both.target_display_names == ["Thành viên B"]
+        assert only_a.status == MentionFollowupStatus.CANCELLED
+        assert only_a.claimed_at is None
+        assert only_a.processed_at is not None
+
+        duplicate = await acknowledge_from_reaction(
+            db,
+            IncomingGroupReaction(
+                event_type="reaction",
+                group_id="group-reaction-ack",
+                reactor_id="target-a",
+                reaction="heart",
+            ),
+        )
+        ignored = await acknowledge_from_reaction(
+            db,
+            IncomingGroupReaction(
+                event_type="reaction",
+                group_id="group-reaction-ack",
+                reactor_id="target-b",
+                reaction="haha",
+            ),
+        )
+        outsider = await acknowledge_from_reaction(
+            db,
+            IncomingGroupReaction(
+                event_type="reaction",
+                group_id="group-reaction-ack",
+                reactor_id="not-a-target",
+                reaction="like",
+            ),
+        )
+        assert duplicate.acknowledged_followups == 0
+        assert ignored.acknowledged_followups == 0
+        assert outsider.acknowledged_followups == 0
+
+        like = await acknowledge_from_reaction(
+            db,
+            IncomingGroupReaction(
+                event_type="reaction",
+                group_id="group-reaction-ack",
+                reactor_id="target-b",
+                reaction="like",
+            ),
+        )
+        await db.refresh(both)
+        assert like.acknowledged_followups == 1
+        assert both.status == MentionFollowupStatus.CANCELLED
+
+    await engine.dispose()
+
+
+async def test_delayed_reaction_does_not_cancel_a_newer_followup() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with session_factory() as db:
+        account = ZaloAccount()
+        db.add(account)
+        await db.flush()
+        group = ZaloGroup(
+            zalo_account_id=account.id,
+            zalo_group_id="group-delayed-reaction",
+            name="Nhóm reaction đến trễ",
+            member_count=2,
+            is_available=True,
+            last_synced_at=datetime.now(UTC),
+        )
+        db.add(group)
+        await db.flush()
+        automation = MentionAutomation(
+            zalo_group_id=group.id,
+            enabled=True,
+            delay_minutes=1,
+            active_windows=[{"start": "00:00", "end": "23:59"}],
+        )
+        db.add(automation)
+        await db.flush()
+        reaction_time = datetime.now(UTC) - timedelta(minutes=5)
+        followup = MentionFollowup(
+            automation_id=automation.id,
+            source_message_id="created-after-reaction",
+            target_user_ids=["target-a"],
+            target_display_names=["Thành viên A"],
+            due_at=datetime.now(UTC),
+            status=MentionFollowupStatus.PENDING,
+        )
+        db.add(followup)
+        await db.commit()
+
+        response = await acknowledge_from_reaction(
+            db,
+            IncomingGroupReaction(
+                event_type="reaction",
+                group_id="group-delayed-reaction",
+                reactor_id="target-a",
+                reacted_at=reaction_time,
+                reaction="like",
+            ),
+        )
+        await db.refresh(followup)
+
+        assert response.acknowledged_followups == 0
+        assert followup.status == MentionFollowupStatus.PENDING
+
+    await engine.dispose()
+
+
 async def test_successful_followup_is_scheduled_again(monkeypatch) -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
@@ -267,7 +444,9 @@ async def test_successful_followup_is_scheduled_again(monkeypatch) -> None:
 
     sent: list[tuple[str, list[dict[str, str]]]] = []
 
-    async def fake_send_mention(group_id: str, targets: list[dict[str, str]]) -> dict[str, str]:
+    async def fake_send_mention(
+        group_id: str, targets: list[dict[str, str]], **_kwargs
+    ) -> dict[str, str]:
         sent.append((group_id, targets))
         return {"message_id": "sent-message"}
 

@@ -12,7 +12,7 @@ dependencies = [
   "google-auth[requests]>=2.35,<3",
   "httpx>=0.27,<1",
   "openai>=2,<3",
-  "pillow>=11,<12",
+  "pillow>=12.3,<13",
   "pypdfium2>=4.30,<5",
   "pwdlib[argon2]>=0.2,<1",
   "pydantic-settings>=2.5,<3",
@@ -32,8 +32,8 @@ exclude = ["alembic*", "tests*"]
 [project.optional-dependencies]
 dev = [
   "aiosqlite>=0.20,<1",
-  "pytest>=8.3,<9",
-  "pytest-asyncio>=0.24,<1",
+  "pytest>=9.0.3,<10",
+  "pytest-asyncio>=1,<2",
   "ruff>=0.8,<1",
 ]
 

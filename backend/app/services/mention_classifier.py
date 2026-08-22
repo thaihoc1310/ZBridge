@@ -195,7 +195,10 @@ async def release_overdue_classifications() -> int:
         " Kiểm tra worker celery-ai và khoá API của LLM.",
         severity=Severity.ERROR,
         service="celery-worker",
-        context={"Tag van gui": str(len(tagged)), "Bao gia bi bo": str(len(dropped))},
+        context={
+            "Tag vẫn gửi": str(len(tagged)),
+            "Báo giá bị bỏ": str(len(dropped)),
+        },
     )
     return len(overdue)
 

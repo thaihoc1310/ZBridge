@@ -17,7 +17,11 @@ from app.schemas.api import (
     UserResponse,
     UserUpdate,
 )
-from app.services.rbac_service import get_role, role_response
+from app.services.rbac_service import (
+    get_role,
+    lock_user_management_invariant,
+    role_response,
+)
 
 logger = logging.getLogger("zbridge.users")
 
@@ -126,6 +130,7 @@ async def create_user(db: AsyncSession, data: UserCreate) -> UserResponse:
 async def update_user(
     db: AsyncSession, actor: User, user_id: uuid.UUID, data: UserUpdate
 ) -> UserResponse:
+    await lock_user_management_invariant(db)
     user = await get_user(db, user_id)
     fields = data.model_fields_set
     is_self = user.id == actor.id
@@ -159,6 +164,7 @@ async def update_user(
 
 
 async def delete_user(db: AsyncSession, actor: User, user_id: uuid.UUID) -> None:
+    await lock_user_management_invariant(db)
     user = await get_user(db, user_id)
     if user.id == actor.id:
         raise AppError("CANNOT_MODIFY_SELF", "Không thể tự xóa tài khoản của mình.", 422)

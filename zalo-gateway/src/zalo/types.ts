@@ -6,10 +6,10 @@ export type ConnectionStatus =
   | "ERROR";
 
 /**
- * Health of the Zalo websocket that delivers incoming group messages.
+ * Health of the Zalo websocket that delivers incoming group events.
  *
  * `LISTENING` is the only state in which the gateway can observe that a
- * customer replied, so the backend must not send mention follow-ups in any
+ * customer replied or reacted, so the backend must not send mention follow-ups in any
  * other state — it would keep tagging people who already answered.
  */
 export type ListenerStatus =
@@ -30,6 +30,7 @@ export type BotState = {
   last_error: string | null;
   listener_status: ListenerStatus;
   events_healthy: boolean;
+  event_backlog: number;
 };
 
 export type ZaloGroup = {
@@ -58,6 +59,7 @@ export type ImageAttachment = {
 };
 
 export type IncomingGroupMessageEvent = {
+  event_type: "message";
   group_id: string;
   message_id: string;
   sender_id: string;
@@ -66,6 +68,17 @@ export type IncomingGroupMessageEvent = {
   content: string;
   mentions: Array<{ user_id: string; position: number; length: number; text: string }>;
 };
+
+export type IncomingGroupReactionEvent = {
+  event_type: "reaction";
+  group_id: string;
+  reactor_id: string;
+  reactor_display_name: string | null;
+  reacted_at: string | null;
+  reaction: "heart" | "like";
+};
+
+export type IncomingGroupEvent = IncomingGroupMessageEvent | IncomingGroupReactionEvent;
 
 export type SendResult = {
   message_id: string;

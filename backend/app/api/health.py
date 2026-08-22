@@ -22,14 +22,28 @@ async def health() -> HealthResponse:
     """Human-facing detail view; always 200 so a partial outage is still readable."""
     gateway = "DOWN"
     zalo = "UNAVAILABLE"
+    listener_status = None
+    events_healthy = False
+    event_backlog = 0
     database = "UP" if await _database_reachable() else "DOWN"
     try:
         gateway_health = await zalo_gateway.health()
         gateway = str(gateway_health.get("gateway", "UP"))
         zalo = str(gateway_health.get("zalo", "UNAVAILABLE"))
+        listener_status = str(gateway_health.get("listener") or "") or None
+        events_healthy = bool(gateway_health.get("events_healthy", False))
+        event_backlog = int(gateway_health.get("event_backlog") or 0)
     except GatewayError:
         pass
-    return HealthResponse(api="UP", database=database, zalo_gateway=gateway, zalo=zalo)
+    return HealthResponse(
+        api="UP",
+        database=database,
+        zalo_gateway=gateway,
+        zalo=zalo,
+        listener_status=listener_status,
+        events_healthy=events_healthy,
+        event_backlog=event_backlog,
+    )
 
 
 @router.get("/health/live", include_in_schema=False)

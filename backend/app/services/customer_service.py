@@ -2,12 +2,13 @@ import math
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.errors import AppError
-from app.models import Customer, ZaloGroup
+from app.models import Customer, DebtReminderAutomation, DebtReminderRun, ZaloGroup
+from app.models.entities import DebtReminderStatus
 from app.schemas.api import CustomerListResponse, CustomerResponse, CustomerUpdate
 from app.services.google_sheets_service import SheetExportError, google_sheets
 
@@ -98,12 +99,38 @@ async def get_customer(db: AsyncSession, customer_id: uuid.UUID) -> Customer:
 async def update_customer(
     db: AsyncSession, customer_id: uuid.UUID, data: CustomerUpdate
 ) -> CustomerResponse:
-    customer = await get_customer(db, customer_id)
+    customer = await db.scalar(
+        select(Customer)
+        .options(selectinload(Customer.group))
+        .where(Customer.id == customer_id)
+        .with_for_update()
+    )
+    if customer is None:
+        raise AppError("CUSTOMER_NOT_FOUND", "Không tìm thấy khách hàng.", 404)
     fields = data.model_fields_set
 
     if "has_debt" in fields and data.has_debt is not None and data.has_debt != customer.has_debt:
         if customer.has_debt and not data.has_debt:
-            customer.last_debt_paid_at = datetime.now(UTC)
+            now = datetime.now(UTC)
+            customer.last_debt_paid_at = now
+            automation_ids = select(DebtReminderAutomation.id).where(
+                DebtReminderAutomation.customer_id == customer.id
+            )
+            await db.execute(
+                update(DebtReminderRun)
+                .where(
+                    DebtReminderRun.automation_id.in_(automation_ids),
+                    DebtReminderRun.status.in_(
+                        [DebtReminderStatus.PENDING, DebtReminderStatus.PROCESSING]
+                    ),
+                )
+                .values(
+                    status=DebtReminderStatus.CANCELLED,
+                    claimed_at=None,
+                    processed_at=now,
+                    error_message="Khách hàng đã được đánh dấu thanh toán.",
+                )
+            )
         customer.has_debt = data.has_debt
 
     if "note" in fields:

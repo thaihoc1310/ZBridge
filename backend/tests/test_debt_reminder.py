@@ -279,11 +279,13 @@ async def test_debt_reminder_config_and_three_required_deliveries(monkeypatch) -
         calls.append("image")
         return {"message_id": "image-message"}
 
-    async def send_link(_group_id: str, _link: str):
+    async def send_link(_group_id: str, _link: str, **_kwargs):
         calls.append("link")
         return {"message_id": "link-message"}
 
-    async def send_rich_text(_group_id: str, _parts: list[dict[str, str]]):
+    async def send_rich_text(
+        _group_id: str, _parts: list[dict[str, str]], **_kwargs
+    ):
         calls.append("text")
         return {"message_id": "text-message"}
 

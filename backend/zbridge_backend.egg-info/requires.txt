@@ -5,7 +5,8 @@ email-validator<3,>=2.2
 fastapi<1,>=0.115
 google-auth[requests]<3,>=2.35
 httpx<1,>=0.27
-pillow<12,>=11
+openai<3,>=2
+pillow<13,>=12.3
 pypdfium2<5,>=4.30
 pwdlib[argon2]<1,>=0.2
 pydantic-settings<3,>=2.5
@@ -15,6 +16,6 @@ uvicorn[standard]<1,>=0.30
 
 [dev]
 aiosqlite<1,>=0.20
-pytest<9,>=8.3
-pytest-asyncio<1,>=0.24
+pytest<10,>=9.0.3
+pytest-asyncio<2,>=1
 ruff<1,>=0.8

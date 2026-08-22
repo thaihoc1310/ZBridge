@@ -24,6 +24,7 @@ from app.schemas.api import (
     GroupMemberResponse,
     IncomingEventResponse,
     IncomingGroupMessage,
+    IncomingGroupReaction,
     MentionAutomationResponse,
     MentionAutomationUpdate,
     MentionTargetResponse,
@@ -44,6 +45,125 @@ from app.services.mention_time_windows import (
 from app.services.zalo_gateway_client import GatewayError, zalo_gateway
 
 logger = logging.getLogger("zbridge.mention_automation")
+
+ACTIVE_FOLLOWUP_STATUSES = (
+    MentionFollowupStatus.CLASSIFYING,
+    MentionFollowupStatus.PENDING,
+    MentionFollowupStatus.PROCESSING,
+)
+ACKNOWLEDGING_REACTIONS = {"heart", "like"}
+
+
+def _acknowledge_target(
+    followups: list[MentionFollowup],
+    target_user_id: str,
+    *,
+    now: datetime,
+    requeue_at: datetime,
+    occurred_at: datetime,
+) -> int:
+    """Remove one person from every active loop currently waiting for them."""
+    acknowledged = 0
+    for followup in followups:
+        created_at = followup.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
+        if created_at > occurred_at:
+            # A delayed/replayed event must not acknowledge a loop that did not
+            # exist when the member actually messaged or reacted.
+            continue
+        remaining_targets = [
+            (user_id, display_name)
+            for user_id, display_name in zip(
+                followup.target_user_ids,
+                followup.target_display_names,
+                strict=False,
+            )
+            if user_id != target_user_id
+        ]
+        if len(remaining_targets) == len(followup.target_user_ids):
+            continue
+        acknowledged += 1
+        if remaining_targets:
+            followup.target_user_ids = [target[0] for target in remaining_targets]
+            followup.target_display_names = [target[1] for target in remaining_targets]
+            # A worker may already hold a snapshot containing the person who just
+            # acknowledged. Invalidate that claim so it cannot tag/classify the
+            # stale target list, then let the appropriate dispatcher pick it up.
+            if followup.status == MentionFollowupStatus.PROCESSING:
+                followup.status = MentionFollowupStatus.PENDING
+                followup.due_at = requeue_at
+                followup.claimed_at = None
+                followup.attempt_count = 0
+            elif followup.status == MentionFollowupStatus.CLASSIFYING:
+                followup.claimed_at = None
+                followup.attempt_count = 0
+        else:
+            followup.status = MentionFollowupStatus.CANCELLED
+            followup.claimed_at = None
+            followup.processed_at = now
+    return acknowledged
+
+
+async def acknowledge_from_reaction(
+    db: AsyncSession, event: IncomingGroupReaction
+) -> IncomingEventResponse:
+    """Treat a live heart/like by a waiting target exactly like their message."""
+    if event.reaction not in ACKNOWLEDGING_REACTIONS:
+        return IncomingEventResponse(scheduled=False)
+
+    automation = await db.scalar(
+        select(MentionAutomation)
+        .join(ZaloGroup, ZaloGroup.id == MentionAutomation.zalo_group_id)
+        .where(
+            ZaloGroup.zalo_group_id == event.group_id,
+            ZaloGroup.is_available.is_(True),
+            MentionAutomation.enabled.is_(True),
+        )
+    )
+    if automation is None:
+        return IncomingEventResponse(scheduled=False)
+
+    followups = list(
+        (
+            await db.scalars(
+                select(MentionFollowup)
+                .where(
+                    MentionFollowup.automation_id == automation.id,
+                    MentionFollowup.status.in_(ACTIVE_FOLLOWUP_STATUSES),
+                )
+                .with_for_update()
+            )
+        ).all()
+    )
+    now = datetime.now(UTC)
+    occurred_at = event.reacted_at or now
+    if occurred_at.tzinfo is None:
+        occurred_at = occurred_at.replace(tzinfo=UTC)
+    acknowledged = _acknowledge_target(
+        followups,
+        event.reactor_id,
+        now=now,
+        requeue_at=next_allowed_at(
+            now + timedelta(minutes=automation.delay_minutes),
+            automation.active_windows,
+        ),
+        occurred_at=occurred_at,
+    )
+    await db.commit()
+    if acknowledged:
+        logger.info(
+            "MENTION_FOLLOWUP_ACKNOWLEDGED group_id=%s target_id=%s"
+            " followups=%d acknowledged_by=%s",
+            event.group_id,
+            event.reactor_id,
+            acknowledged,
+            event.reaction,
+        )
+    return IncomingEventResponse(
+        scheduled=False,
+        acknowledged_followups=acknowledged,
+    )
 
 
 async def list_group_members(db: AsyncSession, group_id: uuid.UUID) -> list[GroupMemberResponse]:
@@ -260,40 +380,34 @@ async def schedule_from_incoming_event(
                 select(MentionFollowup)
                 .where(
                     MentionFollowup.automation_id == automation.id,
-                    MentionFollowup.status.in_(
-                        [
-                            MentionFollowupStatus.CLASSIFYING,
-                            MentionFollowupStatus.PENDING,
-                            MentionFollowupStatus.PROCESSING,
-                        ]
-                    ),
+                    MentionFollowup.status.in_(ACTIVE_FOLLOWUP_STATUSES),
                 )
                 .with_for_update()
             )
         ).all()
     )
-    acknowledged_followups = 0
-    if event.sender_id:
-        for followup in active_followups:
-            remaining_targets = [
-                (user_id, display_name)
-                for user_id, display_name in zip(
-                    followup.target_user_ids,
-                    followup.target_display_names,
-                    strict=False,
-                )
-                if user_id != event.sender_id
-            ]
-            if len(remaining_targets) == len(followup.target_user_ids):
-                continue
-            acknowledged_followups += 1
-            if remaining_targets:
-                followup.target_user_ids = [target[0] for target in remaining_targets]
-                followup.target_display_names = [target[1] for target in remaining_targets]
-            else:
-                followup.status = MentionFollowupStatus.CANCELLED
-                followup.claimed_at = None
-                followup.processed_at = now
+    acknowledged_followups = (
+        _acknowledge_target(
+            active_followups,
+            event.sender_id,
+            now=now,
+            requeue_at=next_allowed_at(
+                now + timedelta(minutes=automation.delay_minutes),
+                automation.active_windows,
+            ),
+            occurred_at=sent_at,
+        )
+        if event.sender_id
+        else 0
+    )
+    if acknowledged_followups:
+        logger.info(
+            "MENTION_FOLLOWUP_ACKNOWLEDGED group_id=%s target_id=%s"
+            " followups=%d acknowledged_by=message",
+            event.group_id,
+            event.sender_id,
+            acknowledged_followups,
+        )
 
     existing = await db.scalar(
         select(MentionFollowup.id).where(
@@ -303,7 +417,11 @@ async def schedule_from_incoming_event(
     )
     if existing:
         await db.commit()
-        return IncomingEventResponse(scheduled=False, followup_id=existing)
+        return IncomingEventResponse(
+            scheduled=False,
+            followup_id=existing,
+            acknowledged_followups=acknowledged_followups,
+        )
 
     # Across both triggers on purpose. The bot can only send a bare "@Name", so a
     # second follow-up for somebody already waiting produces an identical tag
@@ -345,14 +463,10 @@ async def schedule_from_incoming_event(
                 initial_status=MentionFollowupStatus.CLASSIFYING,
             )
         await db.commit()
-        if acknowledged_followups:
-            logger.info(
-                "MENTION_FOLLOWUP_ACKNOWLEDGED group_id=%s sender_id=%s followups=%d",
-                event.group_id,
-                event.sender_id,
-                acknowledged_followups,
-            )
-        return IncomingEventResponse(scheduled=False)
+        return IncomingEventResponse(
+            scheduled=False,
+            acknowledged_followups=acknowledged_followups,
+        )
 
     target_display_names = [target.display_name for target in matched]
     bare_mention = is_bare_mention(

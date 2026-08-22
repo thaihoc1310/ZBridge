@@ -1,6 +1,8 @@
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
@@ -115,7 +117,11 @@ async def _fail_run(
 ) -> None:
     async with SessionLocal() as db:
         current = await db.get(DebtReminderRun, run.id)
-        if current is None:
+        if (
+            current is None
+            or current.status != DebtReminderStatus.PROCESSING
+            or _as_utc(current.claimed_at) != _as_utc(run.claimed_at)
+        ):
             return
         await add_delivery_log(
             db,
@@ -169,11 +175,22 @@ async def _fail_run(
 
 
 async def _finish_without_sending(
-    run_id: uuid.UUID, status: DebtReminderStatus, reason: str
+    run_id: uuid.UUID,
+    claimed_at: datetime | None,
+    status: DebtReminderStatus,
+    reason: str,
 ) -> None:
     async with SessionLocal() as db:
-        run = await db.get(DebtReminderRun, run_id)
-        if run is None:
+        run = await db.scalar(
+            select(DebtReminderRun)
+            .where(DebtReminderRun.id == run_id)
+            .with_for_update()
+        )
+        if (
+            run is None
+            or run.status != DebtReminderStatus.PROCESSING
+            or _as_utc(run.claimed_at) != _as_utc(claimed_at)
+        ):
             return
         run.status = status
         run.error_message = reason
@@ -182,17 +199,64 @@ async def _finish_without_sending(
         await db.commit()
 
 
-async def _store_sent_step(
+def _as_utc(value: datetime | None) -> datetime:
+    if value is None:
+        return datetime.min.replace(tzinfo=UTC)
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+async def _send_step_if_current(
     run_id: uuid.UUID,
+    claimed_at: datetime | None,
     customer_id: uuid.UUID,
     delivery_type: DeliveryType,
     field_name: str,
-    message_id: str | None,
-) -> None:
+    send: Callable[[str], Awaitable[dict[str, Any]]],
+) -> tuple[bool, str | None]:
+    """Lock business state across one external send.
+
+    Customer/config mutations take the same locks in the same order. Therefore
+    either a paid/disabled change commits first and this step stays silent, or
+    this send finishes before the mutation returns to the operator.
+    """
     async with SessionLocal() as db:
-        run = await db.get(DebtReminderRun, run_id)
-        if run is None:
-            return
+        snapshot = await db.get(DebtReminderRun, run_id)
+        if snapshot is None:
+            return False, None
+        automation_snapshot = await db.get(DebtReminderAutomation, snapshot.automation_id)
+        if automation_snapshot is None:
+            return False, None
+        customer = await db.scalar(
+            select(Customer)
+            .where(Customer.id == automation_snapshot.customer_id)
+            .with_for_update()
+        )
+        automation = await db.scalar(
+            select(DebtReminderAutomation)
+            .where(DebtReminderAutomation.id == snapshot.automation_id)
+            .with_for_update()
+        )
+        if automation is None:
+            return False, None
+        run = await db.scalar(
+            select(DebtReminderRun)
+            .where(DebtReminderRun.id == run_id)
+            .with_for_update()
+        )
+        if (
+            run is None
+            or run.status != DebtReminderStatus.PROCESSING
+            or _as_utc(run.claimed_at) != _as_utc(claimed_at)
+            or not automation.enabled
+            or customer is None
+            or not customer.has_debt
+        ):
+            return False, None
+        existing = getattr(run, field_name)
+        if existing:
+            return True, str(existing)
+        result = await send(f"debt:{run.id}:{field_name}")
+        message_id = str(result.get("message_id") or "") or None
         setattr(run, field_name, message_id or "confirmed")
         run.error_code = None
         run.error_message = None
@@ -204,6 +268,7 @@ async def _store_sent_step(
             zalo_message_id=message_id,
         )
         await db.commit()
+        return True, message_id
 
 
 async def process_debt_reminder(run_id: uuid.UUID) -> None:
@@ -227,12 +292,16 @@ async def process_debt_reminder(run_id: uuid.UUID) -> None:
         debt_file_url = customer.debt_file_url
         if not automation.enabled:
             await _finish_without_sending(
-                run.id, DebtReminderStatus.CANCELLED, "Cấu hình đã được tắt."
+                run.id,
+                run.claimed_at,
+                DebtReminderStatus.CANCELLED,
+                "Cấu hình đã được tắt.",
             )
             return
         if not customer.has_debt:
             await _finish_without_sending(
                 run.id,
+                run.claimed_at,
                 DebtReminderStatus.SKIPPED,
                 "Khách hàng đã thanh toán tại thời điểm kiểm tra.",
             )
@@ -288,20 +357,23 @@ async def process_debt_reminder(run_id: uuid.UUID) -> None:
             if not run.image_message_id:
                 if artifact is None:
                     artifact = await google_sheets.export_first_sheet(debt_file_url)
-                result = await zalo_gateway.send_image(
-                    group_id,
-                    artifact.png_data,
-                    width=artifact.width,
-                    height=artifact.height,
-                )
-                await _store_sent_step(
+                sent, message_id = await _send_step_if_current(
                     run.id,
+                    run.claimed_at,
                     customer_id,
                     DeliveryType.DEBT_REMINDER_IMAGE,
                     "image_message_id",
-                    str(result.get("message_id") or "") or None,
+                    lambda key: zalo_gateway.send_image(
+                        group_id,
+                        artifact.png_data,
+                        width=artifact.width,
+                        height=artifact.height,
+                        idempotency_key=key,
+                    ),
                 )
-                run.image_message_id = str(result.get("message_id") or "") or "confirmed"
+                if not sent:
+                    return
+                run.image_message_id = message_id or "confirmed"
 
             if not run.link_message_id:
                 link = run.sheet_url or (artifact.web_view_link if artifact else None)
@@ -309,29 +381,45 @@ async def process_debt_reminder(run_id: uuid.UUID) -> None:
                     raise SheetExportError(
                         "GOOGLE_SHEET_LINK_MISSING", "Không lấy được link Google Sheet."
                     )
-                result = await zalo_gateway.send_link(group_id, link)
-                await _store_sent_step(
+                sent, message_id = await _send_step_if_current(
                     run.id,
+                    run.claimed_at,
                     customer_id,
                     DeliveryType.DEBT_REMINDER_LINK,
                     "link_message_id",
-                    str(result.get("message_id") or "") or None,
+                    lambda key: zalo_gateway.send_link(
+                        group_id, link, idempotency_key=key
+                    ),
                 )
-                run.link_message_id = str(result.get("message_id") or "") or "confirmed"
+                if not sent:
+                    return
+                run.link_message_id = message_id or "confirmed"
 
             if not run.text_message_id:
-                result = await zalo_gateway.send_rich_text(group_id, parts)
-                await _store_sent_step(
+                sent, _message_id = await _send_step_if_current(
                     run.id,
+                    run.claimed_at,
                     customer_id,
                     DeliveryType.DEBT_REMINDER_MESSAGE,
                     "text_message_id",
-                    str(result.get("message_id") or "") or None,
+                    lambda key: zalo_gateway.send_rich_text(
+                        group_id, parts, idempotency_key=key
+                    ),
                 )
+                if not sent:
+                    return
 
             async with SessionLocal() as finish_db:
-                current = await finish_db.get(DebtReminderRun, run.id)
-                if current is not None:
+                current = await finish_db.scalar(
+                    select(DebtReminderRun)
+                    .where(DebtReminderRun.id == run.id)
+                    .with_for_update()
+                )
+                if (
+                    current is not None
+                    and current.status == DebtReminderStatus.PROCESSING
+                    and _as_utc(current.claimed_at) == _as_utc(run.claimed_at)
+                ):
                     current.status = DebtReminderStatus.SENT
                     current.claimed_at = None
                     current.processed_at = datetime.now(UTC)

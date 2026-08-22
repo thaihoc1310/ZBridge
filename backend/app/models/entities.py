@@ -190,6 +190,9 @@ class ZaloGroup(TimestampMixin, Base):
     avatar_url: Mapped[str | None] = mapped_column(Text)
     member_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    missing_sync_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     last_synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     account: Mapped[ZaloAccount] = relationship(back_populates="groups")

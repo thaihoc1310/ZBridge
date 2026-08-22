@@ -181,3 +181,21 @@ def heartbeat() -> None:
             severity="ERROR",
             service="heartbeat",
         )
+    elif health.get("zalo") != "CONNECTED":
+        send_alert(
+            code="ZALO_BOT_NOT_CONNECTED",
+            message=f"Tài khoản bot Zalo đang ở trạng thái {health.get('zalo') or 'UNKNOWN'}.",
+            severity="CRITICAL",
+            service="heartbeat",
+        )
+    elif not health.get("events_healthy"):
+        send_alert(
+            code="ZALO_EVENTS_UNHEALTHY",
+            message=(
+                "Kênh nhận phản hồi Zalo không khỏe; tag tự động đang tạm dừng. "
+                f"Listener={health.get('listener_status') or 'UNKNOWN'}, "
+                f"backlog={health.get('event_backlog') or 0}."
+            ),
+            severity="ERROR",
+            service="heartbeat",
+        )

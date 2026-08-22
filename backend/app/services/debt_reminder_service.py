@@ -5,9 +5,10 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.errors import AppError
-from app.models import DebtReminderAutomation, DebtReminderRun
+from app.models import Customer, DebtReminderAutomation, DebtReminderRun
 from app.models.entities import DebtReminderStatus
 from app.schemas.api import DebtReminderResponse, DebtReminderUpdate
 from app.services.customer_service import get_customer
@@ -154,7 +155,14 @@ async def save_debt_reminder(
     *,
     now: datetime | None = None,
 ) -> DebtReminderResponse:
-    customer = await get_customer(db, customer_id)
+    customer = await db.scalar(
+        select(Customer)
+        .options(selectinload(Customer.group))
+        .where(Customer.id == customer_id)
+        .with_for_update()
+    )
+    if customer is None:
+        raise AppError("CUSTOMER_NOT_FOUND", "Không tìm thấy khách hàng.", 404)
     if data.enabled and not customer.debt_file_url:
         raise AppError(
             "CUSTOMER_FOLDER_REQUIRED",
@@ -162,9 +170,9 @@ async def save_debt_reminder(
             422,
         )
     automation = await db.scalar(
-        select(DebtReminderAutomation).where(
-            DebtReminderAutomation.customer_id == customer_id
-        )
+        select(DebtReminderAutomation)
+        .where(DebtReminderAutomation.customer_id == customer_id)
+        .with_for_update()
     )
     parsed_time = time.fromisoformat(data.send_time)
     parts = [part.model_dump() for part in data.message_parts]
@@ -189,11 +197,15 @@ async def save_debt_reminder(
             update(DebtReminderRun)
             .where(
                 DebtReminderRun.automation_id == automation.id,
-                DebtReminderRun.status == DebtReminderStatus.PENDING,
+                DebtReminderRun.status.in_(
+                    [DebtReminderStatus.PENDING, DebtReminderStatus.PROCESSING]
+                ),
             )
             .values(
                 status=DebtReminderStatus.CANCELLED,
+                claimed_at=None,
                 processed_at=now or datetime.now(UTC),
+                error_message="Cấu hình nhắc công nợ đã thay đổi.",
             )
         )
     effective_now = _as_utc(now or datetime.now(UTC))

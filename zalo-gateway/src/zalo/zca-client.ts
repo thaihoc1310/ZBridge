@@ -1,12 +1,14 @@
 import {
   CloseReason,
   LoginQRCallbackEventType,
+  Reactions,
   ThreadType,
   Zalo,
   type API,
   type Credentials,
   type LoginQRCallbackEvent,
   type Message,
+  type Reaction,
 } from "zca-js";
 import { reportGatewayError } from "../alerting.js";
 import { GatewayError } from "../errors.js";
@@ -19,7 +21,9 @@ type GroupDetail = NonNullable<
 import type {
   BotState,
   ImageAttachment,
+  IncomingGroupEvent,
   IncomingGroupMessageEvent,
+  IncomingGroupReactionEvent,
   ListenerStatus,
   MentionTarget,
   RichTextPart,
@@ -29,12 +33,45 @@ import type {
   ZaloMember,
 } from "./types.js";
 
-type EventSink = (event: IncomingGroupMessageEvent) => Promise<void>;
+type EventSink = (event: IncomingGroupEvent) => Promise<void>;
 
 /** Context classification needs bodies, while the cap still prevents oversized events. */
 const MAX_EVENT_CONTENT_LENGTH = 2_000;
 const MAX_EVENT_MENTIONS = 1_000;
 const LISTENER_RECOVERY_DELAYS_MS = [10_000, 30_000, 60_000, 120_000, 300_000];
+
+function normalizeZaloMemberId(userId: string): string {
+  return userId.endsWith("_0") ? userId.slice(0, -2) : userId;
+}
+
+function zaloTimestampToIso(value: string | number | null | undefined): string | null {
+  const timestamp = Number(value);
+  const date = Number.isFinite(timestamp)
+    ? new Date(timestamp < 10_000_000_000 ? timestamp * 1_000 : timestamp)
+    : null;
+  return date && !Number.isNaN(date.getTime()) ? date.toISOString() : null;
+}
+
+export function incomingReactionEvent(
+  reaction: Reaction,
+): IncomingGroupReactionEvent | null {
+  if (reaction.isSelf || !reaction.isGroup) return null;
+  const kind =
+    reaction.data.content.rIcon === Reactions.HEART
+      ? "heart"
+      : reaction.data.content.rIcon === Reactions.LIKE
+        ? "like"
+        : null;
+  if (!kind || !reaction.threadId || !reaction.data.uidFrom) return null;
+  return {
+    event_type: "reaction",
+    group_id: reaction.threadId,
+    reactor_id: normalizeZaloMemberId(reaction.data.uidFrom),
+    reactor_display_name: reaction.data.dName || null,
+    reacted_at: zaloTimestampToIso(reaction.data.ts),
+    reaction: kind,
+  };
+}
 
 export class ZcaJsClient implements ZaloClient {
   private api: API | null = null;
@@ -57,6 +94,10 @@ export class ZcaJsClient implements ZaloClient {
     private readonly sessions: EncryptedSessionStore,
     private readonly eventSink: EventSink,
     private readonly sendIntervalMs = 1000,
+    private readonly eventTransportStatus: () => { healthy: boolean; pending: number } = () => ({
+      healthy: true,
+      pending: 0,
+    }),
   ) {}
 
   async initialize(): Promise<void> {
@@ -137,6 +178,7 @@ export class ZcaJsClient implements ZaloClient {
   }
 
   async getStatus(): Promise<BotState> {
+    const transport = this.eventTransportStatus();
     return {
       status: this.status,
       account_name: this.accountName,
@@ -146,7 +188,11 @@ export class ZcaJsClient implements ZaloClient {
       qr_status: this.qrStatus,
       last_error: this.lastError,
       listener_status: this.listenerStatus,
-      events_healthy: this.status === "CONNECTED" && this.listenerStatus === "LISTENING",
+      events_healthy:
+        this.status === "CONNECTED"
+        && this.listenerStatus === "LISTENING"
+        && transport.healthy,
+      event_backlog: transport.pending,
     };
   }
 
@@ -167,6 +213,14 @@ export class ZcaJsClient implements ZaloClient {
       const chunk = ids.slice(index, index + 50);
       if (chunk.length === 0) continue;
       const detail = await api.getGroupInfo(chunk);
+      const missing = chunk.filter((groupId) => !detail.gridInfoMap[groupId]);
+      if (missing.length > 0) {
+        throw new GatewayError(
+          "GROUP_SYNC_INCOMPLETE",
+          `Zalo trả thiếu ${missing.length}/${chunk.length} nhóm; chưa áp dụng lần đồng bộ này.`,
+          503,
+        );
+      }
       for (const info of Object.values(detail.gridInfoMap)) {
         groups.push({
           group_id: info.groupId,
@@ -552,6 +606,7 @@ export class ZcaJsClient implements ZaloClient {
         console.error("ZALO_LISTENER_ERROR", this.safeError(error));
       });
       api.listener.on("message", (message) => this.handleMessage(message));
+      api.listener.on("reaction", (reaction) => this.handleReaction(reaction));
       this.listenerAttached = true;
     }
     try {
@@ -673,19 +728,13 @@ export class ZcaJsClient implements ZaloClient {
     if (!messageId) return;
     const content =
       typeof message.data.content === "string" ? message.data.content : "";
-    const timestamp = Number(message.data.ts);
-    const sentAtDate = Number.isFinite(timestamp)
-      ? new Date(timestamp < 10_000_000_000 ? timestamp * 1_000 : timestamp)
-      : null;
-    const sentAt = sentAtDate && !Number.isNaN(sentAtDate.getTime())
-      ? sentAtDate.toISOString()
-      : null;
     const event: IncomingGroupMessageEvent = {
+      event_type: "message",
       group_id: message.threadId,
       message_id: messageId,
       sender_id: this.normalizeMemberId(message.data.uidFrom),
       sender_display_name: message.data.dName || null,
-      sent_at: sentAt,
+      sent_at: zaloTimestampToIso(message.data.ts),
       // Trimmed on purpose: an oversized body would be rejected by the backend
       // and the reply acknowledgement it carries would be lost for good.
       content: content.slice(0, MAX_EVENT_CONTENT_LENGTH),
@@ -699,7 +748,13 @@ export class ZcaJsClient implements ZaloClient {
     this.forwardEventInOrder(event);
   }
 
-  private forwardEventInOrder(event: IncomingGroupMessageEvent): void {
+  private handleReaction(reaction: Reaction): void {
+    const event = incomingReactionEvent(reaction);
+    if (!event) return;
+    this.forwardEventInOrder(event);
+  }
+
+  private forwardEventInOrder(event: IncomingGroupEvent): void {
     const previous = this.inboundTails.get(event.group_id) ?? Promise.resolve();
     const current = previous
       .catch(() => undefined)
@@ -715,8 +770,8 @@ export class ZcaJsClient implements ZaloClient {
       // bot may keep tagging someone who already answered.
       reportGatewayError(
         "ZALO_EVENT_DROPPED",
-        `Không đẩy được tin nhắn đến sang backend: ${this.safeError(error)}.`
-          + " Có thể bỏ sót phản hồi của khách và tag lại người đã trả lời.",
+        `Không đẩy được sự kiện Zalo sang backend: ${this.safeError(error)}.`
+          + " Có thể bỏ sót tin nhắn/reaction và tag lại người đã phản hồi.",
         "CRITICAL",
         { zalo_group_id: event.group_id },
       );
@@ -732,6 +787,6 @@ export class ZcaJsClient implements ZaloClient {
   }
 
   private normalizeMemberId(userId: string): string {
-    return userId.endsWith("_0") ? userId.slice(0, -2) : userId;
+    return normalizeZaloMemberId(userId);
   }
 }

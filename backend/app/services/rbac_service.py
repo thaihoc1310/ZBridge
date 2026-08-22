@@ -9,8 +9,10 @@ from sqlalchemy.orm import selectinload
 
 from app.core.errors import AppError
 from app.core.permissions import (
+    ADMIN_ROLE_CODE,
     PERMISSION_CATALOG,
     SYSTEM_ROLES,
+    USER_UPDATE,
     PermissionDef,
 )
 from app.models import Permission, Role, User
@@ -143,6 +145,30 @@ async def get_role(db: AsyncSession, role_id: uuid.UUID) -> Role:
     return role
 
 
+async def lock_user_management_invariant(db: AsyncSession) -> None:
+    """Use the immutable ADMIN role row as a transaction-wide mutex.
+
+    User and role mutations can otherwise both observe "one other manager" and
+    commit concurrently, leaving nobody able to administer accounts.
+    """
+    await db.scalar(
+        select(Role.id).where(Role.code == ADMIN_ROLE_CODE).with_for_update()
+    )
+
+
+async def _active_user_manager_count(db: AsyncSession) -> int:
+    return int(
+        await db.scalar(
+            select(func.count(func.distinct(User.id)))
+            .select_from(User)
+            .join(Role, Role.id == User.role_id)
+            .join(Role.permissions)
+            .where(User.is_active.is_(True), Permission.code == USER_UPDATE)
+        )
+        or 0
+    )
+
+
 async def _resolve_permissions(db: AsyncSession, codes: list[str]) -> list[Permission]:
     unique = sorted(set(codes))
     permissions = list(
@@ -196,6 +222,7 @@ async def update_role(
     db: AsyncSession, role_id: uuid.UUID, data: RoleUpdate
 ) -> RoleResponse:
     role = await get_role(db, role_id)
+    await lock_user_management_invariant(db)
     if role.is_system:
         raise AppError(
             "SYSTEM_ROLE_READ_ONLY",
@@ -211,6 +238,14 @@ async def update_role(
         if not data.permissions:
             raise AppError("EMPTY_ROLE", "Vai trò phải có ít nhất một quyền.", 422)
         role.permissions = await _resolve_permissions(db, data.permissions)
+    await db.flush()
+    if await _active_user_manager_count(db) == 0:
+        await db.rollback()
+        raise AppError(
+            "LAST_USER_MANAGER",
+            "Phải còn ít nhất một tài khoản đang hoạt động có quyền quản lý người dùng.",
+            422,
+        )
     await db.commit()
     logger.info("ROLE_UPDATED role_id=%s", role.id)
     return role_response(await get_role(db, role.id))

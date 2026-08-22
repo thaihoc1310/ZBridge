@@ -6,8 +6,15 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.errors import AppError
 from app.db.database import Base
-from app.models import BotDeliveryLog, Customer, ZaloAccount, ZaloGroup
-from app.models.entities import DeliveryStatus, DeliveryType
+from app.models import (
+    BotDeliveryLog,
+    Customer,
+    DebtReminderAutomation,
+    DebtReminderRun,
+    ZaloAccount,
+    ZaloGroup,
+)
+from app.models.entities import DebtReminderStatus, DeliveryStatus, DeliveryType
 from app.schemas.api import CustomerUpdate
 from app.services import customer_service
 from app.services.customer_service import update_customer
@@ -58,9 +65,33 @@ async def test_customer_fields_and_debt_paid_timestamp(monkeypatch) -> None:
         assert owing.note == "Cần đối soát cuối tháng"
         assert owing.debt_file_url == "https://docs.google.com/spreadsheets/d/example/edit"
 
+        automation = DebtReminderAutomation(
+            customer_id=group.id,
+            enabled=True,
+            day_of_month=25,
+            repeat_interval_days=3,
+            send_time=datetime.now(UTC).time().replace(tzinfo=None),
+            message_parts=[{"type": "text", "text": "Nhắc nợ"}],
+            next_run_at=datetime.now(UTC),
+        )
+        db.add(automation)
+        await db.flush()
+        active_run = DebtReminderRun(
+            automation_id=automation.id,
+            scheduled_for=datetime.now(UTC),
+            retry_at=datetime.now(UTC),
+            status=DebtReminderStatus.PROCESSING,
+            claimed_at=datetime.now(UTC),
+        )
+        db.add(active_run)
+        await db.commit()
+
         paid = await update_customer(db, group.id, CustomerUpdate(has_debt=False))
         assert paid.has_debt is False
         assert paid.last_debt_paid_at is not None
+        await db.refresh(active_run)
+        assert active_run.status == DebtReminderStatus.CANCELLED
+        assert active_run.claimed_at is None
 
         db.add(
             BotDeliveryLog(

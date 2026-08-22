@@ -136,6 +136,21 @@ async def _login(client: AsyncClient, email: str, password: str) -> dict:
     return response.json()
 
 
+async def test_login_rate_limit_rejects_before_password_verification(
+    client, monkeypatch
+) -> None:
+    async def reject_attempt(_ip: str, _email: str) -> bool:
+        return False
+
+    monkeypatch.setattr("app.api.auth.login_attempt_allowed", reject_attempt)
+    response = await client.post(
+        "/api/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
+    )
+
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "LOGIN_RATE_LIMITED"
+
+
 async def test_mention_classifier_settings_are_global_for_owner_and_admin(client) -> None:
     await _login(client, OWNER_EMAIL, OWNER_PASSWORD)
     updated = await client.put(
@@ -587,3 +602,38 @@ async def test_last_user_manager_cannot_be_removed(session_factory) -> None:
             await delete_user(db, loaded_actor, admin.id)
         assert failure.value.code == "LAST_USER_MANAGER"
         assert await db.scalar(select(User.id).where(User.id == admin.id)) is not None
+
+
+async def test_last_user_manager_cannot_remove_permission_from_own_role(client) -> None:
+    admin = await _login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    role = await client.post(
+        "/api/roles",
+        json={
+            "name": "Quản trị tùy chỉnh",
+            "permissions": ["user:read", "user:update", "role:read", "role:manage"],
+        },
+    )
+    assert role.status_code == 201, role.text
+    manager = await client.post(
+        "/api/users",
+        json={
+            "email": "manager@zbridge.vn",
+            "password": "manager-password",
+            "role_id": role.json()["id"],
+        },
+    )
+    assert manager.status_code == 201, manager.text
+
+    client.cookies.clear()
+    await _login(client, "manager@zbridge.vn", "manager-password")
+    disabled = await client.patch(
+        f"/api/users/{admin['id']}", json={"is_active": False}
+    )
+    assert disabled.status_code == 200, disabled.text
+
+    lockout = await client.patch(
+        f"/api/roles/{role.json()['id']}",
+        json={"permissions": ["user:read", "role:read", "role:manage"]},
+    )
+    assert lockout.status_code == 422
+    assert lockout.json()["error"]["code"] == "LAST_USER_MANAGER"

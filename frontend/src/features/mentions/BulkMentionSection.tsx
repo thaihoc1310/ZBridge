@@ -140,7 +140,7 @@ export function BulkMentionSection({ canEdit }: { canEdit: boolean }) {
               <FeatureSection
                 icon={AtSign}
                 title="Tag lại khi có người tag"
-                hint="Ai đó tag thành viên đã chọn mà họ chưa trả lời thì bot nhắc lại."
+                hint="Bot nhắc lại đến khi người được tag nhắn hoặc thả tim/like trong nhóm."
                 enabled={mentionEnabled}
                 onToggle={() => { setMentionEnabled((on) => !on); setError(null); }}
                 disabled={!canEdit}

@@ -162,9 +162,10 @@ export function MentionAutomationModal({
               <p className="mt-3 border-t border-blue-100 pt-3 text-sm leading-relaxed text-slate-700">
                 <strong>Tag lại khi có người tag:</strong> ai đó tag một thành viên đã
                 chọn thì bot đợi theo thời gian bên dưới rồi tag lại đúng người đó, lặp
-                lại cho tới khi chính người đó gửi bất kỳ tin nhắn nào trong nhóm. Câu
-                chỉ có “ok”, “cảm ơn”… được bỏ qua bằng luật; phần còn lại do AI đọc
-                context rồi quyết định. AI lỗi thì vẫn tag như bình thường.
+                lại cho tới khi chính người đó gửi bất kỳ tin nhắn nào hoặc thả tim/like
+                vào bất kỳ tin nhắn nào trong nhóm. Câu chỉ có “ok”, “cảm ơn”… được bỏ
+                qua bằng luật; phần còn lại do AI đọc context rồi quyết định. AI lỗi thì
+                vẫn tag như bình thường.
                 <br />
                 <br />
                 <strong>Tag khi khách hỏi giá:</strong> khách — người không nằm trong
@@ -175,8 +176,8 @@ export function MentionAutomationModal({
                 tag trước cả.
                 <br />
                 <br />
-                Tin nhắn do bot gửi luôn được bỏ qua. Khung giờ và thời gian chờ dùng
-                chung cho cả hai.
+                Tin nhắn do bot gửi không tạo vòng tag mới. Khung giờ và thời gian chờ
+                dùng chung cho cả hai.
               </p>
             )}
           </div>
@@ -186,7 +187,7 @@ export function MentionAutomationModal({
             <FeatureSection
               icon={AtSign}
               title="Tag lại khi có người tag"
-              hint="Ai đó tag thành viên đã chọn mà họ chưa trả lời thì bot nhắc lại."
+              hint="Bot nhắc lại đến khi người được tag nhắn hoặc thả tim/like trong nhóm."
               enabled={mentionTagEnabled}
               onToggle={() => { setMentionTagEnabled((on) => !on); setFormError(null); }}
               disabled={!canEdit}

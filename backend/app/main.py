@@ -58,6 +58,7 @@ async def lifespan(_: FastAPI):
         await bootstrap()
     except Exception:
         logger.exception("BOOTSTRAP_FAILED (run migrations before starting the API)")
+        raise
     yield
 
 
