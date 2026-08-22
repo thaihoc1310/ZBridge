@@ -82,6 +82,11 @@ services:
       LOGIN_FAILURE_ALERT_THRESHOLD: ${LOGIN_FAILURE_ALERT_THRESHOLD:-5}
       LOGIN_FAILURE_WINDOW_SECONDS: ${LOGIN_FAILURE_WINDOW_SECONDS:-600}
       ALERT_LINK_BASE_URL: ${ALERT_LINK_BASE_URL:-}
+      # The API verifies a Google Sheet immediately when its link is saved.
+      GOOGLE_SERVICE_ACCOUNT_FILE: ${GOOGLE_SERVICE_ACCOUNT_FILE:-/run/secrets/google-service-account.json}
+      GOOGLE_API_TIMEOUT_SECONDS: ${GOOGLE_API_TIMEOUT_SECONDS:-90}
+    volumes:
+      - ./secrets:/run/secrets:ro
     depends_on:
       migrate:
         condition: service_completed_successfully

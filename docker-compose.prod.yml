@@ -110,7 +110,12 @@ services:
       LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${LOGIN_RATE_LIMIT_WINDOW_SECONDS:-600}
       LOGIN_RATE_LIMIT_IP_ATTEMPTS: ${LOGIN_RATE_LIMIT_IP_ATTEMPTS:-30}
       LOGIN_RATE_LIMIT_ACCOUNT_ATTEMPTS: ${LOGIN_RATE_LIMIT_ACCOUNT_ATTEMPTS:-20}
+      # Saving a debt link validates the Sheet synchronously in the API.
+      GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google-service-account.json
+      GOOGLE_API_TIMEOUT_SECONDS: ${GOOGLE_API_TIMEOUT_SECONDS:-90}
       TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    volumes:
+      - ./secrets:/run/secrets:ro
     depends_on:
       migrate:
         condition: service_completed_successfully
