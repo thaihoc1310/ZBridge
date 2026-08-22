@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -18,9 +19,12 @@ from app.models.entities import (
     MentionFollowupTrigger,
     MentionTargetKind,
 )
-from app.schemas.api import IncomingGroupMessage, IncomingMention
+from app.schemas.api import IncomingGroupMessage, IncomingGroupReaction, IncomingMention
 from app.services import mention_classifier
-from app.services.mention_automation_service import schedule_from_incoming_event
+from app.services.mention_automation_service import (
+    acknowledge_from_reaction,
+    schedule_from_incoming_event,
+)
 from app.services.mention_classifier import (
     MentionClassification,
     MentionDecision,
@@ -399,6 +403,74 @@ async def _price_database(*, price_enabled: bool = True):
         )
         await db.commit()
     return engine, sessions
+
+
+async def test_reaction_while_ai_is_in_flight_cannot_resurrect_loop(monkeypatch) -> None:
+    for trigger in ("mention", "price"):
+        engine, sessions = (
+            await _database() if trigger == "mention" else await _price_database()
+        )
+        monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
+        model_started = asyncio.Event()
+        model_can_finish = asyncio.Event()
+
+        async def classify(
+            _payload,
+            *,
+            model=None,
+            prompt=None,
+            _started=model_started,
+            _finish=model_can_finish,
+        ):
+            _started.set()
+            await _finish.wait()
+            return _ModelResult(
+                decisions=[
+                    MentionDecision(
+                        target_id="T1",
+                        classification=MentionClassification.NEED_RESPONSE,
+                        confidence=0.99,
+                        reason_code=MentionReasonCode.REQUEST,
+                    )
+                ],
+                input_tokens=1,
+                output_tokens=1,
+                latency_ms=1,
+            )
+
+        monkeypatch.setattr(mention_classifier, "classify_payload", classify)
+        async with sessions() as db:
+            response = await schedule_from_incoming_event(
+                db,
+                _mention_event("race-mention", "gửi giúp anh nhé @Abcd")
+                if trigger == "mention"
+                else _plain_event("race-price", "báo giá giúp anh nhé"),
+            )
+        claimed = await mention_classifier.claim_pending_classifications()
+        task = asyncio.create_task(mention_classifier.process_classification(*claimed[0]))
+        await asyncio.wait_for(model_started.wait(), timeout=1)
+
+        async with sessions() as db:
+            acknowledged = await acknowledge_from_reaction(
+                db,
+                IncomingGroupReaction(
+                    event_type="reaction",
+                    group_id="classifier-group",
+                    reactor_id="target-user" if trigger == "mention" else "sales-user",
+                    reacted_at=datetime.now(UTC),
+                    reaction="heart",
+                ),
+            )
+        model_can_finish.set()
+        await task
+
+        async with sessions() as db:
+            followup = await db.get(MentionFollowup, response.followup_id)
+            assert acknowledged.acknowledged_followups == 1
+            assert followup.status == MentionFollowupStatus.CANCELLED
+            assert followup.target_user_ids == []
+            assert followup.classification_result is None
+        await engine.dispose()
 
 
 def _plain_event(message_id: str, content: str, sender: str = "sender-user"):

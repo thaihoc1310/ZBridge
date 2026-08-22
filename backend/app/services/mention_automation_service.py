@@ -61,16 +61,21 @@ def _acknowledge_target(
     now: datetime,
     requeue_at: datetime,
     occurred_at: datetime,
+    started_at_by_source: dict[str, datetime],
 ) -> int:
     """Remove one person from every active loop currently waiting for them."""
     acknowledged = 0
     for followup in followups:
-        created_at = followup.created_at
-        if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=UTC)
-        if created_at > occurred_at:
+        started_at = started_at_by_source.get(
+            followup.source_message_id, followup.created_at
+        )
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=UTC)
+        if started_at > occurred_at:
             # A delayed/replayed event must not acknowledge a loop that did not
-            # exist when the member actually messaged or reacted.
+            # exist when the member actually messaged or reacted. Compare with
+            # the source event, not the DB row: a very fast reply/reaction can
+            # legitimately happen before the backend finishes inserting the row.
             continue
         remaining_targets = [
             (user_id, display_name)
@@ -99,10 +104,33 @@ def _acknowledge_target(
                 followup.claimed_at = None
                 followup.attempt_count = 0
         else:
+            followup.target_user_ids = []
+            followup.target_display_names = []
             followup.status = MentionFollowupStatus.CANCELLED
             followup.claimed_at = None
             followup.processed_at = now
     return acknowledged
+
+
+async def _started_at_by_source(
+    db: AsyncSession, followups: list[MentionFollowup]
+) -> dict[str, datetime]:
+    """Return the event time that opened each loop in this automation."""
+    if not followups:
+        return {}
+    source_ids = {followup.source_message_id for followup in followups}
+    rows = (
+        await db.execute(
+            select(MentionContextMessage.message_id, MentionContextMessage.sent_at).where(
+                MentionContextMessage.automation_id == followups[0].automation_id,
+                MentionContextMessage.message_id.in_(source_ids),
+            )
+        )
+    ).all()
+    return {
+        message_id: sent_at if sent_at.tzinfo else sent_at.replace(tzinfo=UTC)
+        for message_id, sent_at in rows
+    }
 
 
 async def acknowledge_from_reaction(
@@ -149,6 +177,7 @@ async def acknowledge_from_reaction(
             automation.active_windows,
         ),
         occurred_at=occurred_at,
+        started_at_by_source=await _started_at_by_source(db, followups),
     )
     await db.commit()
     if acknowledged:
@@ -396,6 +425,7 @@ async def schedule_from_incoming_event(
                 automation.active_windows,
             ),
             occurred_at=sent_at,
+            started_at_by_source=await _started_at_by_source(db, active_followups),
         )
         if event.sender_id
         else 0

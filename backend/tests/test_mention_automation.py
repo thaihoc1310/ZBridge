@@ -8,6 +8,7 @@ from app.models import (
     BotDeliveryLog,
     Customer,
     MentionAutomation,
+    MentionContextMessage,
     MentionFollowup,
     MentionTarget,
     ZaloAccount,
@@ -337,7 +338,7 @@ async def test_heart_and_like_stop_only_the_reactors_active_reminders() -> None:
     await engine.dispose()
 
 
-async def test_delayed_reaction_does_not_cancel_a_newer_followup() -> None:
+async def test_reaction_uses_source_event_time_not_db_insert_time() -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -365,8 +366,31 @@ async def test_delayed_reaction_does_not_cancel_a_newer_followup() -> None:
         )
         db.add(automation)
         await db.flush()
-        reaction_time = datetime.now(UTC) - timedelta(minutes=5)
-        followup = MentionFollowup(
+        now = datetime.now(UTC)
+        stale_reaction_time = now - timedelta(minutes=5)
+        stale_source_time = now - timedelta(minutes=4)
+        quick_source_time = now - timedelta(seconds=2)
+        db.add_all(
+            [
+                MentionContextMessage(
+                    automation_id=automation.id,
+                    message_id="created-after-reaction",
+                    sender_id="sender",
+                    content="@A hỏi sau reaction cũ",
+                    mentions=[],
+                    sent_at=stale_source_time,
+                ),
+                MentionContextMessage(
+                    automation_id=automation.id,
+                    message_id="quick-reaction-source",
+                    sender_id="sender",
+                    content="@B báo giá giúp anh",
+                    mentions=[],
+                    sent_at=quick_source_time,
+                ),
+            ]
+        )
+        newer_followup = MentionFollowup(
             automation_id=automation.id,
             source_message_id="created-after-reaction",
             target_user_ids=["target-a"],
@@ -374,23 +398,48 @@ async def test_delayed_reaction_does_not_cancel_a_newer_followup() -> None:
             due_at=datetime.now(UTC),
             status=MentionFollowupStatus.PENDING,
         )
-        db.add(followup)
+        quick_followup = MentionFollowup(
+            automation_id=automation.id,
+            source_message_id="quick-reaction-source",
+            target_user_ids=["target-b"],
+            target_display_names=["Thành viên B"],
+            due_at=now,
+            status=MentionFollowupStatus.CLASSIFYING,
+            claimed_at=now,
+        )
+        db.add_all([newer_followup, quick_followup])
         await db.commit()
 
-        response = await acknowledge_from_reaction(
+        stale = await acknowledge_from_reaction(
             db,
             IncomingGroupReaction(
                 event_type="reaction",
                 group_id="group-delayed-reaction",
                 reactor_id="target-a",
-                reacted_at=reaction_time,
+                reacted_at=stale_reaction_time,
                 reaction="like",
             ),
         )
-        await db.refresh(followup)
+        quick = await acknowledge_from_reaction(
+            db,
+            IncomingGroupReaction(
+                event_type="reaction",
+                group_id="group-delayed-reaction",
+                reactor_id="target-b",
+                # It happened after the source message but before the row's
+                # server-side created_at timestamp.
+                reacted_at=now - timedelta(seconds=1),
+                reaction="heart",
+            ),
+        )
+        await db.refresh(newer_followup)
+        await db.refresh(quick_followup)
 
-        assert response.acknowledged_followups == 0
-        assert followup.status == MentionFollowupStatus.PENDING
+        assert stale.acknowledged_followups == 0
+        assert newer_followup.status == MentionFollowupStatus.PENDING
+        assert quick.acknowledged_followups == 1
+        assert quick_followup.status == MentionFollowupStatus.CANCELLED
+        assert quick_followup.claimed_at is None
 
     await engine.dispose()
 
