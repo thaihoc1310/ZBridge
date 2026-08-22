@@ -173,11 +173,18 @@ class DeliveryLogListResponse(BaseModel):
     pages: int
 
 
+class DashboardHourlyMessages(BaseModel):
+    hour: int = Field(ge=0, le=23)
+    count: int = Field(ge=0)
+
+
 class DashboardResponse(BaseModel):
     bot_status: BotStatus
     customer_count: int
     customers_with_debt: int
+    customers_without_debt: int
     messages_today: int
+    messages_by_hour: list[DashboardHourlyMessages]
     failed_today: int
     last_sync_at: datetime | None
     last_successful_message_at: datetime | None

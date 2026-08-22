@@ -78,7 +78,9 @@ export type Dashboard = {
   bot_status: BotStatus;
   customer_count: number;
   customers_with_debt: number;
+  customers_without_debt: number;
   messages_today: number;
+  messages_by_hour: Array<{ hour: number; count: number }>;
   failed_today: number;
   last_sync_at: string | null;
   last_successful_message_at: string | null;
