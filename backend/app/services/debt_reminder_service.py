@@ -155,10 +155,10 @@ async def save_debt_reminder(
     now: datetime | None = None,
 ) -> DebtReminderResponse:
     customer = await get_customer(db, customer_id)
-    if data.enabled and not customer.folder_url:
+    if data.enabled and not customer.debt_file_url:
         raise AppError(
             "CUSTOMER_FOLDER_REQUIRED",
-            "Hãy thêm thư mục Google Drive trước khi bật nhắc công nợ.",
+            "Hãy thêm file công nợ (Google Sheet) trước khi bật nhắc công nợ.",
             422,
         )
     automation = await db.scalar(

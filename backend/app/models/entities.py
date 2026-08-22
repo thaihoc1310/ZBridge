@@ -215,7 +215,8 @@ class Customer(TimestampMixin, Base):
     has_debt: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     last_debt_paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     note: Mapped[str | None] = mapped_column(Text)
-    folder_url: Mapped[str | None] = mapped_column(Text)
+    #: The Google Sheet the debt reminder screenshots, verified when saved.
+    debt_file_url: Mapped[str | None] = mapped_column(Text)
 
     group: Mapped[ZaloGroup] = relationship(back_populates="customer")
     delivery_logs: Mapped[list[BotDeliveryLog]] = relationship(back_populates="customer")

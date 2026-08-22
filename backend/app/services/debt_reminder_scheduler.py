@@ -224,7 +224,7 @@ async def process_debt_reminder(run_id: uuid.UUID) -> None:
         customer_id = customer.id
         group_id = customer.group.zalo_group_id
         parts = automation.message_parts
-        folder_url = customer.folder_url
+        debt_file_url = customer.debt_file_url
         if not automation.enabled:
             await _finish_without_sending(
                 run.id, DebtReminderStatus.CANCELLED, "Cấu hình đã được tắt."
@@ -242,12 +242,12 @@ async def process_debt_reminder(run_id: uuid.UUID) -> None:
                 run, customer_id, "GROUP_UNAVAILABLE", "Nhóm Zalo hiện không khả dụng."
             )
             return
-        if not folder_url:
+        if not debt_file_url:
             await _fail_run(
                 run,
                 customer_id,
                 "CUSTOMER_FOLDER_REQUIRED",
-                "Khách hàng chưa có thư mục Google Drive.",
+                "Khách hàng chưa có file công nợ.",
             )
             return
 
@@ -279,7 +279,7 @@ async def process_debt_reminder(run_id: uuid.UUID) -> None:
 
             artifact = None
             if not run.image_message_id or not run.sheet_url:
-                artifact = await google_sheets.export_first_sheet(folder_url)
+                artifact = await google_sheets.export_first_sheet(debt_file_url)
                 run.sheet_file_id = artifact.file_id
                 run.sheet_name = artifact.file_name
                 run.sheet_url = artifact.web_view_link
@@ -287,7 +287,7 @@ async def process_debt_reminder(run_id: uuid.UUID) -> None:
 
             if not run.image_message_id:
                 if artifact is None:
-                    artifact = await google_sheets.export_first_sheet(folder_url)
+                    artifact = await google_sheets.export_first_sheet(debt_file_url)
                 result = await zalo_gateway.send_image(
                     group_id,
                     artifact.png_data,

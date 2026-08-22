@@ -51,7 +51,8 @@ export type Customer = {
   has_debt: boolean;
   last_debt_paid_at: string | null;
   note: string | null;
-  folder_url: string | null;
+  /** Google Sheet the debt reminder screenshots; verified when saved. */
+  debt_file_url: string | null;
   zalo_group_id: string;
   member_count: number;
   is_available: boolean;

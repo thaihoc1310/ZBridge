@@ -105,7 +105,7 @@ class CustomerResponse(BaseModel):
     has_debt: bool
     last_debt_paid_at: datetime | None
     note: str | None
-    folder_url: str | None
+    debt_file_url: str | None
     zalo_group_id: str
     member_count: int
     is_available: bool
@@ -125,17 +125,18 @@ class CustomerListResponse(BaseModel):
 class CustomerUpdate(BaseModel):
     has_debt: bool | None = None
     note: str | None = Field(default=None, max_length=10000)
-    folder_url: str | None = Field(default=None, max_length=2000)
+    debt_file_url: str | None = Field(default=None, max_length=2000)
 
-    @field_validator("folder_url")
+    @field_validator("debt_file_url")
     @classmethod
-    def validate_folder_url(cls, value: str | None) -> str | None:
+    def validate_debt_file_url(cls, value: str | None) -> str | None:
+        """Shape only. Whether Google can actually read it is checked on save."""
         if value is None or not value.strip():
             return None
         value = value.strip()
         parsed = urlparse(value)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError("Đường dẫn thư mục phải bắt đầu bằng http:// hoặc https://.")
+            raise ValueError("Đường dẫn phải bắt đầu bằng http:// hoặc https://.")
         return value
 
 

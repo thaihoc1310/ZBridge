@@ -44,21 +44,26 @@ class SheetArtifact:
     height: int
 
 
-def extract_drive_folder_id(folder_url: str) -> str:
-    parsed = urlparse(folder_url)
+def extract_spreadsheet_id(sheet_url: str) -> str:
+    """Pull the file id out of a Google Sheets link.
+
+    Points straight at one file instead of listing a folder and hoping the first
+    spreadsheet in it is the right one.
+    """
+    parsed = urlparse(sheet_url)
     if parsed.scheme not in {"http", "https"} or parsed.netloc.lower() not in {
-        "drive.google.com",
-        "www.drive.google.com",
+        "docs.google.com",
+        "www.docs.google.com",
     }:
         raise SheetExportError(
-            "INVALID_DRIVE_FOLDER_URL",
-            "Đường dẫn thư mục không phải link Google Drive hợp lệ.",
+            "INVALID_SHEET_URL",
+            "Đường dẫn phải là link Google Sheets (docs.google.com/spreadsheets/...).",
         )
-    match = re.search(r"/folders/([A-Za-z0-9_-]+)", parsed.path)
+    match = re.search(r"/spreadsheets/d/([A-Za-z0-9_-]+)", parsed.path)
     if not match:
         raise SheetExportError(
-            "INVALID_DRIVE_FOLDER_URL",
-            "Không tìm thấy mã thư mục trong đường dẫn Google Drive.",
+            "INVALID_SHEET_URL",
+            "Không tìm thấy mã file trong đường dẫn Google Sheets.",
         )
     return match.group(1)
 
@@ -235,56 +240,53 @@ class GoogleSheetsService:
         if response.status_code in {401, 403}:
             raise SheetExportError(
                 "GOOGLE_DRIVE_ACCESS_DENIED",
-                "Service Account chưa có quyền xem thư mục hoặc Google Sheet.",
+                "Service Account chưa được chia sẻ quyền xem file Google Sheet này.",
             )
         if response.status_code == 404:
             raise SheetExportError(
-                "GOOGLE_DRIVE_NOT_FOUND", "Không tìm thấy thư mục hoặc Google Sheet."
+                "GOOGLE_DRIVE_NOT_FOUND", "Không tìm thấy file Google Sheet."
             )
         raise SheetExportError(
             "GOOGLE_API_ERROR", f"Google API gặp lỗi HTTP {response.status_code}."
         )
 
-    async def export_first_sheet(self, folder_url: str) -> SheetArtifact:
-        folder_id = extract_drive_folder_id(folder_url)
+    async def describe(self, sheet_url: str) -> tuple[str, str]:
+        """Confirm the link is a readable Google Sheet, and say what it is called.
+
+        Runs when somebody saves the link so a typo or an unshared file is caught
+        then, rather than at 08:00 on the day a reminder was supposed to go out.
+        """
+        file_id = extract_spreadsheet_id(sheet_url)
         token = await self._access_token()
         timeout = httpx.Timeout(settings.google_api_timeout_seconds, connect=10.0)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            file_list = await self._get_json(
-                client,
-                "https://www.googleapis.com/drive/v3/files",
-                token,
-                q=(
-                    f"'{folder_id}' in parents and trashed = false and "
-                    f"mimeType = '{GOOGLE_SHEET_MIME_TYPE}'"
-                ),
-                orderBy="name",
-                pageSize=1,
-                fields="files(id,name,webViewLink)",
-                spaces="drive",
-                supportsAllDrives="true",
-                includeItemsFromAllDrives="true",
-            )
-            files = file_list.get("files") or []
-            if not files:
-                raise SheetExportError(
-                    "GOOGLE_SHEET_NOT_FOUND",
-                    "Không tìm thấy file Google Sheets nào trong thư mục khách hàng.",
-                )
-            sheet_file = files[0]
-            file_id = str(sheet_file.get("id") or "")
-            file_name = str(sheet_file.get("name") or "Google Sheet")
-            web_view_link = str(
-                sheet_file.get("webViewLink")
-                or f"https://docs.google.com/spreadsheets/d/{file_id}/edit"
-            )
-
             spreadsheet = await self._get_json(
                 client,
                 f"https://sheets.googleapis.com/v4/spreadsheets/{file_id}",
                 token,
-                fields="sheets(properties(sheetId,index,title))",
+                fields="properties(title),sheets(properties(sheetId,index,title))",
             )
+        sheets = spreadsheet.get("sheets") or []
+        if not sheets:
+            raise SheetExportError(
+                "GOOGLE_SHEET_EMPTY", "Google Sheet không có tab dữ liệu nào."
+            )
+        title = str(spreadsheet.get("properties", {}).get("title") or "Google Sheet")
+        return file_id, title
+
+    async def export_first_sheet(self, sheet_url: str) -> SheetArtifact:
+        file_id = extract_spreadsheet_id(sheet_url)
+        token = await self._access_token()
+        timeout = httpx.Timeout(settings.google_api_timeout_seconds, connect=10.0)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            spreadsheet = await self._get_json(
+                client,
+                f"https://sheets.googleapis.com/v4/spreadsheets/{file_id}",
+                token,
+                fields="properties(title),sheets(properties(sheetId,index,title))",
+            )
+            file_name = str(spreadsheet.get("properties", {}).get("title") or "Google Sheet")
+            web_view_link = f"https://docs.google.com/spreadsheets/d/{file_id}/edit"
             sheets = spreadsheet.get("sheets") or []
             if not sheets:
                 raise SheetExportError(

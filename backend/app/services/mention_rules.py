@@ -73,19 +73,28 @@ PRICE_KEYWORD_TOKENS = ("giá",)
 PRICE_KEYWORD_PHRASES = ("bao nhiêu tiền", "bnh tiền")
 
 
-def mentions_price(event: IncomingGroupMessage) -> bool:
+def text_mentions_price(content: str, mention_texts: Iterable[str] = ()) -> bool:
     """Cheap gate in front of the classifier, not a decision on its own.
 
     Reads what the sender typed, with the mention labels taken out: a member
     whose display name happens to contain "giá" should not send every message
-    that tags them to the model.
+    that tags them to the model. Takes raw text so it also works on the stored
+    context rows, not just a live event.
     """
-    normalized = normalize_phrase(content_without_mentions(event))
+    for mention_text in sorted((t for t in mention_texts if t), key=len, reverse=True):
+        content = content.replace(mention_text, "", 1)
+    normalized = normalize_phrase(content)
     if not normalized:
         return False
     if any(phrase in normalized for phrase in PRICE_KEYWORD_PHRASES):
         return True
     return bool(set(normalized.split()) & set(PRICE_KEYWORD_TOKENS))
+
+
+def mentions_price(event: IncomingGroupMessage) -> bool:
+    return text_mentions_price(
+        event.content, [mention.text for mention in event.mentions]
+    )
 
 
 def is_bare_mention(

@@ -21,6 +21,7 @@ from app.models import (
 )
 from app.models.entities import MentionFollowupStatus, MentionFollowupTrigger
 from app.services.alerting import report_async
+from app.services.mention_rules import text_mentions_price
 from app.services.mention_settings_service import get_or_create_mention_settings
 
 logger = logging.getLogger("zbridge.mention_classifier")
@@ -120,6 +121,9 @@ class _ClassificationJob:
     model: str
     trigger: MentionFollowupTrigger
     prompt: str
+    #: The context row the payload was built from, so a skip can look past it.
+    source: MentionContextMessage
+    repoints: int
     target_labels: dict[str, str]
     payload: dict[str, object]
 
@@ -319,6 +323,8 @@ async def _prepare_job(
             model=settings.llm_model,
             trigger=followup.trigger,
             prompt=PRICE_CLASSIFIER_PROMPT if is_price else CLASSIFIER_PROMPT,
+            source=source,
+            repoints=followup.attempt_count - 1 if followup.attempt_count else 0,
             target_labels=target_labels,
             payload={
                 "prompt_version": PRICE_PROMPT_VERSION if is_price else PROMPT_VERSION,
@@ -529,10 +535,31 @@ async def process_classification(followup_id: uuid.UUID, claimed_at: datetime) -
             followup.status = MentionFollowupStatus.PENDING
             followup.processed_at = None
         else:
-            followup.target_user_ids = []
-            followup.target_display_names = []
-            followup.status = MentionFollowupStatus.SKIPPED
-            followup.processed_at = datetime.now(UTC)
+            newer = (
+                None
+                if job.repoints >= MAX_REPOINTS
+                else await _newer_trigger_message(db, followup, job.source)
+            )
+            if newer is not None:
+                # Judge the later message instead of settling on this verdict. The
+                # claim stamp is cleared above, so a duplicate worker still in
+                # flight will discard its own result rather than overwrite this.
+                followup.source_message_id = newer.message_id
+                followup.status = MentionFollowupStatus.CLASSIFYING
+                followup.processed_at = None
+                followup.classification_result = None
+                logger.info(
+                    "MENTION_RECLASSIFY_NEWER followup_id=%s from=%s to=%s repoints=%d",
+                    followup_id,
+                    job.payload.get("current_message_id"),
+                    newer.message_id,
+                    job.repoints + 1,
+                )
+            else:
+                followup.target_user_ids = []
+                followup.target_display_names = []
+                followup.status = MentionFollowupStatus.SKIPPED
+                followup.processed_at = datetime.now(UTC)
         await db.commit()
         logger.info(
             "MENTION_CLASSIFIED followup_id=%s scheduled_targets=%d total_targets=%d latency_ms=%d",
@@ -565,6 +592,76 @@ def _should_skip(
         in {MentionClassification.ACKNOWLEDGEMENT, MentionClassification.FYI}
         and decision.confidence >= settings.llm_skip_confidence
     )
+
+
+#: How many times one follow-up may be re-pointed at a newer message before it
+#: gives up. A run of "ok", "cảm ơn", "vâng" would otherwise spend a model call
+#: on every one of them.
+MAX_REPOINTS = 3
+
+
+async def _newer_trigger_message(
+    db,
+    followup: MentionFollowup,
+    source: MentionContextMessage,
+) -> MentionContextMessage | None:
+    """The newest message after `source` that would have started this follow-up.
+
+    Only consulted when the model has decided to skip. A message that arrived
+    while this one was being classified was dropped at the time, because the
+    people it names were already waiting — so if the earlier message turns out
+    not to need an answer, the later one still might.
+    """
+    taken = set(
+        (
+            await db.scalars(
+                select(MentionFollowup.source_message_id).where(
+                    MentionFollowup.automation_id == followup.automation_id
+                )
+            )
+        ).all()
+    )
+    candidates = list(
+        (
+            await db.scalars(
+                select(MentionContextMessage)
+                .where(
+                    MentionContextMessage.automation_id == followup.automation_id,
+                    or_(
+                        MentionContextMessage.sent_at > source.sent_at,
+                        and_(
+                            MentionContextMessage.sent_at == source.sent_at,
+                            MentionContextMessage.created_at > source.created_at,
+                        ),
+                    ),
+                )
+                .order_by(
+                    MentionContextMessage.sent_at.desc(),
+                    MentionContextMessage.created_at.desc(),
+                )
+                .limit(20)
+            )
+        ).all()
+    )
+    targets = set(followup.target_user_ids)
+    for message in candidates:
+        if message.message_id in taken:
+            continue
+        if followup.trigger == MentionFollowupTrigger.PRICE_INQUIRY:
+            if message.sender_id in targets:
+                continue
+            if text_mentions_price(
+                message.content,
+                [str(mention.get("text") or "") for mention in (message.mentions or [])],
+            ):
+                return message
+        else:
+            mentioned = {
+                str(mention.get("user_id") or "") for mention in (message.mentions or [])
+            }
+            if mentioned & targets and message.sender_id not in targets:
+                return message
+    return None
 
 
 async def _reload_claim(db, job: _ClassificationJob) -> MentionFollowup | None:

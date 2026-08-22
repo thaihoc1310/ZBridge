@@ -6,7 +6,7 @@ import { api, ApiError, queryString } from "../api/client";
 import type { Customer, CustomerList, SyncResult } from "../api/types";
 import { PageHeader } from "../components/PageHeader";
 import { Button } from "../components/ui/Button";
-import { DebtConfirmModal, DebtStatusOptions, FolderEditorModal, NoteEditorModal, type DebtConfirmation } from "../features/customers/CustomerFields";
+import { DebtConfirmModal, DebtStatusOptions, DebtFileEditorModal, NoteEditorModal, type DebtConfirmation } from "../features/customers/CustomerFields";
 import { formatDate, initials } from "../lib/format";
 import { PERMISSIONS } from "../lib/permissions";
 import { usePermissions } from "../lib/session";
@@ -21,7 +21,7 @@ export function CustomersPage() {
   const [page, setPage] = useState(1);
   const [filterOpen, setFilterOpen] = useState(false);
   const [noteCustomer, setNoteCustomer] = useState<Customer | null>(null);
-  const [folderCustomer, setFolderCustomer] = useState<Customer | null>(null);
+  const [debtFileCustomer, setDebtFileCustomer] = useState<Customer | null>(null);
   const [debtConfirmation, setDebtConfirmation] = useState<DebtConfirmation | null>(null);
   const didAutoSync = useRef(false);
   const queryClient = useQueryClient();
@@ -73,12 +73,12 @@ export function CustomersPage() {
 
       <div className="app-scrollbar overflow-x-auto">
         <table className="w-full min-w-[1120px] table-fixed border-collapse text-left">
-          <thead><tr className="border-b border-border bg-muted/50 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"><th className="w-[22%] px-6 py-4 font-medium">Khách hàng</th><th className="w-[15%] px-5 py-4 font-medium">Thư mục</th><th className="w-[25%] px-5 py-4 font-medium">Công nợ</th><th className="w-[16%] px-5 py-4 font-medium">Trả nợ gần nhất</th><th className="w-[22%] px-5 py-4 font-medium">Ghi chú</th><th className="w-12" /></tr></thead>
+          <thead><tr className="border-b border-border bg-muted/50 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"><th className="w-[22%] px-6 py-4 font-medium">Khách hàng</th><th className="w-[15%] px-5 py-4 font-medium">File công nợ</th><th className="w-[25%] px-5 py-4 font-medium">Công nợ</th><th className="w-[16%] px-5 py-4 font-medium">Trả nợ gần nhất</th><th className="w-[22%] px-5 py-4 font-medium">Ghi chú</th><th className="w-12" /></tr></thead>
           <tbody>
             {customers.isLoading && <tr><td colSpan={6} className="px-6 py-14 text-center text-sm text-muted-foreground"><RefreshCw className="mx-auto mb-3 h-5 w-5 animate-spin text-accent" />Đang tải danh sách khách hàng...</td></tr>}
             {customers.data?.items.map((customer) => <tr key={customer.id} className="group border-b border-border transition-colors last:border-0 hover:bg-blue-50/40">
               <td className="px-6 py-4"><Link to={`/customers/${customer.id}`} className="flex min-w-0 items-center gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-blue-100 to-indigo-100 text-xs font-bold text-accent">{customer.avatar_url ? <img src={customer.avatar_url} alt="" className="h-full w-full object-cover" /> : initials(customer.name)}</span><span className="truncate font-semibold text-foreground transition group-hover:text-accent">{customer.name}</span></Link></td>
-              <td className="px-5 py-4">{customer.folder_url ? <a href={customer.folder_url} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1.5 text-sm font-medium text-accent underline decoration-blue-200 underline-offset-4 transition hover:decoration-accent"><span className="truncate">Mở thư mục</span><ExternalLink className="h-3.5 w-3.5 shrink-0" /></a> : canUpdate ? <button className="text-sm italic text-muted-foreground/70 transition hover:text-accent" onClick={() => setFolderCustomer(customer)}>+ Thêm thư mục</button> : <span className="text-sm text-muted-foreground/70">—</span>}</td>
+              <td className="px-5 py-4">{customer.debt_file_url ? <a href={customer.debt_file_url} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1.5 text-sm font-medium text-accent underline decoration-blue-200 underline-offset-4 transition hover:decoration-accent"><span className="truncate">Mở file công nợ</span><ExternalLink className="h-3.5 w-3.5 shrink-0" /></a> : canUpdate ? <button className="text-sm italic text-muted-foreground/70 transition hover:text-accent" onClick={() => setDebtFileCustomer(customer)}>+ Thêm file công nợ</button> : <span className="text-sm text-muted-foreground/70">—</span>}</td>
               <td className="px-5 py-4"><DebtStatusOptions value={customer.has_debt} disabled={!canUpdate} onChange={(nextValue) => setDebtConfirmation({ customer, nextValue })} /></td>
               <td className="whitespace-nowrap px-5 py-4 text-sm text-muted-foreground">{customer.last_debt_paid_at ? formatDate(customer.last_debt_paid_at) : <span className="sr-only">Chưa có ngày trả nợ</span>}</td>
               <td className="px-5 py-4"><button className={`block max-w-full text-left text-sm transition hover:text-accent ${customer.note ? "text-foreground" : "italic text-muted-foreground/70"}`} onClick={() => setNoteCustomer(customer)}>{customer.note ? customer.note.length > 48 ? "Xem chi tiết" : <span className="block truncate">{customer.note}</span> : "+ Thêm ghi chú"}</button></td>
@@ -92,7 +92,7 @@ export function CustomersPage() {
     </section>
 
     <NoteEditorModal customer={noteCustomer} onClose={() => setNoteCustomer(null)} />
-    <FolderEditorModal customer={folderCustomer} onClose={() => setFolderCustomer(null)} />
+    <DebtFileEditorModal customer={debtFileCustomer} onClose={() => setDebtFileCustomer(null)} />
     <DebtConfirmModal confirmation={debtConfirmation} onClose={() => setDebtConfirmation(null)} />
   </div>;
 }

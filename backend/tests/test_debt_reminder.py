@@ -1,6 +1,7 @@
 import os
 from datetime import UTC, datetime, time, timedelta
 
+import pytest
 from PIL import Image, ImageDraw
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -25,8 +26,9 @@ from app.services.debt_reminder_service import (
 )
 from app.services.google_sheets_service import (
     SheetArtifact,
+    SheetExportError,
     crop_white_margins,
-    extract_drive_folder_id,
+    extract_spreadsheet_id,
 )
 
 
@@ -85,13 +87,22 @@ def test_outage_does_not_replay_every_missed_reminder() -> None:
     ) > now
 
 
-def test_extract_drive_folder_id() -> None:
+def test_extract_spreadsheet_id() -> None:
     assert (
-        extract_drive_folder_id(
-            "https://drive.google.com/drive/folders/1Abc_def-234?usp=sharing"
+        extract_spreadsheet_id(
+            "https://docs.google.com/spreadsheets/d/1Abc_def-234/edit#gid=0"
         )
         == "1Abc_def-234"
     )
+    # A folder link used to be accepted and the first sheet inside it guessed at.
+    for rejected in (
+        "https://drive.google.com/drive/folders/1Abc_def-234",
+        "https://docs.google.com/document/d/1Abc_def-234/edit",
+        "https://example.com/spreadsheets/d/1Abc_def-234",
+    ):
+        with pytest.raises(SheetExportError) as error:
+            extract_spreadsheet_id(rejected)
+        assert error.value.code == "INVALID_SHEET_URL"
 
 
 def test_crop_white_margins_keeps_content_and_padding() -> None:
@@ -144,7 +155,7 @@ async def test_overdue_repeat_stays_due_after_editing_the_config() -> None:
         customer = Customer(
             zalo_group_id=group.id,
             has_debt=True,
-            folder_url="https://drive.google.com/drive/folders/folder-overdue",
+            debt_file_url="https://docs.google.com/spreadsheets/d/sheet-overdue/edit",
         )
         db.add(customer)
         await db.commit()
@@ -204,7 +215,7 @@ async def test_debt_reminder_config_and_three_required_deliveries(monkeypatch) -
             id=group.id,
             zalo_group_id=group.id,
             has_debt=True,
-            folder_url="https://drive.google.com/drive/folders/folder-123",
+            debt_file_url="https://docs.google.com/spreadsheets/d/sheet-123/edit",
         )
         db.add(customer)
         await db.commit()
@@ -253,7 +264,7 @@ async def test_debt_reminder_config_and_three_required_deliveries(monkeypatch) -
     async def get_group_members(_group_id: str):
         return [{"user_id": "member-1", "display_name": "Nguyễn An"}]
 
-    async def export_first_sheet(_folder_url: str):
+    async def export_first_sheet(_sheet_url: str):
         calls.append("export")
         return SheetArtifact(
             file_id="sheet-1",

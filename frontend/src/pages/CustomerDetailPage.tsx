@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowUpRight, AtSign, CalendarDays, CheckCircle2, Clock3, Copy, ExternalLink, FolderOpen, IdCard, MessageSquareText, Pencil, ReceiptText, Send, UsersRound, WalletCards, XCircle, type LucideIcon } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, AtSign, CalendarDays, CheckCircle2, Clock3, Copy, ExternalLink, FileSpreadsheet, IdCard, MessageSquareText, Pencil, ReceiptText, Send, UsersRound, WalletCards, XCircle, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
@@ -8,7 +8,7 @@ import { Button } from "../components/ui/Button";
 import { LoadingOverlay } from "../components/ui/LoadingOverlay";
 import { Modal } from "../components/ui/Modal";
 import { StatusBadge } from "../components/ui/StatusBadge";
-import { DebtConfirmModal, DebtStatusOptions, FolderEditorModal, NoteEditorModal, type DebtConfirmation } from "../features/customers/CustomerFields";
+import { DebtConfirmModal, DebtStatusOptions, DebtFileEditorModal, NoteEditorModal, type DebtConfirmation } from "../features/customers/CustomerFields";
 import { DebtReminderModal } from "../features/debt-reminders/DebtReminderModal";
 import { MentionAutomationModal } from "../features/mentions/MentionAutomationModal";
 import { formatDate, initials } from "../lib/format";
@@ -23,7 +23,7 @@ export function CustomerDetailPage() {
   const [mentionOpen, setMentionOpen] = useState(false);
   const [debtReminderOpen, setDebtReminderOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
-  const [folderOpen, setFolderOpen] = useState(false);
+  const [debtFileOpen, setDebtFileOpen] = useState(false);
   const [debtConfirmation, setDebtConfirmation] = useState<DebtConfirmation | null>(null);
   const [content, setContent] = useState("");
   const [result, setResult] = useState<DeliveryLog | ApiError | null>(null);
@@ -52,9 +52,9 @@ export function CustomerDetailPage() {
         <SectionTitle title="Hồ sơ khách hàng" description="Thông tin nghiệp vụ phục vụ theo dõi và chăm sóc khách hàng." />
         <div className="mt-6 grid gap-5 md:grid-cols-3">
           <div className="group/field relative rounded-xl border border-border bg-muted/30 p-4">
-            <p className="flex items-center gap-2 text-xs text-muted-foreground"><FolderOpen className="h-4 w-4 text-accent" />Thư mục</p>
-            {item.folder_url ? <a href={item.folder_url} target="_blank" rel="noreferrer" className="mt-3 inline-flex max-w-[calc(100%-2rem)] items-center gap-1.5 font-medium text-accent underline decoration-blue-200 underline-offset-4 hover:decoration-accent"><span className="truncate">Mở thư mục</span><ExternalLink className="h-3.5 w-3.5 shrink-0" /></a> : canUpdate ? <button className="mt-3 text-sm italic text-muted-foreground/70 hover:text-accent" onClick={() => setFolderOpen(true)}>+ Thêm thư mục</button> : <p className="mt-3 text-sm text-muted-foreground/70">Chưa có</p>}
-            {canUpdate && <EditButton label="Sửa thư mục" onClick={() => setFolderOpen(true)} />}
+            <p className="flex items-center gap-2 text-xs text-muted-foreground"><FileSpreadsheet className="h-4 w-4 text-accent" />File công nợ</p>
+            {item.debt_file_url ? <a href={item.debt_file_url} target="_blank" rel="noreferrer" className="mt-3 inline-flex max-w-[calc(100%-2rem)] items-center gap-1.5 font-medium text-accent underline decoration-blue-200 underline-offset-4 hover:decoration-accent"><span className="truncate">Mở file công nợ</span><ExternalLink className="h-3.5 w-3.5 shrink-0" /></a> : canUpdate ? <button className="mt-3 text-sm italic text-muted-foreground/70 hover:text-accent" onClick={() => setDebtFileOpen(true)}>+ Thêm file công nợ</button> : <p className="mt-3 text-sm text-muted-foreground/70">Chưa có</p>}
+            {canUpdate && <EditButton label="Sửa file công nợ" onClick={() => setDebtFileOpen(true)} />}
           </div>
           <div className="rounded-xl border border-border bg-muted/30 p-4"><p className="mb-3 flex items-center gap-2 text-xs text-muted-foreground"><WalletCards className="h-4 w-4 text-accent" />Công nợ</p><DebtStatusOptions value={item.has_debt} disabled={!canUpdate} onChange={(nextValue) => setDebtConfirmation({ customer: item, nextValue })} /></div>
           <div className="rounded-xl border border-border bg-muted/30 p-4"><p className="flex items-center gap-2 text-xs text-muted-foreground"><Clock3 className="h-4 w-4 text-accent" />Ngày trả nợ gần nhất</p><p className="mt-3 text-sm font-semibold">{item.last_debt_paid_at ? formatDate(item.last_debt_paid_at) : <span className="font-normal text-muted-foreground">Chưa có</span>}</p></div>
@@ -95,9 +95,9 @@ export function CustomerDetailPage() {
 
     <ResultModal result={result} onClose={() => setResult(null)} />
     <MentionAutomationModal open={mentionOpen} onClose={() => setMentionOpen(false)} customerId={id} customerName={item.name} />
-    <DebtReminderModal open={debtReminderOpen} onClose={() => setDebtReminderOpen(false)} customerId={id} customerName={item.name} hasFolder={Boolean(item.folder_url)} hasDebt={item.has_debt} />
+    <DebtReminderModal open={debtReminderOpen} onClose={() => setDebtReminderOpen(false)} customerId={id} customerName={item.name} hasDebtFile={Boolean(item.debt_file_url)} hasDebt={item.has_debt} />
     <NoteEditorModal customer={noteOpen ? item : null} onClose={() => setNoteOpen(false)} />
-    <FolderEditorModal customer={folderOpen ? item : null} onClose={() => setFolderOpen(false)} />
+    <DebtFileEditorModal customer={debtFileOpen ? item : null} onClose={() => setDebtFileOpen(false)} />
     <DebtConfirmModal confirmation={debtConfirmation} onClose={() => setDebtConfirmation(null)} />
     <LoadingOverlay show={sendMessage.isPending} label="Đang gửi tin nhắn tới Zalo..." />
   </div>;

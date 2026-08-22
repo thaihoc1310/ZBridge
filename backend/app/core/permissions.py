@@ -66,7 +66,7 @@ PERMISSION_CATALOG: tuple[PermissionDef, ...] = (
     PermissionDef(BOT_CONNECT, "Kết nối bot và quét mã QR", CATEGORY_BOT),
     PermissionDef(BOT_DISCONNECT, "Đăng xuất bot khỏi Zalo", CATEGORY_BOT),
     PermissionDef(CUSTOMER_READ, "Xem khách hàng và thành viên nhóm", CATEGORY_CUSTOMER),
-    PermissionDef(CUSTOMER_UPDATE, "Sửa công nợ, ghi chú, thư mục Drive", CATEGORY_CUSTOMER),
+    PermissionDef(CUSTOMER_UPDATE, "Sửa công nợ, ghi chú, file công nợ", CATEGORY_CUSTOMER),
     PermissionDef(CUSTOMER_SYNC, "Đồng bộ danh sách khách hàng từ Zalo", CATEGORY_CUSTOMER),
     PermissionDef(MESSAGE_SEND, "Gửi tin nhắn thủ công vào nhóm", CATEGORY_MESSAGE),
     PermissionDef(MENTION_READ, "Xem cấu hình tag tên tự động", CATEGORY_MENTION),

@@ -26,7 +26,7 @@ import { usePermissions } from "../../lib/session";
 type Props = {
   customerId: string;
   customerName: string;
-  hasFolder: boolean;
+  hasDebtFile: boolean;
   hasDebt: boolean;
   open: boolean;
   onClose: () => void;
@@ -187,7 +187,7 @@ const runLabels: Record<string, string> = {
 export function DebtReminderModal({
   customerId,
   customerName,
-  hasFolder,
+  hasDebtFile,
   hasDebt,
   open,
   onClose,
@@ -265,8 +265,8 @@ export function DebtReminderModal({
         throw new Error("Khoảng cách giữa các lần gửi phải từ 1 đến 31 ngày.");
       }
       if (!text.trim()) throw new Error("Nội dung nhắc công nợ không được để trống.");
-      if (!hasFolder) {
-        throw new Error("Hãy thêm thư mục Google Drive trước khi lưu nhắc công nợ.");
+      if (!hasDebtFile) {
+        throw new Error("Hãy thêm file công nợ (Google Sheet) trước khi lưu nhắc công nợ.");
       }
       return api<DebtReminder>(`/customers/${customerId}/debt-reminder`, {
         method: "PUT",
@@ -386,9 +386,9 @@ export function DebtReminderModal({
             )}
           </div>
 
-          {!hasFolder && (
+          {!hasDebtFile && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-              Khách hàng chưa có thư mục Google Drive. Hãy thêm thư mục trước khi lưu.
+              Khách hàng chưa có file công nợ. Hãy thêm link Google Sheet trước khi lưu.
             </div>
           )}
 

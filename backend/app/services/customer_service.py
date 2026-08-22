@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.core.errors import AppError
 from app.models import Customer, ZaloGroup
 from app.schemas.api import CustomerListResponse, CustomerResponse, CustomerUpdate
+from app.services.google_sheets_service import SheetExportError, google_sheets
 
 
 def customer_response(customer: Customer) -> CustomerResponse:
@@ -20,7 +21,7 @@ def customer_response(customer: Customer) -> CustomerResponse:
         has_debt=customer.has_debt,
         last_debt_paid_at=customer.last_debt_paid_at,
         note=customer.note,
-        folder_url=customer.folder_url,
+        debt_file_url=customer.debt_file_url,
         zalo_group_id=group.zalo_group_id,
         member_count=group.member_count,
         is_available=group.is_available,
@@ -108,8 +109,15 @@ async def update_customer(
     if "note" in fields:
         customer.note = data.note.strip() if data.note and data.note.strip() else None
 
-    if "folder_url" in fields:
-        customer.folder_url = data.folder_url
+    if "debt_file_url" in fields:
+        if data.debt_file_url:
+            # Fail here, while somebody is looking at the form, rather than at
+            # 08:00 on the day the reminder was due.
+            try:
+                await google_sheets.describe(data.debt_file_url)
+            except SheetExportError as exc:
+                raise AppError(exc.code, exc.message, 422) from exc
+        customer.debt_file_url = data.debt_file_url
 
     await db.commit()
     return customer_response(await get_customer(db, customer_id))

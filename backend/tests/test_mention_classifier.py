@@ -679,3 +679,152 @@ async def test_tagging_again_keeps_the_first_reminder_running() -> None:
         assert followups[0].source_message_id == "m1"
         assert followups[0].id == first.followup_id
     await engine.dispose()
+
+
+def _ack_then(*labels: str):
+    """A model stub that answers with the given label per call, in order."""
+    calls = iter(labels)
+
+    async def classify(_payload, *, model=None, prompt=None):
+        label = next(calls)
+        return _ModelResult(
+            decisions=[
+                MentionDecision(
+                    target_id="T1",
+                    classification=MentionClassification(label),
+                    confidence=0.99,
+                    reason_code=MentionReasonCode.AMBIGUOUS,
+                )
+            ],
+            input_tokens=1,
+            output_tokens=1,
+            latency_ms=1,
+        )
+
+    return classify
+
+
+async def _drain(limit: int = 6) -> None:
+    for _ in range(limit):
+        claimed = await mention_classifier.claim_pending_classifications()
+        if not claimed:
+            return
+        for followup_id, stamp in claimed:
+            await mention_classifier.process_classification(followup_id, stamp)
+
+
+async def test_a_skip_looks_at_the_message_that_arrived_meanwhile(monkeypatch) -> None:
+    """The message suppressed during classification gets its turn if the first skips.
+
+    "@Abcd ok cảm ơn" then "@Abcd gửi anh báo cáo" seconds later: the second was
+    dropped because Abcd was already waiting, and the first then turned out to be
+    an acknowledgement. Nobody used to be tagged at all.
+    """
+    engine, sessions = await _price_database()
+    monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
+    monkeypatch.setattr(
+        mention_classifier,
+        "classify_payload",
+        _ack_then("ACKNOWLEDGEMENT", "NEED_RESPONSE"),
+    )
+    async with sessions() as db:
+        first = await schedule_from_incoming_event(
+            db, _mention_event("m1", "@Abcd ok anh biết rồi cảm ơn")
+        )
+        assert (
+            await schedule_from_incoming_event(
+                db, _mention_event("m2", "@Abcd gửi anh báo cáo quý 3 với")
+            )
+        ).followup_id is None
+
+    await _drain()
+    async with sessions() as db:
+        followup = await db.get(MentionFollowup, first.followup_id)
+        # Same follow-up, now judged on the later message and scheduled to send.
+        assert followup.source_message_id == "m2"
+        assert followup.status == MentionFollowupStatus.PENDING
+    await engine.dispose()
+
+
+async def test_a_later_message_cannot_undo_a_decision_to_tag(monkeypatch) -> None:
+    """The look-back only ever adds a reason to tag, never removes one.
+
+    Judging the newest message instead would let a trailing "ok" cancel a real
+    request that arrived seconds earlier — measured at 2 of 5 sample replies.
+    """
+    engine, sessions = await _price_database()
+    monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
+    calls: list[str] = []
+
+    async def classify(payload, *, model=None, prompt=None):
+        calls.append(str(payload["current_message_id"]))
+        return _ModelResult(
+            decisions=[
+                MentionDecision(
+                    target_id="T1",
+                    classification=MentionClassification.NEED_RESPONSE,
+                    confidence=0.99,
+                    reason_code=MentionReasonCode.REQUEST,
+                )
+            ],
+            input_tokens=1,
+            output_tokens=1,
+            latency_ms=1,
+        )
+
+    monkeypatch.setattr(mention_classifier, "classify_payload", classify)
+    async with sessions() as db:
+        first = await schedule_from_incoming_event(
+            db, _mention_event("m1", "@Abcd gửi anh báo cáo quý 3 với")
+        )
+        await schedule_from_incoming_event(db, _mention_event("m2", "@Abcd ok"))
+
+    await _drain()
+    async with sessions() as db:
+        followup = await db.get(MentionFollowup, first.followup_id)
+        assert followup.status == MentionFollowupStatus.PENDING
+        assert followup.source_message_id == "m1"
+        assert calls == ["m1"], "khong duoc phan lai khi da quyet dinh tag"
+    await engine.dispose()
+
+
+async def test_a_run_of_acknowledgements_stops_spending_model_calls(monkeypatch) -> None:
+    """Otherwise "ok", "vâng", "cảm ơn" would each buy another classification."""
+    engine, sessions = await _price_database()
+    monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
+    calls = 0
+
+    async def classify(_payload, *, model=None, prompt=None):
+        nonlocal calls
+        calls += 1
+        return _ModelResult(
+            decisions=[
+                MentionDecision(
+                    target_id="T1",
+                    classification=MentionClassification.ACKNOWLEDGEMENT,
+                    confidence=0.99,
+                    reason_code=MentionReasonCode.ACK_ONLY,
+                )
+            ],
+            input_tokens=1,
+            output_tokens=1,
+            latency_ms=1,
+        )
+
+    monkeypatch.setattr(mention_classifier, "classify_payload", classify)
+    async with sessions() as db:
+        first = await schedule_from_incoming_event(
+            db, _mention_event("m1", "@Abcd rõ rồi nha em")
+        )
+        for index in range(6):
+            await schedule_from_incoming_event(
+                db, _mention_event(f"m{index + 2}", f"@Abcd vâng em {index}")
+            )
+
+    await _drain(limit=10)
+    async with sessions() as db:
+        followup = await db.get(MentionFollowup, first.followup_id)
+        assert followup.status == MentionFollowupStatus.SKIPPED
+        assert followup.target_user_ids == []
+    assert calls <= mention_classifier.MAX_REPOINTS + 1, f"goi model {calls} lan"
+    await engine.dispose()

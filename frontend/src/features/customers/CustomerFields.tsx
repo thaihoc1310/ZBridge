@@ -67,21 +67,28 @@ export function NoteEditorModal({ customer, onClose }: { customer: Customer | nu
   </Modal>;
 }
 
-export function FolderEditorModal({ customer, onClose }: { customer: Customer | null; onClose: () => void }) {
-  const [folderUrl, setFolderUrl] = useState("");
+export function DebtFileEditorModal({ customer, onClose }: { customer: Customer | null; onClose: () => void }) {
+  const [fileUrl, setFileUrl] = useState("");
   const mutation = useCustomerUpdate(customer, onClose);
   const canEdit = useCanUpdateCustomer();
-  useEffect(() => setFolderUrl(customer?.folder_url ?? ""), [customer]);
-  const initialUrl = customer?.folder_url ?? "";
-  const changed = folderUrl.trim() !== initialUrl;
-  const validUrl = /^https?:\/\/\S+$/i.test(folderUrl.trim());
+  useEffect(() => setFileUrl(customer?.debt_file_url ?? ""), [customer]);
+  const initialUrl = customer?.debt_file_url ?? "";
+  const changed = fileUrl.trim() !== initialUrl;
+  // Shape only. Saving asks Google whether it can actually read the sheet, so
+  // the button spins while that happens and the server owns the real verdict.
+  const looksLikeSheet = /^https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_-]+/i.test(
+    fileUrl.trim(),
+  );
+  const empty = fileUrl.trim() === "";
 
-  return <Modal open={Boolean(customer)} onClose={onClose} title="Thư mục khách hàng" description="Lưu đường dẫn tới thư mục Drive chứa file, Sheet và tài liệu liên quan.">
-    <label className="block"><span className="mb-2 block text-sm font-semibold">Đường dẫn thư mục</span><input autoFocus className="field" type="url" disabled={!canEdit} value={folderUrl} onChange={(event) => setFolderUrl(event.target.value)} maxLength={2000} placeholder="https://drive.google.com/drive/folders/..." /></label>
-    {folderUrl && !validUrl && <p className="mt-3 text-xs text-red-600">Đường dẫn phải bắt đầu bằng http:// hoặc https://</p>}
+  return <Modal open={Boolean(customer)} onClose={onClose} title="File công nợ" description="Dán link Google Sheet công nợ của khách hàng. Ảnh nhắc nợ lấy từ tab đầu tiên của file này.">
+    <label className="block"><span className="mb-2 block text-sm font-semibold">Link Google Sheet</span><input autoFocus className="field" type="url" disabled={!canEdit || mutation.isPending} value={fileUrl} onChange={(event) => setFileUrl(event.target.value)} maxLength={2000} placeholder="https://docs.google.com/spreadsheets/d/..." /></label>
+    {!empty && !looksLikeSheet && <p className="mt-3 text-xs text-red-600">Phải là link Google Sheet, dạng https://docs.google.com/spreadsheets/d/...</p>}
+    {mutation.isPending && !empty && <p className="mt-3 text-xs text-muted-foreground">Đang kiểm tra file trên Google...</p>}
+    <p className="mt-3 text-xs text-muted-foreground">Nhớ chia sẻ quyền xem file cho Service Account, nếu không hệ thống sẽ không đọc được.</p>
     {!canEdit && <ReadOnlyHint />}
     <ErrorMessage error={mutation.error} />
-    <div className="mt-6 flex justify-end gap-3"><Button variant="ghost" onClick={onClose}>Đóng</Button><Button loading={mutation.isPending} disabled={!changed || !validUrl || !canEdit} onClick={() => mutation.mutate({ folder_url: folderUrl.trim() })}><Save className="h-4 w-4" />Lưu thư mục</Button></div>
+    <div className="mt-6 flex justify-end gap-3"><Button variant="ghost" onClick={onClose}>Đóng</Button><Button loading={mutation.isPending} disabled={!changed || !canEdit || (!empty && !looksLikeSheet)} onClick={() => mutation.mutate({ debt_file_url: fileUrl.trim() })}><Save className="h-4 w-4" />{empty ? "Xoá link" : "Kiểm tra và lưu"}</Button></div>
   </Modal>;
 }
 
