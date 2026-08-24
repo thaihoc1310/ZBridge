@@ -12,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import settings
 from app.core.errors import AppError
 from app.core.permissions import (
+    ACTIVITY_READ,
     ADMIN_ROLE_CODE,
     ALL_PERMISSION_CODES,
     CUSTOMER_READ,
@@ -19,6 +20,7 @@ from app.core.permissions import (
     MENTION_POLICY_MANAGE,
     MENTION_READ,
     MENTION_UPDATE,
+    MODEL_ACTIVITY_READ,
     PERMISSION_CATALOG,
     STAFF_MANAGE,
     SYSTEM_ROLES,
@@ -210,6 +212,33 @@ async def test_business_owner_runs_operations_but_cannot_manage_users(client) ->
         forbidden = await client.get(path)
         assert forbidden.status_code == 403
         assert forbidden.json()["error"]["code"] == "FORBIDDEN"
+
+
+async def test_delivery_and_model_activity_permissions_are_independent(
+    client, session_factory
+) -> None:
+    async def grant_only(code: str) -> None:
+        async with session_factory() as db:
+            role = await db.scalar(
+                select(Role)
+                .options(selectinload(Role.permissions))
+                .where(Role.code == OWNER_ROLE_CODE)
+            )
+            permission = await db.scalar(select(Permission).where(Permission.code == code))
+            assert role is not None and permission is not None
+            role.permissions = [permission]
+            await db.commit()
+
+    await grant_only(ACTIVITY_READ)
+    await _login(client, OWNER_EMAIL, OWNER_PASSWORD)
+    assert (await client.get("/api/activity")).status_code == 200
+    assert (await client.get("/api/activity/model-calls")).status_code == 403
+
+    client.cookies.clear()
+    await grant_only(MODEL_ACTIVITY_READ)
+    await _login(client, OWNER_EMAIL, OWNER_PASSWORD)
+    assert (await client.get("/api/activity")).status_code == 403
+    assert (await client.get("/api/activity/model-calls")).status_code == 200
 
 
 async def test_admin_creates_a_user_who_can_then_sign_in(client) -> None:

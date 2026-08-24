@@ -9,33 +9,48 @@ import { Button } from "../components/ui/Button";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { ModelCallLogTable } from "../features/activity/ModelCallLogTable";
 import { formatDate } from "../lib/format";
+import { PERMISSIONS } from "../lib/permissions";
+import { usePermissions } from "../lib/session";
 
 type ActivityView = "delivery" | "model";
 
-function ActivityHeading({ view, onChange }: { view: ActivityView; onChange: (view: ActivityView) => void }) {
+function ActivityTitle({ view }: { view: ActivityView }) {
+  return <h1 className="font-display text-3xl leading-tight text-foreground sm:text-4xl">Nhật ký <span className="gradient-text">{view === "model" ? "gọi model" : "vận hành"}</span></h1>;
+}
+
+function ActivityHeading({ view, views, onChange }: { view: ActivityView; views: ActivityView[]; onChange: (view: ActivityView) => void }) {
   const picker = useRef<HTMLDetailsElement>(null);
   const choose = (next: ActivityView) => {
     onChange(next);
     picker.current?.removeAttribute("open");
   };
+  if (views.length === 1) return <div className="mt-4"><ActivityTitle view={view} /></div>;
   return <details ref={picker} className="group relative mt-4 w-fit">
     <summary className="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
-      <h1 className="font-display text-3xl leading-tight text-foreground sm:text-4xl">Nhật ký <span className="gradient-text">{view === "model" ? "gọi model" : "vận hành"}</span></h1>
-      <span className="mt-1 flex h-8 w-8 items-center justify-center rounded-xl border border-border bg-white text-muted-foreground shadow-sm transition group-open:rotate-180 group-hover:border-accent/30 group-hover:text-accent"><ChevronDown className="h-4 w-4" /></span>
+      <ActivityTitle view={view} />
+      <ChevronDown className="mt-1 h-5 w-5 text-muted-foreground transition group-open:rotate-180 group-hover:text-accent" />
     </summary>
     <div className="absolute left-0 top-full z-30 mt-3 w-72 overflow-hidden rounded-2xl border border-border bg-white p-2 shadow-2xl">
-      <button type="button" onClick={() => choose("delivery")} className="flex min-h-12 w-full items-center justify-between rounded-xl px-3 text-left text-sm transition hover:bg-muted"><span><strong className="block">Nhật ký vận hành</strong><span className="mt-0.5 block text-[11px] text-muted-foreground">Các lượt bot gửi Zalo</span></span>{view === "delivery" && <Check className="h-4 w-4 text-accent" />}</button>
-      <button type="button" onClick={() => choose("model")} className="flex min-h-12 w-full items-center justify-between rounded-xl px-3 text-left text-sm transition hover:bg-muted"><span><strong className="block">Nhật ký gọi model</strong><span className="mt-0.5 block text-[11px] text-muted-foreground">Request, response và kết quả gửi</span></span>{view === "model" && <Check className="h-4 w-4 text-accent" />}</button>
+      {views.includes("delivery") && <button type="button" onClick={() => choose("delivery")} className="flex min-h-12 w-full items-center justify-between rounded-xl px-3 text-left text-sm transition hover:bg-muted"><span><strong className="block">Nhật ký vận hành</strong><span className="mt-0.5 block text-[11px] text-muted-foreground">Các lượt bot gửi Zalo</span></span>{view === "delivery" && <Check className="h-4 w-4 text-accent" />}</button>}
+      {views.includes("model") && <button type="button" onClick={() => choose("model")} className="flex min-h-12 w-full items-center justify-between rounded-xl px-3 text-left text-sm transition hover:bg-muted"><span><strong className="block">Nhật ký gọi model</strong><span className="mt-0.5 block text-[11px] text-muted-foreground">Request, response và kết quả gửi</span></span>{view === "model" && <Check className="h-4 w-4 text-accent" />}</button>}
     </div>
   </details>;
 }
 
 export function ActivityPage() {
+  const { can } = usePermissions();
   const [params, setParams] = useSearchParams();
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
-  const view: ActivityView = params.get("view") === "model" ? "model" : "delivery";
+  const canReadDelivery = can(PERMISSIONS.activityRead);
+  const canReadModel = can(PERMISSIONS.modelActivityRead);
+  const views: ActivityView[] = [
+    ...(canReadDelivery ? ["delivery" as const] : []),
+    ...(canReadModel ? ["model" as const] : []),
+  ];
+  const requestedView: ActivityView = params.get("view") === "model" ? "model" : "delivery";
+  const view: ActivityView = views.includes(requestedView) ? requestedView : views[0];
   const rawStatus = params.get("status") ?? "";
   const deliveryStatus = (["SENT", "FAILED"] as string[]).includes(rawStatus) ? rawStatus as DeliveryStatus : "";
   const modelStatus = (["PROCESSING", "SUCCEEDED", "FAILED"] as string[]).includes(rawStatus) ? rawStatus as ModelCallStatus : "";
@@ -51,14 +66,14 @@ export function ActivityPage() {
     queryKey: ["activity", debouncedSearch, deliveryStatus, today, page],
     queryFn: () => api<DeliveryLogList>(`/activity${queryString({ search: debouncedSearch, status: deliveryStatus, today: today ? 1 : undefined, page, limit: 25 })}`),
     placeholderData: (previousData) => previousData,
-    enabled: view === "delivery",
+    enabled: view === "delivery" && canReadDelivery,
   });
   const modelCalls = useQuery({
     queryKey: ["model-call-activity", debouncedSearch, modelStatus, page],
     queryFn: () => api<ModelCallLogList>(`/activity/model-calls${queryString({ search: debouncedSearch, status: modelStatus, page, limit: 25 })}`),
     placeholderData: (previousData) => previousData,
     refetchInterval: 30_000,
-    enabled: view === "model",
+    enabled: view === "model" && canReadModel,
   });
 
   const changeView = (next: ActivityView) => {
@@ -79,7 +94,7 @@ export function ActivityPage() {
 
   return <div className="mx-auto max-w-[1500px]">
     <Link to="/" className="mb-5 inline-flex items-center gap-2 text-sm font-medium text-muted-foreground transition hover:text-accent"><ArrowLeft className="h-4 w-4" />Về tổng quan</Link>
-    <PageHeader eyebrow="Operations log" heading={<ActivityHeading view={view} onChange={changeView} />} description={view === "model" ? "Theo dõi context gửi tới AI, response phân loại và việc bot có thực sự gửi Zalo hay không. Dữ liệu được giữ 7 ngày." : "Theo dõi lượt bot gửi thành công hoặc thất bại mà không lưu nội dung tin nhắn. Dữ liệu được giữ 7 ngày."} />
+    <PageHeader eyebrow="Operations log" heading={<ActivityHeading view={view} views={views} onChange={changeView} />} description={view === "model" ? "Theo dõi context gửi tới AI, response phân loại và việc bot có thực sự gửi Zalo hay không. Dữ liệu được giữ 7 ngày." : "Theo dõi lượt bot gửi thành công hoặc thất bại mà không lưu nội dung tin nhắn. Dữ liệu được giữ 7 ngày."} />
     <section className="card overflow-hidden">
       <div className="flex flex-col gap-3 border-b border-border p-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="relative w-full max-w-xl"><Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input className="field pl-11" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={view === "model" ? "Tìm khách hàng, model hoặc lỗi..." : "Tìm khách hàng hoặc nguyên nhân lỗi..."} />{search && <button className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1 text-muted-foreground hover:bg-muted" onClick={() => setSearch("")}><X className="h-4 w-4" /></button>}</div>

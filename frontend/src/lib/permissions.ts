@@ -16,6 +16,7 @@ export const PERMISSIONS = {
   debtReminderRead: "debt_reminder:read",
   debtReminderUpdate: "debt_reminder:update",
   activityRead: "activity:read",
+  modelActivityRead: "model_activity:read",
   userRead: "user:read",
   userCreate: "user:create",
   userUpdate: "user:update",

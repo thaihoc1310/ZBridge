@@ -22,7 +22,7 @@ type NavItem = {
 const navItems: NavItem[] = [
   { to: "/", label: "Tổng quan", icon: LayoutDashboard, end: true, permission: PERMISSIONS.dashboardRead },
   { to: "/customers", label: "Khách hàng", icon: UsersRound, permission: PERMISSIONS.customerRead },
-  { to: "/activity", label: "Nhật ký", icon: ScrollText, permission: PERMISSIONS.activityRead },
+  { to: "/activity", label: "Nhật ký", icon: ScrollText, permission: [PERMISSIONS.activityRead, PERMISSIONS.modelActivityRead] },
   { to: "/bot", label: "Zalo Bot", icon: Bot, permission: PERMISSIONS.botRead },
   { to: "/mention-settings", label: "Tag tên", icon: AtSign, permission: [PERMISSIONS.mentionPolicyManage, PERMISSIONS.staffManage, PERMISSIONS.mentionBulkApply] },
   { to: "/users", label: "Người dùng", icon: ShieldCheck, permission: PERMISSIONS.userRead },

@@ -35,6 +35,7 @@ DEBT_REMINDER_READ = "debt_reminder:read"
 DEBT_REMINDER_UPDATE = "debt_reminder:update"
 
 ACTIVITY_READ = "activity:read"
+MODEL_ACTIVITY_READ = "model_activity:read"
 
 USER_READ = "user:read"
 USER_CREATE = "user:create"
@@ -84,7 +85,8 @@ PERMISSION_CATALOG: tuple[PermissionDef, ...] = (
     ),
     PermissionDef(DEBT_REMINDER_READ, "Xem cấu hình nhắc công nợ", CATEGORY_DEBT),
     PermissionDef(DEBT_REMINDER_UPDATE, "Thay đổi cấu hình nhắc công nợ", CATEGORY_DEBT),
-    PermissionDef(ACTIVITY_READ, "Xem nhật ký gửi tin", CATEGORY_ACTIVITY),
+    PermissionDef(ACTIVITY_READ, "Xem nhật ký vận hành", CATEGORY_ACTIVITY),
+    PermissionDef(MODEL_ACTIVITY_READ, "Xem nhật ký gọi model", CATEGORY_ACTIVITY),
     PermissionDef(USER_READ, "Xem danh sách người dùng", CATEGORY_ADMIN),
     PermissionDef(USER_CREATE, "Tạo người dùng mới", CATEGORY_ADMIN),
     PermissionDef(USER_UPDATE, "Sửa người dùng, đổi vai trò, đặt lại mật khẩu", CATEGORY_ADMIN),

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_permission
-from app.core.permissions import ACTIVITY_READ
+from app.core.permissions import ACTIVITY_READ, MODEL_ACTIVITY_READ
 from app.db.database import get_db
 from app.models import User
 from app.models.entities import DeliveryStatus, ModelCallStatus
@@ -33,7 +33,7 @@ async def model_calls(
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=25, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    _actor: User = Depends(require_permission(ACTIVITY_READ)),
+    _actor: User = Depends(require_permission(MODEL_ACTIVITY_READ)),
 ) -> ModelCallLogListResponse:
     return await list_model_call_logs(
         db, search=search, status=status, page=page, limit=limit

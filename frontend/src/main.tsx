@@ -24,6 +24,7 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, sta
 const LANDING_FALLBACKS: Array<[PermissionCode, string]> = [
   [PERMISSIONS.customerRead, "/customers"],
   [PERMISSIONS.activityRead, "/activity"],
+  [PERMISSIONS.modelActivityRead, "/activity?view=model"],
   [PERMISSIONS.botRead, "/bot"],
   [PERMISSIONS.mentionPolicyManage, "/mention-settings"],
   [PERMISSIONS.staffManage, "/mention-settings"],
@@ -68,7 +69,7 @@ function App() {
       <Route path="/bot" element={<Guard code={PERMISSIONS.botRead}><BotPage /></Guard>} />
       <Route path="/customers" element={<Guard code={PERMISSIONS.customerRead}><CustomersPage /></Guard>} />
       <Route path="/customers/:id" element={<Guard code={PERMISSIONS.customerRead}><CustomerDetailPage /></Guard>} />
-      <Route path="/activity" element={<Guard code={PERMISSIONS.activityRead}><ActivityPage /></Guard>} />
+      <Route path="/activity" element={<Guard code={[PERMISSIONS.activityRead, PERMISSIONS.modelActivityRead]}><ActivityPage /></Guard>} />
       <Route path="/users" element={<Guard code={PERMISSIONS.userRead}><UsersPage /></Guard>} />
       <Route path="/mention-settings" element={<Guard code={[PERMISSIONS.mentionPolicyManage, PERMISSIONS.staffManage, PERMISSIONS.mentionBulkApply]}><MentionSettingsPage /></Guard>} />
       <Route path="/groups" element={<Navigate to="/customers" replace />} />
