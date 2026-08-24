@@ -2,14 +2,14 @@ import math
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.errors import AppError
-from app.models import Customer, DebtReminderAutomation, DebtReminderRun, ZaloGroup
-from app.models.entities import DebtReminderStatus
+from app.models import Customer, ZaloGroup
 from app.schemas.api import CustomerListResponse, CustomerResponse, CustomerUpdate
+from app.services.debt_reminder_service import sync_debt_reminder_state
 from app.services.google_sheets_service import SheetExportError, google_sheets
 
 
@@ -108,29 +108,19 @@ async def update_customer(
     if customer is None:
         raise AppError("CUSTOMER_NOT_FOUND", "Không tìm thấy khách hàng.", 404)
     fields = data.model_fields_set
+    debt_changed = (
+        "has_debt" in fields
+        and data.has_debt is not None
+        and data.has_debt != customer.has_debt
+    )
+    debt_file_changed = "debt_file_url" in fields and data.debt_file_url != (
+        customer.debt_file_url or ""
+    )
+    now = datetime.now(UTC)
 
-    if "has_debt" in fields and data.has_debt is not None and data.has_debt != customer.has_debt:
+    if debt_changed:
         if customer.has_debt and not data.has_debt:
-            now = datetime.now(UTC)
             customer.last_debt_paid_at = now
-            automation_ids = select(DebtReminderAutomation.id).where(
-                DebtReminderAutomation.customer_id == customer.id
-            )
-            await db.execute(
-                update(DebtReminderRun)
-                .where(
-                    DebtReminderRun.automation_id.in_(automation_ids),
-                    DebtReminderRun.status.in_(
-                        [DebtReminderStatus.PENDING, DebtReminderStatus.PROCESSING]
-                    ),
-                )
-                .values(
-                    status=DebtReminderStatus.CANCELLED,
-                    claimed_at=None,
-                    processed_at=now,
-                    error_message="Khách hàng đã được đánh dấu thanh toán.",
-                )
-            )
         customer.has_debt = data.has_debt
 
     if "note" in fields:
@@ -145,6 +135,19 @@ async def update_customer(
             except SheetExportError as exc:
                 raise AppError(exc.code, exc.message, 422) from exc
         customer.debt_file_url = data.debt_file_url
+
+    if debt_changed or debt_file_changed:
+        if not customer.has_debt:
+            inactive_reason = "Khách hàng đã được đánh dấu thanh toán."
+        else:
+            inactive_reason = "Khách hàng chưa có file công nợ."
+        await sync_debt_reminder_state(
+            db,
+            customer,
+            now=now,
+            create_if_missing=customer.has_debt or bool(customer.debt_file_url),
+            inactive_reason=inactive_reason,
+        )
 
     await db.commit()
     return customer_response(await get_customer(db, customer_id))

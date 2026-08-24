@@ -146,6 +146,71 @@ async def test_bulk_debt_schedule_preserves_message_and_cancels_old_run() -> Non
     await engine.dispose()
 
 
+async def test_bulk_debt_schedule_activates_owing_customers_and_pauses_blocked_ones() -> None:
+    engine, sessions, _customer_id, _followup_id, _run_id = await _database()
+    async with sessions() as db:
+        account_id = await db.scalar(select(ZaloAccount.id))
+        assert account_id is not None
+        customers = []
+        for suffix, has_debt, sheet_url in (
+            ("active", True, "https://docs.google.com/spreadsheets/d/active/edit"),
+            ("missing-sheet", True, None),
+            ("paid", False, "https://docs.google.com/spreadsheets/d/paid/edit"),
+        ):
+            group = ZaloGroup(
+                zalo_account_id=account_id,
+                zalo_group_id=f"bulk-{suffix}",
+                name=f"Công ty {suffix}",
+                member_count=2,
+                is_available=True,
+                last_synced_at=datetime(2026, 8, 24, 3, tzinfo=UTC),
+            )
+            db.add(group)
+            await db.flush()
+            customer = Customer(
+                zalo_group_id=group.id,
+                has_debt=has_debt,
+                debt_file_url=sheet_url,
+            )
+            db.add(customer)
+            await db.flush()
+            customers.append(customer)
+        await db.commit()
+
+        schedule = DebtReminderBulkSchedule(
+            day_of_month=28, repeat_interval_days=5, send_time="10:30"
+        )
+        preview = await preview_bulk_debt_reminders(db, schedule)
+        new_rows = [row for row in preview.rows if row.customer_id in {c.id for c in customers}]
+        assert all(row.has_automation is False for row in new_rows)
+        assert all(row.enabled is True for row in new_rows)
+        assert all(row.current_day_of_month == 25 for row in new_rows)
+
+        result = await apply_bulk_debt_reminders(
+            db,
+            DebtReminderBulkApply(
+                **schedule.model_dump(), customer_ids=[customer.id for customer in customers]
+            ),
+        )
+        assert result.created == 3
+
+    async with sessions() as db:
+        automations = {
+            automation.customer_id: automation
+            for automation in await db.scalars(
+                select(DebtReminderAutomation).where(
+                    DebtReminderAutomation.customer_id.in_([customer.id for customer in customers])
+                )
+            )
+        }
+        active, missing_sheet, paid = customers
+        assert all(automation.enabled is True for automation in automations.values())
+        assert automations[active.id].next_run_at is not None
+        assert automations[missing_sheet.id].next_run_at is None
+        assert automations[paid.id].next_run_at is None
+    await engine.dispose()
+
+
 async def test_debt_history_expands_the_three_delivery_steps() -> None:
     engine, sessions, _customer_id, _followup_id, _run_id = await _database()
     async with sessions() as db:

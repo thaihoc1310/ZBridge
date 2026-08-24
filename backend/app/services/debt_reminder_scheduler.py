@@ -1,10 +1,10 @@
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from app.core.alerts import Severity
@@ -17,13 +17,118 @@ from app.models.entities import (
     DeliveryType,
 )
 from app.services.alerting import customer_link, report_async
-from app.services.debt_reminder_service import next_debt_reminder_run
+from app.services.debt_reminder_service import (
+    DEFAULT_MESSAGE_PARTS,
+    next_debt_reminder_run,
+    next_monthly_run,
+)
 from app.services.delivery_service import add_delivery_log
 from app.services.google_sheets_service import SheetExportError, google_sheets
 from app.services.zalo_gateway_client import GatewayError, zalo_gateway
 
 logger = logging.getLogger("zbridge.debt_reminder_scheduler")
 MAX_ATTEMPTS = 5
+
+
+async def _reconcile_debt_reminder_states(db, now: datetime) -> None:
+    """Heal legacy switches and keep schedules derived from customer state."""
+    missing_customers = list(
+        (
+            await db.scalars(
+                select(Customer)
+                .outerjoin(DebtReminderAutomation)
+                .where(DebtReminderAutomation.id.is_(None))
+                .limit(1000)
+                .with_for_update(of=Customer, skip_locked=True)
+            )
+        ).all()
+    )
+    for customer in missing_customers:
+        runnable = customer.has_debt and bool(customer.debt_file_url)
+        db.add(
+            DebtReminderAutomation(
+                customer_id=customer.id,
+                enabled=True,
+                day_of_month=25,
+                repeat_interval_days=3,
+                send_time=time(9, 0),
+                message_parts=DEFAULT_MESSAGE_PARTS,
+                next_run_at=(
+                    next_monthly_run(25, time(9, 0), now=now) if runnable else None
+                ),
+            )
+        )
+    if missing_customers:
+        await db.flush()
+
+    has_sheet = and_(
+        Customer.debt_file_url.is_not(None), Customer.debt_file_url != ""
+    )
+    runnable = and_(Customer.has_debt.is_(True), has_sheet)
+    inactive = or_(Customer.has_debt.is_(False), ~has_sheet)
+
+    active_run_exists = (
+        select(DebtReminderRun.id)
+        .where(
+            DebtReminderRun.automation_id == DebtReminderAutomation.id,
+            DebtReminderRun.status.in_(
+                [DebtReminderStatus.PENDING, DebtReminderStatus.PROCESSING]
+            ),
+        )
+        .exists()
+    )
+
+    automations = list(
+        (
+            await db.scalars(
+                select(DebtReminderAutomation)
+                .join(Customer)
+                .options(selectinload(DebtReminderAutomation.customer))
+                .where(
+                    or_(
+                        DebtReminderAutomation.enabled.is_(False),
+                        and_(runnable, DebtReminderAutomation.next_run_at.is_(None)),
+                        and_(
+                            inactive,
+                            or_(
+                                DebtReminderAutomation.next_run_at.is_not(None),
+                                active_run_exists,
+                            ),
+                        ),
+                    )
+                )
+                .with_for_update(of=DebtReminderAutomation, skip_locked=True)
+            )
+        ).all()
+    )
+    inactive_ids = []
+    for automation in automations:
+        automation.enabled = True
+        customer = automation.customer
+        if customer.has_debt and customer.debt_file_url:
+            if automation.next_run_at is None:
+                automation.next_run_at = next_monthly_run(
+                    automation.day_of_month, automation.send_time, now=now
+                )
+        else:
+            automation.next_run_at = None
+            inactive_ids.append(automation.id)
+    if inactive_ids:
+        await db.execute(
+            update(DebtReminderRun)
+            .where(
+                DebtReminderRun.automation_id.in_(inactive_ids),
+                DebtReminderRun.status.in_(
+                    [DebtReminderStatus.PENDING, DebtReminderStatus.PROCESSING]
+                ),
+            )
+            .values(
+                status=DebtReminderStatus.CANCELLED,
+                claimed_at=None,
+                processed_at=now,
+                error_message="Nhắc công nợ tạm dừng theo trạng thái khách hàng.",
+            )
+        )
 
 
 async def claim_due_debt_reminders() -> list[uuid.UUID]:
@@ -41,13 +146,18 @@ async def claim_due_debt_reminders() -> list[uuid.UUID]:
                 retry_at=now,
             )
         )
+        await _reconcile_debt_reminder_states(db, now)
         automations = list(
             (
                 await db.scalars(
                     select(DebtReminderAutomation)
+                    .join(Customer)
                     .options(selectinload(DebtReminderAutomation.customer))
                     .where(
                         DebtReminderAutomation.enabled.is_(True),
+                        Customer.has_debt.is_(True),
+                        Customer.debt_file_url.is_not(None),
+                        Customer.debt_file_url != "",
                         DebtReminderAutomation.next_run_at.is_not(None),
                         DebtReminderAutomation.next_run_at <= now,
                     )

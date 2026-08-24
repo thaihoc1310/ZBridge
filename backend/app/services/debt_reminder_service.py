@@ -11,7 +11,6 @@ from app.core.errors import AppError
 from app.models import Customer, DebtReminderAutomation, DebtReminderRun
 from app.models.entities import DebtReminderStatus
 from app.schemas.api import DebtReminderResponse, DebtReminderUpdate
-from app.services.customer_service import get_customer
 
 LOCAL_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 DEFAULT_MESSAGE_PARTS = [
@@ -113,7 +112,10 @@ async def _response(
     if automation is None:
         return DebtReminderResponse(
             customer_id=customer_id,
-            enabled=False,
+            # Every customer has an effective default configuration. Whether it
+            # is currently scheduled is determined by debt state + Sheet, not a
+            # separate user-facing switch.
+            enabled=True,
             day_of_month=25,
             repeat_interval_days=3,
             send_time="09:00",
@@ -139,13 +141,78 @@ async def _response(
 async def get_debt_reminder(
     db: AsyncSession, customer_id: uuid.UUID
 ) -> DebtReminderResponse:
-    await get_customer(db, customer_id)
+    if await db.scalar(select(Customer.id).where(Customer.id == customer_id)) is None:
+        raise AppError("CUSTOMER_NOT_FOUND", "Không tìm thấy khách hàng.", 404)
     automation = await db.scalar(
         select(DebtReminderAutomation).where(
             DebtReminderAutomation.customer_id == customer_id
         )
     )
     return await _response(db, customer_id, automation)
+
+
+async def sync_debt_reminder_state(
+    db: AsyncSession,
+    customer: Customer,
+    *,
+    now: datetime | None = None,
+    create_if_missing: bool = False,
+    inactive_reason: str = "Nhắc công nợ đang tạm dừng.",
+) -> DebtReminderAutomation | None:
+    """Keep the persisted schedule in step with debt state and Sheet readiness.
+
+    The configuration itself is always enabled. A customer is runnable only
+    while they owe money and have a verified Sheet. Marking them paid or
+    removing the Sheet pauses the schedule without discarding its settings.
+    """
+    automation = await db.scalar(
+        select(DebtReminderAutomation)
+        .where(DebtReminderAutomation.customer_id == customer.id)
+        .with_for_update()
+    )
+    if automation is None and create_if_missing:
+        automation = DebtReminderAutomation(
+            customer_id=customer.id,
+            enabled=True,
+            day_of_month=25,
+            repeat_interval_days=3,
+            send_time=time(9, 0),
+            message_parts=DEFAULT_MESSAGE_PARTS,
+            next_run_at=None,
+        )
+        db.add(automation)
+        await db.flush()
+    if automation is None:
+        return None
+
+    automation.enabled = True
+    runnable = customer.has_debt and bool(customer.debt_file_url)
+    if runnable:
+        if automation.next_run_at is None:
+            automation.next_run_at = next_monthly_run(
+                automation.day_of_month,
+                automation.send_time,
+                now=_as_utc(now or datetime.now(UTC)),
+            )
+        return automation
+
+    automation.next_run_at = None
+    await db.execute(
+        update(DebtReminderRun)
+        .where(
+            DebtReminderRun.automation_id == automation.id,
+            DebtReminderRun.status.in_(
+                [DebtReminderStatus.PENDING, DebtReminderStatus.PROCESSING]
+            ),
+        )
+        .values(
+            status=DebtReminderStatus.CANCELLED,
+            claimed_at=None,
+            processed_at=_as_utc(now or datetime.now(UTC)),
+            error_message=inactive_reason,
+        )
+    )
+    return automation
 
 
 async def save_debt_reminder(
@@ -163,10 +230,10 @@ async def save_debt_reminder(
     )
     if customer is None:
         raise AppError("CUSTOMER_NOT_FOUND", "Không tìm thấy khách hàng.", 404)
-    if data.enabled and not customer.debt_file_url:
+    if not customer.debt_file_url:
         raise AppError(
             "CUSTOMER_FOLDER_REQUIRED",
-            "Hãy thêm file công nợ (Google Sheet) trước khi bật nhắc công nợ.",
+            "Hãy thêm file công nợ (Google Sheet) trước khi lưu nhắc công nợ.",
             422,
         )
     automation = await db.scalar(
@@ -179,7 +246,7 @@ async def save_debt_reminder(
     if automation is None:
         automation = DebtReminderAutomation(
             customer_id=customer_id,
-            enabled=data.enabled,
+            enabled=True,
             day_of_month=data.day_of_month,
             repeat_interval_days=data.repeat_interval_days,
             send_time=parsed_time,
@@ -188,7 +255,7 @@ async def save_debt_reminder(
         db.add(automation)
         await db.flush()
     else:
-        automation.enabled = data.enabled
+        automation.enabled = True
         automation.day_of_month = data.day_of_month
         automation.repeat_interval_days = data.repeat_interval_days
         automation.send_time = parsed_time
@@ -209,7 +276,7 @@ async def save_debt_reminder(
             )
         )
     effective_now = _as_utc(now or datetime.now(UTC))
-    if data.enabled:
+    if customer.has_debt:
         next_run_at = next_monthly_run(
             data.day_of_month, parsed_time, now=effective_now
         )

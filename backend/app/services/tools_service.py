@@ -168,11 +168,17 @@ async def preview_bulk_debt_reminders(
     rows = []
     for customer in customers:
         automation = customer.debt_reminder
-        current_time = automation.send_time.strftime("%H:%M") if automation else None
-        will_change = automation is None or (
-            automation.day_of_month != data.day_of_month
+        current_day = automation.day_of_month if automation else 25
+        current_repeat = automation.repeat_interval_days if automation else 3
+        current_time = automation.send_time.strftime("%H:%M") if automation else "09:00"
+        runnable = customer.has_debt and bool(customer.debt_file_url)
+        will_change = (
+            automation is None
+            or automation.day_of_month != data.day_of_month
             or automation.repeat_interval_days != data.repeat_interval_days
             or current_time != data.send_time
+            or not automation.enabled
+            or runnable != (automation.next_run_at is not None)
         )
         rows.append(
             DebtReminderBulkPreviewRow(
@@ -182,11 +188,9 @@ async def preview_bulk_debt_reminders(
                 has_debt=customer.has_debt,
                 has_debt_file=bool(customer.debt_file_url),
                 has_automation=automation is not None,
-                enabled=automation.enabled if automation else False,
-                current_day_of_month=automation.day_of_month if automation else None,
-                current_repeat_interval_days=(
-                    automation.repeat_interval_days if automation else None
-                ),
+                enabled=True,
+                current_day_of_month=current_day,
+                current_repeat_interval_days=current_repeat,
                 current_send_time=current_time,
                 will_change=will_change,
             )
@@ -223,24 +227,33 @@ async def apply_bulk_debt_reminders(
             skipped.append(customer.group.name)
             continue
         automation = customer.debt_reminder
+        runnable = customer.has_debt and bool(customer.debt_file_url)
         if automation is None:
             automation = DebtReminderAutomation(
                 customer_id=customer.id,
-                enabled=False,
+                enabled=True,
                 day_of_month=data.day_of_month,
                 repeat_interval_days=data.repeat_interval_days,
                 send_time=parsed_time,
                 message_parts=DEFAULT_MESSAGE_PARTS,
-                next_run_at=None,
+                next_run_at=(
+                    next_monthly_run(data.day_of_month, parsed_time, now=now)
+                    if runnable
+                    else None
+                ),
             )
             db.add(automation)
             created += 1
             continue
-        if (
+        schedule_unchanged = (
             automation.day_of_month == data.day_of_month
             and automation.repeat_interval_days == data.repeat_interval_days
             and automation.send_time == parsed_time
-        ):
+        )
+        state_unchanged = (
+            automation.enabled and runnable == (automation.next_run_at is not None)
+        )
+        if schedule_unchanged and state_unchanged:
             unchanged += 1
             continue
         result = await db.execute(
@@ -262,27 +275,27 @@ async def apply_bulk_debt_reminders(
         automation.day_of_month = data.day_of_month
         automation.repeat_interval_days = data.repeat_interval_days
         automation.send_time = parsed_time
-        if automation.enabled:
+        automation.enabled = True
+        if runnable:
             next_run_at = next_monthly_run(data.day_of_month, parsed_time, now=now)
-            if customer.has_debt:
-                last_sent = await db.scalar(
-                    select(DebtReminderRun)
-                    .where(
-                        DebtReminderRun.automation_id == automation.id,
-                        DebtReminderRun.status == DebtReminderStatus.SENT,
-                    )
-                    .order_by(DebtReminderRun.scheduled_for.desc())
-                    .limit(1)
+            last_sent = await db.scalar(
+                select(DebtReminderRun)
+                .where(
+                    DebtReminderRun.automation_id == automation.id,
+                    DebtReminderRun.status == DebtReminderStatus.SENT,
                 )
-                if last_sent is not None:
-                    next_run_at = next_debt_reminder_run(
-                        data.day_of_month,
-                        parsed_time,
-                        data.repeat_interval_days,
-                        last_sent.scheduled_for,
-                        has_debt=True,
-                        now=now,
-                    )
+                .order_by(DebtReminderRun.scheduled_for.desc())
+                .limit(1)
+            )
+            if last_sent is not None:
+                next_run_at = next_debt_reminder_run(
+                    data.day_of_month,
+                    parsed_time,
+                    data.repeat_interval_days,
+                    last_sent.scheduled_for,
+                    has_debt=True,
+                    now=now,
+                )
             automation.next_run_at = next_run_at
         else:
             automation.next_run_at = None

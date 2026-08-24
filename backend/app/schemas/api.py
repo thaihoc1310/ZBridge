@@ -386,7 +386,10 @@ DebtReminderMessagePart = DebtReminderTextPart | DebtReminderMentionPart
 
 
 class DebtReminderUpdate(BaseModel):
-    enabled: bool = True
+    # Kept in the payload for backwards compatibility; debt state is the only
+    # switch exposed by the product, so a reminder configuration cannot be
+    # disabled independently.
+    enabled: Literal[True] = True
     day_of_month: int = Field(default=25, ge=1, le=31)
     repeat_interval_days: int = Field(default=3, ge=1, le=31)
     send_time: str = Field(default="09:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")

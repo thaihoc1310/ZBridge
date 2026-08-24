@@ -333,16 +333,20 @@ export function DebtReminderModal({
       ) : (
         <div className="space-y-6">
           <div
-            className={`flex w-full items-center justify-between gap-4 rounded-xl border p-4 ${hasDebt ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-slate-50"}`}
+            className={`flex w-full items-center justify-between gap-4 rounded-xl border p-4 ${hasDebt && hasDebtFile ? "border-emerald-200 bg-emerald-50" : hasDebt ? "border-amber-200 bg-amber-50" : "border-slate-200 bg-slate-50"}`}
           >
             <span>
               <span className="block text-sm font-semibold">Tự động nhắc hàng tháng</span>
               <span className="mt-1 block text-xs text-muted-foreground">
-                Trạng thái tự động lấy theo công nợ của khách hàng.
+                Trạng thái tự động lấy theo công nợ và file Google Sheet của khách hàng.
               </span>
             </span>
-            <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${hasDebt ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-600"}`}>
-              {hasDebt ? "Đang hoạt động · Còn nợ" : "Tạm dừng · Đã thanh toán"}
+            <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${hasDebt && hasDebtFile ? "bg-emerald-600 text-white" : hasDebt ? "bg-amber-500 text-white" : "bg-slate-200 text-slate-600"}`}>
+              {hasDebt && hasDebtFile
+                ? "Đang hoạt động · Còn nợ"
+                : hasDebt
+                  ? "Chưa thể chạy · Thiếu Google Sheet"
+                  : "Tạm ngừng · Đã thanh toán"}
             </span>
           </div>
 

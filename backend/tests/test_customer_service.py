@@ -65,17 +65,14 @@ async def test_customer_fields_and_debt_paid_timestamp(monkeypatch) -> None:
         assert owing.note == "Cần đối soát cuối tháng"
         assert owing.debt_file_url == "https://docs.google.com/spreadsheets/d/example/edit"
 
-        automation = DebtReminderAutomation(
-            customer_id=group.id,
-            enabled=True,
-            day_of_month=25,
-            repeat_interval_days=3,
-            send_time=datetime.now(UTC).time().replace(tzinfo=None),
-            message_parts=[{"type": "text", "text": "Nhắc nợ"}],
-            next_run_at=datetime.now(UTC),
+        automation = await db.scalar(
+            select(DebtReminderAutomation).where(
+                DebtReminderAutomation.customer_id == group.id
+            )
         )
-        db.add(automation)
-        await db.flush()
+        assert automation is not None
+        assert automation.enabled is True
+        assert automation.next_run_at is not None
         active_run = DebtReminderRun(
             automation_id=automation.id,
             scheduled_for=datetime.now(UTC),
@@ -90,8 +87,30 @@ async def test_customer_fields_and_debt_paid_timestamp(monkeypatch) -> None:
         assert paid.has_debt is False
         assert paid.last_debt_paid_at is not None
         await db.refresh(active_run)
+        await db.refresh(automation)
         assert active_run.status == DebtReminderStatus.CANCELLED
         assert active_run.claimed_at is None
+        assert automation.enabled is True
+        assert automation.next_run_at is None
+
+        owing_again = await update_customer(db, group.id, CustomerUpdate(has_debt=True))
+        assert owing_again.has_debt is True
+        await db.refresh(automation)
+        assert automation.next_run_at is not None
+
+        await update_customer(db, group.id, CustomerUpdate(debt_file_url=""))
+        await db.refresh(automation)
+        assert automation.next_run_at is None
+
+        await update_customer(
+            db,
+            group.id,
+            CustomerUpdate(
+                debt_file_url="https://docs.google.com/spreadsheets/d/example/edit"
+            ),
+        )
+        await db.refresh(automation)
+        assert automation.next_run_at is not None
 
         db.add(
             BotDeliveryLog(

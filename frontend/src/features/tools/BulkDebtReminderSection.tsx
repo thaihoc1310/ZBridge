@@ -91,8 +91,9 @@ export function BulkDebtReminderSection() {
         <>
           <div className="rounded-xl border border-blue-100 bg-blue-50/70 p-4 text-sm text-slate-700">
             <strong>Chỉ ghi đè lịch gửi.</strong> Nội dung nhắc cuối cùng và
-            trạng thái bật/tắt của từng khách hàng được giữ nguyên. Khách chưa
-            có cấu hình sẽ được tạo ở trạng thái tắt.
+            cấu hình riêng của từng khách hàng được giữ nguyên. Lịch tự hoạt
+            động khi khách còn nợ và có Google Sheet; khi đã thanh toán thì tạm
+            ngừng nhưng không mất cấu hình.
           </div>
           <div className="grid gap-4 sm:grid-cols-3">
             <Field icon={CalendarClock} label="Ngày gửi hàng tháng">
@@ -202,7 +203,7 @@ export function BulkDebtReminderSection() {
                   <span className="mt-1 block text-xs text-muted-foreground">
                     {row.has_automation
                       ? `Hiện tại: ngày ${row.current_day_of_month}, mỗi ${row.current_repeat_interval_days} ngày, lúc ${row.current_send_time}`
-                      : "Chưa có cấu hình · sẽ tạo ở trạng thái tắt"}
+                      : `Đang dùng mặc định: ngày ${row.current_day_of_month}, mỗi ${row.current_repeat_interval_days} ngày, lúc ${row.current_send_time}`}
                   </span>
                   <span className="mt-1 flex flex-wrap gap-2 text-[11px]">
                     <em
@@ -210,7 +211,13 @@ export function BulkDebtReminderSection() {
                         row.has_debt ? "text-amber-700" : "text-emerald-700"
                       }
                     >
-                      {row.has_debt ? "Còn nợ" : "Đã thanh toán"}
+                      {row.has_debt
+                        ? row.has_debt_file
+                          ? row.has_automation
+                            ? "Còn nợ · đang hoạt động"
+                            : "Còn nợ · sẽ hoạt động sau khi áp"
+                          : "Còn nợ · chưa thể chạy"
+                        : "Đã thanh toán · tạm ngừng"}
                     </em>
                     {!row.has_debt_file && (
                       <em className="text-red-700">Chưa có Google Sheet</em>
