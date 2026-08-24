@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, ExternalLink, Filter, RefreshCw, Search, SlidersHorizontal, UsersRound, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError, queryString } from "../api/client";
 import type { Customer, CustomerList, SyncResult } from "../api/types";
@@ -10,6 +10,44 @@ import { DebtConfirmModal, DebtStatusOptions, DebtFileEditorModal, NoteEditorMod
 import { formatDate, initials } from "../lib/format";
 import { PERMISSIONS } from "../lib/permissions";
 import { usePermissions } from "../lib/session";
+
+type CustomerColumn = "customer" | "debtFile" | "debt" | "lastPaid" | "note";
+
+const COLUMN_WIDTH_STORAGE_KEY = "zbridge:customer-column-widths:v1";
+const DEFAULT_COLUMN_WIDTHS: Record<CustomerColumn, number> = {
+  customer: 360,
+  debtFile: 200,
+  debt: 230,
+  lastPaid: 170,
+  note: 220,
+};
+const MIN_COLUMN_WIDTHS: Record<CustomerColumn, number> = {
+  customer: 220,
+  debtFile: 150,
+  debt: 220,
+  lastPaid: 145,
+  note: 160,
+};
+
+function initialColumnWidths(): Record<CustomerColumn, number> {
+  try {
+    const stored = JSON.parse(localStorage.getItem(COLUMN_WIDTH_STORAGE_KEY) ?? "null") as
+      | Partial<Record<CustomerColumn, number>>
+      | null;
+    if (!stored) return DEFAULT_COLUMN_WIDTHS;
+    return Object.fromEntries(
+      (Object.keys(DEFAULT_COLUMN_WIDTHS) as CustomerColumn[]).map((column) => [
+        column,
+        Math.max(
+          MIN_COLUMN_WIDTHS[column],
+          Number(stored[column]) || DEFAULT_COLUMN_WIDTHS[column],
+        ),
+      ]),
+    ) as Record<CustomerColumn, number>;
+  } catch {
+    return DEFAULT_COLUMN_WIDTHS;
+  }
+}
 
 export function CustomersPage() {
   const [search, setSearch] = useState("");
@@ -23,7 +61,9 @@ export function CustomersPage() {
   const [noteCustomer, setNoteCustomer] = useState<Customer | null>(null);
   const [debtFileCustomer, setDebtFileCustomer] = useState<Customer | null>(null);
   const [debtConfirmation, setDebtConfirmation] = useState<DebtConfirmation | null>(null);
+  const [columnWidths, setColumnWidths] = useState(initialColumnWidths);
   const didAutoSync = useRef(false);
+  const stopColumnResize = useRef<(() => void) | null>(null);
   const queryClient = useQueryClient();
   const { can } = usePermissions();
   const canSync = can(PERMISSIONS.customerSync);
@@ -51,6 +91,46 @@ export function CustomersPage() {
   }, [canSync]);
   useEffect(() => { const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 250); return () => window.clearTimeout(timer); }, [search]);
   useEffect(() => setPage(1), [debouncedSearch, debt, availability]);
+  useEffect(() => {
+    localStorage.setItem(COLUMN_WIDTH_STORAGE_KEY, JSON.stringify(columnWidths));
+  }, [columnWidths]);
+  useEffect(() => () => stopColumnResize.current?.(), []);
+
+  const beginColumnResize = (
+    column: CustomerColumn,
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    stopColumnResize.current?.();
+    const startX = event.clientX;
+    const startWidth = columnWidths[column];
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    const onMove = (moveEvent: PointerEvent) => {
+      const width = Math.min(
+        720,
+        Math.max(MIN_COLUMN_WIDTHS[column], startWidth + moveEvent.clientX - startX),
+      );
+      setColumnWidths((current) => ({ ...current, [column]: width }));
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", cleanup);
+      window.removeEventListener("pointercancel", cleanup);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      stopColumnResize.current = null;
+    };
+    stopColumnResize.current = cleanup;
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", cleanup);
+    window.addEventListener("pointercancel", cleanup);
+  };
+  const tableMinWidth =
+    Object.values(columnWidths).reduce((total, width) => total + width, 0) + 48;
 
   return <div className="mx-auto max-w-[1600px]">
     <PageHeader eyebrow="Customer directory" title="Khách" highlight="hàng" description="Quản lý công nợ, hồ sơ Drive và các tự động hóa theo từng khách hàng Zalo." action={canSync ? <Button variant="secondary" className="h-11 w-11 p-0" aria-label="Đồng bộ khách hàng" title="Đồng bộ khách hàng từ Zalo" disabled={sync.isPending} onClick={() => sync.mutate()}><RefreshCw className={`h-4 w-4 ${sync.isPending ? "animate-spin" : ""}`} /></Button> : undefined} />
@@ -72,8 +152,47 @@ export function CustomersPage() {
       </div>
 
       <div className="app-scrollbar overflow-x-auto">
-        <table className="w-full min-w-[1120px] table-fixed border-collapse text-left">
-          <thead><tr className="border-b border-border bg-muted/50 font-mono text-[10px] uppercase tracking-wider text-muted-foreground"><th className="w-[22%] px-6 py-4 font-medium">Khách hàng</th><th className="w-[15%] px-5 py-4 font-medium">File công nợ</th><th className="w-[25%] px-5 py-4 font-medium">Công nợ</th><th className="w-[16%] px-5 py-4 font-medium">Trả nợ gần nhất</th><th className="w-[22%] px-5 py-4 font-medium">Ghi chú</th><th className="w-12" /></tr></thead>
+        <table
+          className="w-full table-fixed border-collapse text-left"
+          style={{ minWidth: tableMinWidth }}
+        >
+          <colgroup>
+            <col style={{ width: columnWidths.customer }} />
+            <col style={{ width: columnWidths.debtFile }} />
+            <col style={{ width: columnWidths.debt }} />
+            <col style={{ width: columnWidths.lastPaid }} />
+            <col style={{ width: columnWidths.note }} />
+            <col style={{ width: 48 }} />
+          </colgroup>
+          <thead><tr className="border-b border-border bg-muted/50 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            {([
+              ["customer", "Khách hàng", "px-6"],
+              ["debtFile", "File công nợ", "px-5"],
+              ["debt", "Công nợ", "px-5"],
+              ["lastPaid", "Trả nợ gần nhất", "px-5"],
+              ["note", "Ghi chú", "px-5"],
+            ] as const).map(([column, label, padding]) => (
+              <th key={column} className={`relative py-4 font-medium ${padding}`}>
+                {label}
+                <button
+                  type="button"
+                  className="group/resize absolute -right-1 top-0 z-10 flex h-full w-3 touch-none cursor-col-resize items-center justify-center"
+                  aria-label={`Kéo để đổi độ rộng cột ${label}`}
+                  title="Kéo để đổi độ rộng · nhấp đúp để đặt lại"
+                  onPointerDown={(event) => beginColumnResize(column, event)}
+                  onDoubleClick={() =>
+                    setColumnWidths((current) => ({
+                      ...current,
+                      [column]: DEFAULT_COLUMN_WIDTHS[column],
+                    }))
+                  }
+                >
+                  <span className="h-5/6 w-px bg-border transition group-hover/resize:bg-accent" />
+                </button>
+              </th>
+            ))}
+            <th />
+          </tr></thead>
           <tbody>
             {customers.isLoading && <tr><td colSpan={6} className="px-6 py-14 text-center text-sm text-muted-foreground"><RefreshCw className="mx-auto mb-3 h-5 w-5 animate-spin text-accent" />Đang tải danh sách khách hàng...</td></tr>}
             {customers.data?.items.map((customer) => <tr key={customer.id} className="group border-b border-border transition-colors last:border-0 hover:bg-blue-50/40">

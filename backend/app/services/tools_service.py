@@ -32,7 +32,6 @@ from app.schemas.api import (
     DebtReminderRunStepResponse,
 )
 from app.services.debt_reminder_service import (
-    DEFAULT_MESSAGE_PARTS,
     next_debt_reminder_run,
     next_monthly_run,
 )
@@ -95,6 +94,7 @@ async def list_active_mention_followups(
                     due_at=task.due_at,
                     created_at=task.created_at,
                     attempt_count=task.attempt_count,
+                    send_count=task.send_count,
                     error_message=task.error_message,
                 )
                 for task in tasks
@@ -148,6 +148,7 @@ async def cancel_mention_followup(
         due_at=followup.due_at,
         created_at=followup.created_at,
         attempt_count=followup.attempt_count,
+        send_count=followup.send_count,
         error_message=followup.error_message,
     )
 
@@ -168,16 +169,20 @@ async def preview_bulk_debt_reminders(
     rows = []
     for customer in customers:
         automation = customer.debt_reminder
-        current_day = automation.day_of_month if automation else 25
-        current_repeat = automation.repeat_interval_days if automation else 3
-        current_time = automation.send_time.strftime("%H:%M") if automation else "09:00"
+        if automation is None:
+            raise AppError(
+                "DEBT_REMINDER_CONFIG_MISSING",
+                f"Khách hàng {customer.group.name} thiếu cấu hình nhắc công nợ.",
+                500,
+            )
+        current_day = automation.day_of_month
+        current_repeat = automation.repeat_interval_days
+        current_time = automation.send_time.strftime("%H:%M")
         runnable = customer.has_debt and bool(customer.debt_file_url)
         will_change = (
-            automation is None
-            or automation.day_of_month != data.day_of_month
+            automation.day_of_month != data.day_of_month
             or automation.repeat_interval_days != data.repeat_interval_days
             or current_time != data.send_time
-            or not automation.enabled
             or runnable != (automation.next_run_at is not None)
         )
         rows.append(
@@ -187,8 +192,6 @@ async def preview_bulk_debt_reminders(
                 is_available=customer.group.is_available,
                 has_debt=customer.has_debt,
                 has_debt_file=bool(customer.debt_file_url),
-                has_automation=automation is not None,
-                enabled=True,
                 current_day_of_month=current_day,
                 current_repeat_interval_days=current_repeat,
                 current_send_time=current_time,
@@ -220,7 +223,7 @@ async def apply_bulk_debt_reminders(
 
     parsed_time = time.fromisoformat(data.send_time)
     now = datetime.now(UTC)
-    created = updated_count = unchanged = cancelled = 0
+    updated_count = unchanged = cancelled = 0
     skipped: list[str] = []
     for customer in customers:
         if not customer.group.is_available:
@@ -229,30 +232,17 @@ async def apply_bulk_debt_reminders(
         automation = customer.debt_reminder
         runnable = customer.has_debt and bool(customer.debt_file_url)
         if automation is None:
-            automation = DebtReminderAutomation(
-                customer_id=customer.id,
-                enabled=True,
-                day_of_month=data.day_of_month,
-                repeat_interval_days=data.repeat_interval_days,
-                send_time=parsed_time,
-                message_parts=DEFAULT_MESSAGE_PARTS,
-                next_run_at=(
-                    next_monthly_run(data.day_of_month, parsed_time, now=now)
-                    if runnable
-                    else None
-                ),
+            raise AppError(
+                "DEBT_REMINDER_CONFIG_MISSING",
+                f"Khách hàng {customer.group.name} thiếu cấu hình nhắc công nợ.",
+                500,
             )
-            db.add(automation)
-            created += 1
-            continue
         schedule_unchanged = (
             automation.day_of_month == data.day_of_month
             and automation.repeat_interval_days == data.repeat_interval_days
             and automation.send_time == parsed_time
         )
-        state_unchanged = (
-            automation.enabled and runnable == (automation.next_run_at is not None)
-        )
+        state_unchanged = runnable == (automation.next_run_at is not None)
         if schedule_unchanged and state_unchanged:
             unchanged += 1
             continue
@@ -275,7 +265,6 @@ async def apply_bulk_debt_reminders(
         automation.day_of_month = data.day_of_month
         automation.repeat_interval_days = data.repeat_interval_days
         automation.send_time = parsed_time
-        automation.enabled = True
         if runnable:
             next_run_at = next_monthly_run(data.day_of_month, parsed_time, now=now)
             last_sent = await db.scalar(
@@ -302,7 +291,7 @@ async def apply_bulk_debt_reminders(
         updated_count += 1
     await db.commit()
     return DebtReminderBulkApplyResponse(
-        created=created,
+        created=0,
         updated=updated_count,
         unchanged=unchanged,
         cancelled_runs=cancelled,

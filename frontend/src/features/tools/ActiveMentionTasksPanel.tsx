@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   ChevronDown,
   Search,
   StopCircle,
@@ -86,12 +88,18 @@ export function ActiveMentionTasksPanel({ canCancel }: { canCancel: boolean }) {
         </select>
         <button
           type="button"
-          className="min-h-11 rounded-xl border border-border bg-white px-4 text-sm font-medium"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border bg-white text-muted-foreground transition hover:bg-muted/40 hover:text-foreground"
+          aria-label={direction === "asc" ? "Sắp xếp giảm dần" : "Sắp xếp tăng dần"}
+          title={direction === "asc" ? "Đang tăng dần · bấm để giảm dần" : "Đang giảm dần · bấm để tăng dần"}
           onClick={() =>
             setDirection((value) => (value === "asc" ? "desc" : "asc"))
           }
         >
-          {direction === "asc" ? "Tăng dần" : "Giảm dần"}
+          {direction === "asc" ? (
+            <ArrowUp className="h-4 w-4" />
+          ) : (
+            <ArrowDown className="h-4 w-4" />
+          )}
         </button>
       </div>
       {error && (
@@ -169,7 +177,7 @@ export function ActiveMentionTasksPanel({ canCancel }: { canCancel: boolean }) {
                                 Bắt đầu: {formatDate(task.created_at)}
                               </span>
                               <span>Chạy tiếp: {formatDate(task.due_at)}</span>
-                              <span>Đã thử: {task.attempt_count} lần</span>
+                              <span>Đã gửi: {task.send_count} lần</span>
                               <span className="font-mono">
                                 #{task.id.slice(0, 8)}
                               </span>

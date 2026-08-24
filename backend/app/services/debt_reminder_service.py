@@ -107,25 +107,12 @@ async def _latest_sent_run(
 async def _response(
     db: AsyncSession,
     customer_id: uuid.UUID,
-    automation: DebtReminderAutomation | None,
+    automation: DebtReminderAutomation,
 ) -> DebtReminderResponse:
-    if automation is None:
-        return DebtReminderResponse(
-            customer_id=customer_id,
-            # Every customer has an effective default configuration. Whether it
-            # is currently scheduled is determined by debt state + Sheet, not a
-            # separate user-facing switch.
-            enabled=True,
-            day_of_month=25,
-            repeat_interval_days=3,
-            send_time="09:00",
-            message_parts=DEFAULT_MESSAGE_PARTS,
-        )
     last_run = await _latest_run(db, automation.id)
     return DebtReminderResponse(
         id=automation.id,
         customer_id=customer_id,
-        enabled=automation.enabled,
         day_of_month=automation.day_of_month,
         repeat_interval_days=automation.repeat_interval_days,
         send_time=automation.send_time.strftime("%H:%M"),
@@ -148,6 +135,12 @@ async def get_debt_reminder(
             DebtReminderAutomation.customer_id == customer_id
         )
     )
+    if automation is None:
+        raise AppError(
+            "DEBT_REMINDER_CONFIG_MISSING",
+            "Khách hàng thiếu cấu hình nhắc công nợ.",
+            500,
+        )
     return await _response(db, customer_id, automation)
 
 
@@ -156,36 +149,26 @@ async def sync_debt_reminder_state(
     customer: Customer,
     *,
     now: datetime | None = None,
-    create_if_missing: bool = False,
     inactive_reason: str = "Nhắc công nợ đang tạm dừng.",
-) -> DebtReminderAutomation | None:
+) -> DebtReminderAutomation:
     """Keep the persisted schedule in step with debt state and Sheet readiness.
 
-    The configuration itself is always enabled. A customer is runnable only
-    while they owe money and have a verified Sheet. Marking them paid or
-    removing the Sheet pauses the schedule without discarding its settings.
+    A customer is runnable only while they owe money and have a verified Sheet.
+    Marking them paid or removing the Sheet pauses the schedule without
+    discarding its settings.
     """
     automation = await db.scalar(
         select(DebtReminderAutomation)
         .where(DebtReminderAutomation.customer_id == customer.id)
         .with_for_update()
     )
-    if automation is None and create_if_missing:
-        automation = DebtReminderAutomation(
-            customer_id=customer.id,
-            enabled=True,
-            day_of_month=25,
-            repeat_interval_days=3,
-            send_time=time(9, 0),
-            message_parts=DEFAULT_MESSAGE_PARTS,
-            next_run_at=None,
-        )
-        db.add(automation)
-        await db.flush()
     if automation is None:
-        return None
+        raise AppError(
+            "DEBT_REMINDER_CONFIG_MISSING",
+            "Khách hàng thiếu cấu hình nhắc công nợ.",
+            500,
+        )
 
-    automation.enabled = True
     runnable = customer.has_debt and bool(customer.debt_file_url)
     if runnable:
         if automation.next_run_at is None:
@@ -244,51 +227,43 @@ async def save_debt_reminder(
     parsed_time = time.fromisoformat(data.send_time)
     parts = [part.model_dump() for part in data.message_parts]
     if automation is None:
-        automation = DebtReminderAutomation(
-            customer_id=customer_id,
-            enabled=True,
-            day_of_month=data.day_of_month,
-            repeat_interval_days=data.repeat_interval_days,
-            send_time=parsed_time,
-            message_parts=parts,
+        raise AppError(
+            "DEBT_REMINDER_CONFIG_MISSING",
+            "Khách hàng thiếu cấu hình nhắc công nợ.",
+            500,
         )
-        db.add(automation)
-        await db.flush()
-    else:
-        automation.enabled = True
-        automation.day_of_month = data.day_of_month
-        automation.repeat_interval_days = data.repeat_interval_days
-        automation.send_time = parsed_time
-        automation.message_parts = parts
-        await db.execute(
-            update(DebtReminderRun)
-            .where(
-                DebtReminderRun.automation_id == automation.id,
-                DebtReminderRun.status.in_(
-                    [DebtReminderStatus.PENDING, DebtReminderStatus.PROCESSING]
-                ),
-            )
-            .values(
-                status=DebtReminderStatus.CANCELLED,
-                claimed_at=None,
-                processed_at=now or datetime.now(UTC),
-                error_message="Cấu hình nhắc công nợ đã thay đổi.",
-            )
+    automation.day_of_month = data.day_of_month
+    automation.repeat_interval_days = data.repeat_interval_days
+    automation.send_time = parsed_time
+    automation.message_parts = parts
+    await db.execute(
+        update(DebtReminderRun)
+        .where(
+            DebtReminderRun.automation_id == automation.id,
+            DebtReminderRun.status.in_(
+                [DebtReminderStatus.PENDING, DebtReminderStatus.PROCESSING]
+            ),
         )
+        .values(
+            status=DebtReminderStatus.CANCELLED,
+            claimed_at=None,
+            processed_at=now or datetime.now(UTC),
+            error_message="Cấu hình nhắc công nợ đã thay đổi.",
+        )
+    )
     effective_now = _as_utc(now or datetime.now(UTC))
     if customer.has_debt:
         next_run_at = next_monthly_run(
             data.day_of_month, parsed_time, now=effective_now
         )
-        if customer.has_debt:
-            last_sent = await _latest_sent_run(db, automation.id)
-            if last_sent is not None:
-                repeated_run = _as_utc(last_sent.scheduled_for) + timedelta(
-                    days=data.repeat_interval_days
-                )
-                # An already-overdue repeat must fire now. Dropping it would push a
-                # still-indebted customer all the way to next month's anchor.
-                next_run_at = min(next_run_at, max(repeated_run, effective_now))
+        last_sent = await _latest_sent_run(db, automation.id)
+        if last_sent is not None:
+            repeated_run = _as_utc(last_sent.scheduled_for) + timedelta(
+                days=data.repeat_interval_days
+            )
+            # An already-overdue repeat must fire now. Dropping it would push a
+            # still-indebted customer all the way to next month's anchor.
+            next_run_at = min(next_run_at, max(repeated_run, effective_now))
         automation.next_run_at = next_run_at
     else:
         automation.next_run_at = None

@@ -232,7 +232,13 @@ async def preview_bulk_mention(
         }
         mention_on = data.mention_tag_enabled and bool(kept[MentionTargetKind.MENTION])
         price_on = data.price_inquiry_enabled and bool(kept[MentionTargetKind.PRICE])
-        will_change = automation is None or _differs(
+        if automation is None:
+            raise AppError(
+                "MENTION_AUTOMATION_CONFIG_MISSING",
+                f"Nhóm {group.name} thiếu cấu hình tag tên tự động.",
+                500,
+            )
+        will_change = _differs(
             automation, mention_on, price_on, data.delay_minutes, windows, kept
         )
         rows.append(
@@ -240,11 +246,10 @@ async def preview_bulk_mention(
                 customer_id=customer.id,
                 name=group.name,
                 is_available=group.is_available,
-                has_automation=automation is not None,
-                current_target_count=len(automation.targets) if automation else 0,
+                current_target_count=len(automation.targets),
                 active_followups=(
                     int(active.get(automation.id, 0))
-                    if automation is not None and will_change
+                    if will_change
                     else 0
                 ),
                 will_change=will_change,
@@ -314,7 +319,7 @@ async def apply_bulk_mention(
         ).all()
     }
 
-    updated = created = cancelled = unchanged = 0
+    updated = cancelled = unchanged = 0
     skipped: list[str] = []
     dropped: dict[str, int] = {}
     for _customer, group in pairs:
@@ -354,7 +359,13 @@ async def apply_bulk_mention(
             dropped[name] = dropped.get(name, 0) + 1
 
         automation = automations.get(group.id)
-        if automation is not None and not _differs(
+        if automation is None:
+            raise AppError(
+                "MENTION_AUTOMATION_CONFIG_MISSING",
+                f"Nhóm {group.name} thiếu cấu hình tag tên tự động.",
+                500,
+            )
+        if not _differs(
             automation, mention_on, price_on, data.delay_minutes, active_windows, kept
         ):
             # Rewriting an identical configuration would cancel every reminder
@@ -363,33 +374,27 @@ async def apply_bulk_mention(
             unchanged += 1
             continue
 
-        if automation is None:
-            automation = MentionAutomation(zalo_group_id=group.id)
-            db.add(automation)
-            await db.flush()
-            created += 1
-        else:
-            await db.execute(
-                delete(MentionTarget).where(MentionTarget.automation_id == automation.id)
-            )
-            cancelled += await reconcile_followups(
-                db,
-                automation.id,
-                allowed={
-                    MentionFollowupTrigger.MENTION: (
-                        {t.user_id for t in kept[MentionTargetKind.MENTION]}
-                        if mention_on
-                        else set()
-                    ),
-                    MentionFollowupTrigger.PRICE_INQUIRY: (
-                        {t.user_id for t in kept[MentionTargetKind.PRICE]}
-                        if price_on
-                        else set()
-                    ),
-                },
-                now=now,
-            )
-            updated += 1
+        await db.execute(
+            delete(MentionTarget).where(MentionTarget.automation_id == automation.id)
+        )
+        cancelled += await reconcile_followups(
+            db,
+            automation.id,
+            allowed={
+                MentionFollowupTrigger.MENTION: (
+                    {t.user_id for t in kept[MentionTargetKind.MENTION]}
+                    if mention_on
+                    else set()
+                ),
+                MentionFollowupTrigger.PRICE_INQUIRY: (
+                    {t.user_id for t in kept[MentionTargetKind.PRICE]}
+                    if price_on
+                    else set()
+                ),
+            },
+            now=now,
+        )
+        updated += 1
 
         automation.mention_tag_enabled = mention_on
         automation.price_inquiry_enabled = price_on
@@ -413,14 +418,14 @@ async def apply_bulk_mention(
         "MENTION_BULK_APPLIED updated=%d created=%d unchanged=%d skipped=%d"
         " cancelled_followups=%d",
         updated,
-        created,
+        0,
         unchanged,
         len(skipped),
         cancelled,
     )
     return BulkMentionApplyResult(
         updated=updated,
-        created=created,
+        created=0,
         unchanged=unchanged,
         skipped=sorted(skipped),
         cancelled_followups=cancelled,

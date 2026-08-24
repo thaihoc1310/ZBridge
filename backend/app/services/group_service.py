@@ -1,16 +1,15 @@
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
-from app.models import ZaloGroup
+from app.models import Customer, DebtReminderAutomation, MentionAutomation, ZaloGroup
 from app.models.entities import BotStatus
 from app.schemas.api import SyncResponse
 from app.services.bot_service import get_or_create_account
-from app.services.customer_service import ensure_customers_for_groups
 from app.services.zalo_gateway_client import GatewayError, zalo_gateway
 
 logger = logging.getLogger("zbridge.groups")
@@ -55,17 +54,35 @@ async def sync_groups(db: AsyncSession) -> SyncResponse:
         seen.add(remote_id)
         group = existing.get(remote_id)
         if group is None:
-            db.add(
-                ZaloGroup(
-                    zalo_account_id=account.id,
-                    zalo_group_id=remote_id,
-                    name=str(remote.get("name") or "Nhóm không tên"),
-                    avatar_url=remote.get("avatar_url"),
-                    member_count=int(remote.get("member_count") or 0),
-                    is_available=True,
-                    missing_sync_count=0,
-                    last_synced_at=now,
-                )
+            group_id = uuid.uuid4()
+            db.add_all(
+                [
+                    ZaloGroup(
+                        id=group_id,
+                        zalo_account_id=account.id,
+                        zalo_group_id=remote_id,
+                        name=str(remote.get("name") or "Nhóm không tên"),
+                        avatar_url=remote.get("avatar_url"),
+                        member_count=int(remote.get("member_count") or 0),
+                        is_available=True,
+                        missing_sync_count=0,
+                        last_synced_at=now,
+                    ),
+                    Customer(id=group_id, zalo_group_id=group_id),
+                    DebtReminderAutomation(
+                        customer_id=group_id,
+                        day_of_month=25,
+                        repeat_interval_days=3,
+                        send_time=time(9, 0),
+                        next_run_at=None,
+                    ),
+                    MentionAutomation(
+                        zalo_group_id=group_id,
+                        enabled=False,
+                        mention_tag_enabled=False,
+                        price_inquiry_enabled=False,
+                    ),
+                ]
             )
             inserted += 1
         else:
@@ -92,7 +109,6 @@ async def sync_groups(db: AsyncSession) -> SyncResponse:
             group.is_available = False
             stale_ids.append(group.id)
     await db.flush()
-    await ensure_customers_for_groups(db)
     account.status = BotStatus.CONNECTED
     account.zalo_user_id = status.get("zalo_user_id") or account.zalo_user_id
     account.display_name = status.get("account_name") or account.display_name

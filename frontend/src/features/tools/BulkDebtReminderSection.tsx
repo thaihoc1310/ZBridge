@@ -201,9 +201,7 @@ export function BulkDebtReminderSection() {
                     {row.name}
                   </span>
                   <span className="mt-1 block text-xs text-muted-foreground">
-                    {row.has_automation
-                      ? `Hiện tại: ngày ${row.current_day_of_month}, mỗi ${row.current_repeat_interval_days} ngày, lúc ${row.current_send_time}`
-                      : `Đang dùng mặc định: ngày ${row.current_day_of_month}, mỗi ${row.current_repeat_interval_days} ngày, lúc ${row.current_send_time}`}
+                    {`Hiện tại: ngày ${row.current_day_of_month}, mỗi ${row.current_repeat_interval_days} ngày, lúc ${row.current_send_time}`}
                   </span>
                   <span className="mt-1 flex flex-wrap gap-2 text-[11px]">
                     <em
@@ -213,9 +211,7 @@ export function BulkDebtReminderSection() {
                     >
                       {row.has_debt
                         ? row.has_debt_file
-                          ? row.has_automation
-                            ? "Còn nợ · đang hoạt động"
-                            : "Còn nợ · sẽ hoạt động sau khi áp"
+                          ? "Còn nợ · đang hoạt động"
                           : "Còn nợ · chưa thể chạy"
                         : "Đã thanh toán · tạm ngừng"}
                     </em>

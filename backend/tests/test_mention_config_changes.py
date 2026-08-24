@@ -63,6 +63,14 @@ async def _automation_with_a_running_reminder(due_at: datetime | None = None):
         db.add(group)
         await db.flush()
         db.add(Customer(zalo_group_id=group.id))
+        db.add(
+            MentionAutomation(
+                zalo_group_id=group.id,
+                enabled=False,
+                mention_tag_enabled=False,
+                price_inquiry_enabled=False,
+            )
+        )
         await db.commit()
         await save_mention_automation(db, group.id, MentionAutomationUpdate(**BASE))
         automation = await db.scalar(select(MentionAutomation))

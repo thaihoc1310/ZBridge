@@ -38,7 +38,6 @@ from app.services.mention_rules import (
 )
 from app.services.mention_settings_service import get_or_create_mention_settings
 from app.services.mention_time_windows import (
-    DEFAULT_MENTION_WINDOWS,
     next_allowed_at,
     normalize_time_windows,
 )
@@ -219,14 +218,10 @@ async def _to_response(
     db: AsyncSession, group_id: uuid.UUID, automation: MentionAutomation | None
 ) -> MentionAutomationResponse:
     if automation is None:
-        return MentionAutomationResponse(
-            group_id=group_id,
-            enabled=False,
-            mention_tag_enabled=True,
-            price_inquiry_enabled=False,
-            delay_minutes=120,
-            active_windows=[MentionTimeWindow(**window) for window in DEFAULT_MENTION_WINDOWS],
-            targets=[],
+        raise AppError(
+            "MENTION_AUTOMATION_CONFIG_MISSING",
+            "Nhóm thiếu cấu hình tag tên tự động.",
+            500,
         )
     pending = int(
         await db.scalar(
@@ -306,24 +301,25 @@ async def save_mention_automation(
 
     automation = await _load_automation(db, group_id)
     if automation is None:
-        automation = MentionAutomation(zalo_group_id=group_id)
-        db.add(automation)
-        await db.flush()
-    else:
-        await db.execute(delete(MentionTarget).where(MentionTarget.automation_id == automation.id))
-        await reconcile_followups(
-            db,
-            automation.id,
-            allowed={
-                MentionFollowupTrigger.MENTION: (
-                    set(unique_targets) if data.mention_tag_enabled else set()
-                ),
-                MentionFollowupTrigger.PRICE_INQUIRY: (
-                    set(unique_price_targets) if data.price_inquiry_enabled else set()
-                ),
-            },
-            now=datetime.now(UTC),
+        raise AppError(
+            "MENTION_AUTOMATION_CONFIG_MISSING",
+            "Nhóm thiếu cấu hình tag tên tự động.",
+            500,
         )
+    await db.execute(delete(MentionTarget).where(MentionTarget.automation_id == automation.id))
+    await reconcile_followups(
+        db,
+        automation.id,
+        allowed={
+            MentionFollowupTrigger.MENTION: (
+                set(unique_targets) if data.mention_tag_enabled else set()
+            ),
+            MentionFollowupTrigger.PRICE_INQUIRY: (
+                set(unique_price_targets) if data.price_inquiry_enabled else set()
+            ),
+        },
+        now=datetime.now(UTC),
+    )
     automation.mention_tag_enabled = data.mention_tag_enabled
     automation.price_inquiry_enabled = data.price_inquiry_enabled
     # The scheduler and classifier still ask one question, so keep the master

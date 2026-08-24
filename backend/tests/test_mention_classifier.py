@@ -58,6 +58,7 @@ async def _database():
         automation = MentionAutomation(
             zalo_group_id=group.id,
             enabled=True,
+            mention_tag_enabled=True,
             delay_minutes=120,
             active_windows=[{"start": "00:00", "end": "23:59"}],
         )

@@ -243,6 +243,7 @@ async def _record_success(job: _FollowupJob, message_id: str | None) -> None:
         followup.due_at = next_due_at
         followup.claimed_at = None
         followup.attempt_count = 0
+        followup.send_count += 1
         followup.sent_message_id = message_id
         followup.processed_at = None
         followup.error_message = None

@@ -18,10 +18,7 @@ from app.models import (
 from app.models.entities import BotStatus, DebtReminderStatus, DeliveryStatus, DeliveryType
 from app.schemas.api import DebtReminderUpdate
 from app.services import debt_reminder_scheduler, google_sheets_service
-from app.services.debt_reminder_scheduler import (
-    _reconcile_debt_reminder_states,
-    process_debt_reminder,
-)
+from app.services.debt_reminder_scheduler import process_debt_reminder
 from app.services.debt_reminder_service import (
     next_debt_reminder_run,
     next_monthly_run,
@@ -51,12 +48,8 @@ def test_next_monthly_run_uses_vietnam_time_and_clamps_short_months() -> None:
     assert february_run == datetime(2027, 2, 28, 2, tzinfo=UTC)
 
 
-def test_debt_reminder_cannot_be_disabled_independently_from_debt_state() -> None:
-    with pytest.raises(ValueError):
-        DebtReminderUpdate(
-            enabled=False,
-            message_parts=[{"type": "text", "text": "Nhắc thanh toán."}],
-        )
+def test_debt_reminder_has_no_independent_enabled_field() -> None:
+    assert "enabled" not in DebtReminderUpdate.model_fields
 
 
 def test_next_debt_reminder_repeats_and_preserves_monthly_anchor() -> None:
@@ -96,102 +89,6 @@ def test_outage_does_not_replay_every_missed_reminder() -> None:
     assert next_debt_reminder_run(
         18, time(0, 53), 3, following, has_debt=True, now=now
     ) > now
-
-
-async def test_reconcile_heals_legacy_switches_and_pauses_paid_customers() -> None:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    sessions = async_sessionmaker(engine, expire_on_commit=False)
-    now = datetime(2026, 8, 24, 3, tzinfo=UTC)
-
-    async with sessions() as db:
-        account = ZaloAccount(status=BotStatus.CONNECTED)
-        db.add(account)
-        await db.flush()
-        automations = []
-        for suffix, has_debt, next_run_at in (
-            ("owing", True, None),
-            ("paid", False, now),
-        ):
-            group = ZaloGroup(
-                zalo_account_id=account.id,
-                zalo_group_id=f"reconcile-{suffix}",
-                name=f"Reconcile {suffix}",
-                member_count=2,
-                is_available=True,
-                last_synced_at=now,
-            )
-            db.add(group)
-            await db.flush()
-            customer = Customer(
-                zalo_group_id=group.id,
-                has_debt=has_debt,
-                debt_file_url=f"https://docs.google.com/spreadsheets/d/{suffix}/edit",
-            )
-            db.add(customer)
-            await db.flush()
-            automation = DebtReminderAutomation(
-                customer_id=customer.id,
-                enabled=False,
-                day_of_month=25,
-                repeat_interval_days=3,
-                send_time=time(9, 0),
-                message_parts=[{"type": "text", "text": "Nhắc nợ"}],
-                next_run_at=next_run_at,
-            )
-            db.add(automation)
-            await db.flush()
-            automations.append(automation)
-        missing_group = ZaloGroup(
-            zalo_account_id=account.id,
-            zalo_group_id="reconcile-missing-default",
-            name="Reconcile missing default",
-            member_count=2,
-            is_available=True,
-            last_synced_at=now,
-        )
-        db.add(missing_group)
-        await db.flush()
-        missing_customer = Customer(
-            zalo_group_id=missing_group.id,
-            has_debt=True,
-            debt_file_url="https://docs.google.com/spreadsheets/d/missing-default/edit",
-        )
-        db.add(missing_customer)
-        await db.flush()
-        missing_customer_id = missing_customer.id
-        pending = DebtReminderRun(
-            automation_id=automations[1].id,
-            scheduled_for=now,
-            retry_at=now,
-            status=DebtReminderStatus.PENDING,
-        )
-        db.add(pending)
-        await db.commit()
-
-        await _reconcile_debt_reminder_states(db, now)
-        await db.commit()
-        await db.refresh(automations[0])
-        await db.refresh(automations[1])
-        await db.refresh(pending)
-        created_default = await db.scalar(
-            select(DebtReminderAutomation).where(
-                DebtReminderAutomation.customer_id == missing_customer_id
-            )
-        )
-
-        assert automations[0].enabled is True
-        assert automations[0].next_run_at is not None
-        assert automations[1].enabled is True
-        assert automations[1].next_run_at is None
-        assert pending.status == DebtReminderStatus.CANCELLED
-        assert pending.claimed_at is None
-        assert created_default is not None
-        assert created_default.enabled is True
-        assert created_default.next_run_at is not None
-
-    await engine.dispose()
 
 
 def test_extract_spreadsheet_id() -> None:
@@ -265,10 +162,11 @@ async def test_overdue_repeat_stays_due_after_editing_the_config() -> None:
             debt_file_url="https://docs.google.com/spreadsheets/d/sheet-overdue/edit",
         )
         db.add(customer)
+        await db.flush()
+        db.add(DebtReminderAutomation(customer_id=customer.id, next_run_at=None))
         await db.commit()
 
         config = DebtReminderUpdate(
-            enabled=True,
             day_of_month=25,
             repeat_interval_days=3,
             send_time="09:00",
@@ -325,10 +223,10 @@ async def test_debt_reminder_config_and_three_required_deliveries(monkeypatch) -
             debt_file_url="https://docs.google.com/spreadsheets/d/sheet-123/edit",
         )
         db.add(customer)
+        db.add(DebtReminderAutomation(customer_id=group.id, next_run_at=None))
         await db.commit()
 
         config = DebtReminderUpdate(
-            enabled=True,
             day_of_month=25,
             send_time="09:00",
             message_parts=[
@@ -342,7 +240,6 @@ async def test_debt_reminder_config_and_three_required_deliveries(monkeypatch) -
             ],
         )
         response = await save_debt_reminder(db, customer.id, config, now=now)
-        assert response.enabled is True
         assert response.repeat_interval_days == 3
         assert response.next_run_at is not None
         assert response.next_run_at.replace(tzinfo=UTC) == datetime(

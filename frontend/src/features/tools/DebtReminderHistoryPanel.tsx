@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
+  ArrowDown,
+  ArrowUp,
   ChevronDown,
   ExternalLink,
   FileImage,
@@ -38,7 +40,6 @@ const stepNames = {
 export function DebtReminderHistoryPanel() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
-  const [sort, setSort] = useState("scheduled");
   const [direction, setDirection] = useState("desc");
   const [page, setPage] = useState(1);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -49,7 +50,6 @@ export function DebtReminderHistoryPanel() {
       "debt-reminder-history",
       search,
       status,
-      sort,
       direction,
       page,
     ],
@@ -57,7 +57,7 @@ export function DebtReminderHistoryPanel() {
       const params = new URLSearchParams({
         month,
         search,
-        sort,
+        sort: "scheduled",
         direction,
         page: String(page),
         limit: "50",
@@ -127,27 +127,21 @@ export function DebtReminderHistoryPanel() {
           <option value="SKIPPED">Bỏ qua</option>
           <option value="CANCELLED">Đã hủy</option>
         </select>
-        <select
-          className="field sm:w-44"
-          value={sort}
-          onChange={(event) => {
-            setSort(event.target.value);
-            setPage(1);
-          }}
-        >
-          <option value="scheduled">Theo thời gian</option>
-          <option value="company">Theo công ty</option>
-          <option value="status">Theo trạng thái</option>
-        </select>
         <button
           type="button"
-          className="min-h-11 rounded-xl border border-border bg-white px-4 text-sm font-medium"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border bg-white text-muted-foreground transition hover:bg-muted/40 hover:text-foreground"
+          aria-label={direction === "desc" ? "Sắp xếp tăng dần" : "Sắp xếp giảm dần"}
+          title={direction === "desc" ? "Mới nhất trước · bấm để cũ nhất trước" : "Cũ nhất trước · bấm để mới nhất trước"}
           onClick={() => {
             setDirection((value) => (value === "desc" ? "asc" : "desc"));
             setPage(1);
           }}
         >
-          {direction === "desc" ? "Giảm dần" : "Tăng dần"}
+          {direction === "desc" ? (
+            <ArrowDown className="h-4 w-4" />
+          ) : (
+            <ArrowUp className="h-4 w-4" />
+          )}
         </button>
       </div>
       {query.isLoading ? (
@@ -179,8 +173,10 @@ export function DebtReminderHistoryPanel() {
                       {run.customer_name}
                     </span>
                     <span className="mt-1 block text-xs text-muted-foreground">
-                      Lịch chạy {formatDate(run.scheduled_for)} · thử{" "}
-                      {run.attempt_count} lần
+                      Lịch chạy {formatDate(run.scheduled_for)} ·{" "}
+                      {run.attempt_count === 0
+                        ? "chưa chạy lần nào"
+                        : `${run.attempt_count} lượt xử lý`}
                     </span>
                   </span>
                   <span

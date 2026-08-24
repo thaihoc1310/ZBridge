@@ -62,15 +62,18 @@ async def _database():
             db.add(group)
             await db.flush()
             db.add(Customer(zalo_group_id=group.id))
-            if not with_automation:
-                continue
             automation = MentionAutomation(
                 zalo_group_id=group.id,
+                enabled=with_automation,
+                mention_tag_enabled=with_automation,
+                price_inquiry_enabled=False,
                 delay_minutes=45,
                 active_windows=[{"start": "09:00", "end": "17:00"}],
             )
             db.add(automation)
             await db.flush()
+            if not with_automation:
+                continue
             db.add(
                 MentionTarget(
                     automation_id=automation.id,
@@ -163,13 +166,12 @@ async def test_preview_reports_what_apply_would_disturb(monkeypatch) -> None:
         rows = {row.name: row for row in preview.rows}
         assert preview.gateway_error is None
         hoaphat = rows["Cty Hoà Phát"]
-        assert hoaphat.has_automation is True
         assert hoaphat.current_target_count == 1
         assert hoaphat.active_followups == 1
         assert hoaphat.missing_members == []
         # Thu Hà is not in the warehouse group, and the UI must say so up front.
         assert rows["Kho Long Biên"].missing_members == ["Thu Hà"]
-        assert rows["Kho Long Biên"].has_automation is False
+        assert rows["Kho Long Biên"].current_target_count == 0
         assert rows["Cty Tân Á"].is_available is False
     await engine.dispose()
 
@@ -181,7 +183,7 @@ async def test_apply_overwrites_creates_and_drops_non_members(monkeypatch) -> No
         ids = await _customer_ids(db)
         result = await staff_service.apply_bulk_mention(db, _payload(list(ids.values())))
 
-        assert result.updated == 1 and result.created == 1
+        assert result.updated == 2 and result.created == 0
         assert result.skipped == ["Cty Tân Á"]
         assert result.cancelled_followups == 1
         assert result.dropped_members == {"Thu Hà": 1}
@@ -222,7 +224,7 @@ async def test_apply_overwrites_creates_and_drops_non_members(monkeypatch) -> No
         followup = await db.scalar(select(MentionFollowup))
         assert followup.status == MentionFollowupStatus.CANCELLED
 
-        assert "g-cu" not in automations, "nhóm không khả dụng phải bị bỏ qua"
+        assert automations["g-cu"].enabled is False
     await engine.dispose()
 
 
@@ -311,7 +313,7 @@ async def test_one_absent_person_counts_once_per_customer(monkeypatch) -> None:
         )
         # Thu Hà is absent from the one warehouse group, on both lists.
         assert result.dropped_members == {"Thu Hà": 1}
-        assert result.updated == 0 and result.created == 1
+        assert result.updated == 1 and result.created == 0
     await engine.dispose()
 
 

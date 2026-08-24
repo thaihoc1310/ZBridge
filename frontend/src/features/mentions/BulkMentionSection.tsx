@@ -271,9 +271,7 @@ export function BulkMentionSection({ canEdit }: { canEdit: boolean }) {
                       ? "Nhóm không khả dụng"
                       : !row.will_change
                         ? "Đã đúng cấu hình này, sẽ giữ nguyên"
-                        : row.has_automation
-                          ? `Đang có ${row.current_target_count} người${row.active_followups ? ` · ${row.active_followups} vòng nhắc sẽ bị huỷ` : ""}`
-                          : "Chưa cấu hình, sẽ tạo mới"}
+                        : `Đang có ${row.current_target_count} người${row.active_followups ? ` · ${row.active_followups} vòng nhắc sẽ bị huỷ` : ""}`}
                   </span>
                 </span>
                 {row.missing_members.length > 0 && (

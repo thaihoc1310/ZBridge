@@ -168,7 +168,7 @@ export type MentionTimeWindow = {
 };
 
 export type MentionAutomation = {
-  id: string | null;
+  id: string;
   group_id: string;
   /** Derived from the two feature flags; the UI edits those, not this. */
   enabled: boolean;
@@ -195,7 +195,6 @@ export type BulkMentionPreviewRow = {
   customer_id: string;
   name: string;
   is_available: boolean;
-  has_automation: boolean;
   current_target_count: number;
   active_followups: number;
   /** False when this customer already has exactly this configuration. */
@@ -229,9 +228,8 @@ export type DebtReminderPart =
   | { type: "mention"; user_id: string; display_name: string };
 
 export type DebtReminder = {
-  id: string | null;
+  id: string;
   customer_id: string;
-  enabled: boolean;
   day_of_month: number;
   repeat_interval_days: number;
   send_time: string;
@@ -252,6 +250,7 @@ export type ActiveMentionTask = {
   due_at: string;
   created_at: string;
   attempt_count: number;
+  send_count: number;
   error_message: string | null;
 };
 export type ActiveMentionCompany = {
@@ -276,8 +275,6 @@ export type DebtBulkPreviewRow = {
   is_available: boolean;
   has_debt: boolean;
   has_debt_file: boolean;
-  has_automation: boolean;
-  enabled: boolean;
   current_day_of_month: number | null;
   current_repeat_interval_days: number | null;
   current_send_time: string | null;

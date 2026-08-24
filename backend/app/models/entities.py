@@ -293,8 +293,8 @@ class MentionAutomation(TimestampMixin, Base):
     )
     #: Master switch, kept in step with the two feature flags below so the
     #: scheduler and classifier can keep asking one question.
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    mention_tag_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    mention_tag_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     price_inquiry_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     delay_minutes: Mapped[int] = mapped_column(Integer, default=120, nullable=False)
     active_windows: Mapped[list[dict[str, str]]] = mapped_column(
@@ -427,6 +427,9 @@ class MentionFollowup(Base):
         nullable=False,
     )
     attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    send_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_message_id: Mapped[str | None] = mapped_column(String(128))
@@ -502,13 +505,18 @@ class DebtReminderAutomation(TimestampMixin, Base):
         unique=True,
         index=True,
     )
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     day_of_month: Mapped[int] = mapped_column(Integer, default=25, nullable=False)
     repeat_interval_days: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     send_time: Mapped[time] = mapped_column(
         Time(timezone=False), default=time(9, 0), nullable=False
     )
-    message_parts: Mapped[list[dict[str, str]]] = mapped_column(JSON, nullable=False)
+    message_parts: Mapped[list[dict[str, str]]] = mapped_column(
+        JSON,
+        default=lambda: [
+            {"type": "text", "text": "Vui lòng thanh toán công nợ giúp mình nhé."}
+        ],
+        nullable=False,
+    )
     next_run_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )

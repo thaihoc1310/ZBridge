@@ -263,7 +263,7 @@ class MentionTimeWindow(BaseModel):
 
 class MentionAutomationUpdate(BaseModel):
     # Two independent features share the delay and the active windows below.
-    mention_tag_enabled: bool = True
+    mention_tag_enabled: bool = False
     price_inquiry_enabled: bool = False
     delay_minutes: int = Field(default=120, ge=1, le=10080)
     active_windows: list[MentionTimeWindow] = Field(
@@ -288,10 +288,10 @@ class MentionTargetResponse(BaseModel):
 
 
 class MentionAutomationResponse(BaseModel):
-    id: uuid.UUID | None = None
+    id: uuid.UUID
     group_id: uuid.UUID
     enabled: bool
-    mention_tag_enabled: bool = True
+    mention_tag_enabled: bool = False
     price_inquiry_enabled: bool = False
     delay_minutes: int
     active_windows: list[MentionTimeWindow]
@@ -327,7 +327,6 @@ class BulkMentionPreviewRow(BaseModel):
     customer_id: uuid.UUID
     name: str
     is_available: bool
-    has_automation: bool
     current_target_count: int
     #: Reminders this customer would lose, counted only where the configuration
     #: actually changes — an identical rewrite cancels nothing.
@@ -386,10 +385,6 @@ DebtReminderMessagePart = DebtReminderTextPart | DebtReminderMentionPart
 
 
 class DebtReminderUpdate(BaseModel):
-    # Kept in the payload for backwards compatibility; debt state is the only
-    # switch exposed by the product, so a reminder configuration cannot be
-    # disabled independently.
-    enabled: Literal[True] = True
     day_of_month: int = Field(default=25, ge=1, le=31)
     repeat_interval_days: int = Field(default=3, ge=1, le=31)
     send_time: str = Field(default="09:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
@@ -409,9 +404,8 @@ class DebtReminderUpdate(BaseModel):
 
 
 class DebtReminderResponse(BaseModel):
-    id: uuid.UUID | None = None
+    id: uuid.UUID
     customer_id: uuid.UUID
-    enabled: bool
     day_of_month: int
     repeat_interval_days: int
     send_time: str
@@ -432,6 +426,7 @@ class ActiveMentionTaskResponse(BaseModel):
     due_at: datetime
     created_at: datetime
     attempt_count: int
+    send_count: int
     error_message: str | None = None
 
 
@@ -468,8 +463,6 @@ class DebtReminderBulkPreviewRow(BaseModel):
     is_available: bool
     has_debt: bool
     has_debt_file: bool
-    has_automation: bool
-    enabled: bool
     current_day_of_month: int | None = None
     current_repeat_interval_days: int | None = None
     current_send_time: str | None = None

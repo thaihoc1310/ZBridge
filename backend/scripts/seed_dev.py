@@ -21,6 +21,7 @@ from app.core.config import settings
 from app.db.database import SessionLocal
 from app.models import (
     Customer,
+    DebtReminderAutomation,
     MentionAutomation,
     MentionContextMessage,
     MentionFollowup,
@@ -115,13 +116,23 @@ async def seed(reset_first: bool) -> None:
             await db.flush()
             db.add(
                 Customer(
+                    id=group.id,
                     zalo_group_id=group.id,
                     has_debt=has_debt,
                     note=note,
                     last_debt_paid_at=None if has_debt else now - timedelta(days=index + 3),
                 )
             )
+            db.add(DebtReminderAutomation(customer_id=group.id, next_run_at=None))
             if not tag_staff and not price_staff:
+                db.add(
+                    MentionAutomation(
+                        zalo_group_id=group.id,
+                        enabled=False,
+                        mention_tag_enabled=False,
+                        price_inquiry_enabled=False,
+                    )
+                )
                 created += 1
                 continue
 

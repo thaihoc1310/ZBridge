@@ -145,16 +145,8 @@ async def update_customer(
             db,
             customer,
             now=now,
-            create_if_missing=customer.has_debt or bool(customer.debt_file_url),
             inactive_reason=inactive_reason,
         )
 
     await db.commit()
     return customer_response(await get_customer(db, customer_id))
-
-
-async def ensure_customers_for_groups(db: AsyncSession) -> None:
-    group_ids = set((await db.scalars(select(ZaloGroup.id))).all())
-    customer_group_ids = set((await db.scalars(select(Customer.zalo_group_id))).all())
-    for group_id in group_ids - customer_group_ids:
-        db.add(Customer(id=group_id, zalo_group_id=group_id))

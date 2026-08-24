@@ -271,7 +271,6 @@ export function DebtReminderModal({
       return api<DebtReminder>(`/customers/${customerId}/debt-reminder`, {
         method: "PUT",
         body: JSON.stringify({
-          enabled: true,
           day_of_month: Number(dayOfMonth),
           repeat_interval_days: Number(repeatIntervalDays),
           send_time: sendTime,

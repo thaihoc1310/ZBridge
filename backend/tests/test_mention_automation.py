@@ -59,6 +59,7 @@ async def test_incoming_mention_creates_one_durable_followup() -> None:
         automation = MentionAutomation(
             zalo_group_id=group.id,
             enabled=True,
+            mention_tag_enabled=True,
             delay_minutes=120,
             active_windows=[{"start": "00:00", "end": "23:59"}],
         )
@@ -99,7 +100,7 @@ async def test_incoming_mention_creates_one_durable_followup() -> None:
             db,
             group.id,
             MentionAutomationUpdate(
-                enabled=True,
+                mention_tag_enabled=True,
                 delay_minutes=120,
                 active_windows=[MentionTimeWindow(start="00:00", end="23:59")],
                 targets=[
@@ -117,7 +118,7 @@ async def test_incoming_mention_creates_one_durable_followup() -> None:
             db,
             group.id,
             MentionAutomationUpdate(
-                enabled=True,
+                mention_tag_enabled=True,
                 delay_minutes=180,
                 active_windows=[MentionTimeWindow(start="00:00", end="23:59")],
                 targets=[
@@ -160,6 +161,7 @@ async def test_member_message_stops_only_their_active_reminders() -> None:
         automation = MentionAutomation(
             zalo_group_id=group.id,
             enabled=True,
+            mention_tag_enabled=True,
             delay_minutes=1,
             active_windows=[{"start": "00:00", "end": "23:59"}],
         )
@@ -249,6 +251,7 @@ async def test_heart_and_like_stop_only_the_reactors_active_reminders() -> None:
         automation = MentionAutomation(
             zalo_group_id=group.id,
             enabled=True,
+            mention_tag_enabled=True,
             delay_minutes=1,
             active_windows=[{"start": "00:00", "end": "23:59"}],
         )
@@ -365,6 +368,7 @@ async def test_reaction_uses_source_event_time_not_db_insert_time() -> None:
         automation = MentionAutomation(
             zalo_group_id=group.id,
             enabled=True,
+            mention_tag_enabled=True,
             delay_minutes=1,
             active_windows=[{"start": "00:00", "end": "23:59"}],
         )
@@ -475,6 +479,7 @@ async def test_successful_followup_is_scheduled_again(monkeypatch) -> None:
         automation = MentionAutomation(
             zalo_group_id=group.id,
             enabled=True,
+            mention_tag_enabled=True,
             delay_minutes=1,
             active_windows=[{"start": "00:00", "end": "23:59"}],
         )
@@ -519,6 +524,7 @@ async def test_successful_followup_is_scheduled_again(monkeypatch) -> None:
         assert repeated is not None
         assert repeated.status == MentionFollowupStatus.PENDING
         assert repeated.attempt_count == 0
+        assert repeated.send_count == 1
         assert repeated.claimed_at is None
         assert repeated.processed_at is None
         assert repeated.sent_message_id == "sent-message"
@@ -563,6 +569,7 @@ async def test_followup_waits_while_zalo_event_channel_is_down(monkeypatch) -> N
         automation = MentionAutomation(
             zalo_group_id=group.id,
             enabled=True,
+            mention_tag_enabled=True,
             delay_minutes=1,
             active_windows=[{"start": "00:00", "end": "23:59"}],
         )

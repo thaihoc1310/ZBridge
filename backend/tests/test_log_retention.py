@@ -146,7 +146,6 @@ async def test_finished_debt_reminder_runs_keep_exactly_45_days() -> None:
         await db.flush()
         automation = DebtReminderAutomation(
             customer_id=customer.id,
-            enabled=True,
             message_parts=[{"type": "text", "text": "Nhắc nợ"}],
         )
         db.add(automation)

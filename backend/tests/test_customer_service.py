@@ -49,6 +49,7 @@ async def test_customer_fields_and_debt_paid_timestamp(monkeypatch) -> None:
         db.add(group)
         await db.flush()
         db.add(Customer(id=group.id, zalo_group_id=group.id))
+        db.add(DebtReminderAutomation(customer_id=group.id, next_run_at=None))
         await db.commit()
 
         owing = await update_customer(
@@ -71,7 +72,6 @@ async def test_customer_fields_and_debt_paid_timestamp(monkeypatch) -> None:
             )
         )
         assert automation is not None
-        assert automation.enabled is True
         assert automation.next_run_at is not None
         active_run = DebtReminderRun(
             automation_id=automation.id,
@@ -90,7 +90,6 @@ async def test_customer_fields_and_debt_paid_timestamp(monkeypatch) -> None:
         await db.refresh(automation)
         assert active_run.status == DebtReminderStatus.CANCELLED
         assert active_run.claimed_at is None
-        assert automation.enabled is True
         assert automation.next_run_at is None
 
         owing_again = await update_customer(db, group.id, CustomerUpdate(has_debt=True))
@@ -170,6 +169,7 @@ async def test_saving_a_debt_file_rejects_a_link_google_cannot_read(monkeypatch)
         db.add(group)
         await db.flush()
         db.add(Customer(id=group.id, zalo_group_id=group.id))
+        db.add(DebtReminderAutomation(customer_id=group.id, next_run_at=None))
         await db.commit()
 
         with pytest.raises(AppError) as error:

@@ -63,7 +63,6 @@ async def _database():
         db.add(mention)
         debt = DebtReminderAutomation(
             customer_id=customer.id,
-            enabled=True,
             day_of_month=25,
             repeat_interval_days=3,
             send_time=time(9, 0),
@@ -136,7 +135,6 @@ async def test_bulk_debt_schedule_preserves_message_and_cancels_old_run() -> Non
         assert automation.message_parts == [
             {"type": "text", "text": "Nội dung riêng không được ghi đè"}
         ]
-        assert automation.enabled is True
         assert automation.day_of_month == 28
         assert automation.repeat_interval_days == 5
         assert automation.send_time == time(10, 30)
@@ -174,6 +172,7 @@ async def test_bulk_debt_schedule_activates_owing_customers_and_pauses_blocked_o
             )
             db.add(customer)
             await db.flush()
+            db.add(DebtReminderAutomation(customer_id=customer.id, next_run_at=None))
             customers.append(customer)
         await db.commit()
 
@@ -182,8 +181,6 @@ async def test_bulk_debt_schedule_activates_owing_customers_and_pauses_blocked_o
         )
         preview = await preview_bulk_debt_reminders(db, schedule)
         new_rows = [row for row in preview.rows if row.customer_id in {c.id for c in customers}]
-        assert all(row.has_automation is False for row in new_rows)
-        assert all(row.enabled is True for row in new_rows)
         assert all(row.current_day_of_month == 25 for row in new_rows)
 
         result = await apply_bulk_debt_reminders(
@@ -192,7 +189,8 @@ async def test_bulk_debt_schedule_activates_owing_customers_and_pauses_blocked_o
                 **schedule.model_dump(), customer_ids=[customer.id for customer in customers]
             ),
         )
-        assert result.created == 3
+        assert result.created == 0
+        assert result.updated == 3
 
     async with sessions() as db:
         automations = {
@@ -204,7 +202,6 @@ async def test_bulk_debt_schedule_activates_owing_customers_and_pauses_blocked_o
             )
         }
         active, missing_sheet, paid = customers
-        assert all(automation.enabled is True for automation in automations.values())
         assert automations[active.id].next_run_at is not None
         assert automations[missing_sheet.id].next_run_at is None
         assert automations[paid.id].next_run_at is None

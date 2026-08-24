@@ -42,7 +42,7 @@ export function MentionAutomationModal({
   const canEdit = can(PERMISSIONS.mentionUpdate);
   const [selected, setSelected] = useState<MentionTarget[]>([]);
   const [priceSelected, setPriceSelected] = useState<MentionTarget[]>([]);
-  const [mentionTagEnabled, setMentionTagEnabled] = useState(true);
+  const [mentionTagEnabled, setMentionTagEnabled] = useState(false);
   const [priceInquiryEnabled, setPriceInquiryEnabled] = useState(false);
   const [delayValue, setDelayValue] = useState<number | "">(2);
   const [delayUnit, setDelayUnit] = useState<DelayUnit>("hours");
@@ -73,9 +73,7 @@ export function MentionAutomationModal({
     setDelayValue(delay.value);
     setDelayUnit(delay.unit);
     setActiveWindows(automation.data.active_windows);
-    setMentionTagEnabled(
-      automation.data.id === null ? true : automation.data.mention_tag_enabled,
-    );
+    setMentionTagEnabled(automation.data.mention_tag_enabled);
     setPriceInquiryEnabled(automation.data.price_inquiry_enabled);
     setFormError(null);
   }, [automation.data, open]);
