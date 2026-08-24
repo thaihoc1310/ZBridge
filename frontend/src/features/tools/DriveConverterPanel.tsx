@@ -23,6 +23,8 @@ import type {
 import { Button } from "../../components/ui/Button";
 import { Modal } from "../../components/ui/Modal";
 
+const MAX_XLSX_BYTES = 25 * 1024 * 1024;
+
 export function DriveConverterPanel() {
   const queryClient = useQueryClient();
   const [addOpen, setAddOpen] = useState(false);
@@ -60,7 +62,10 @@ export function DriveConverterPanel() {
       new Set(
         job.data.items
           .filter(
-            (item) => item.can_download && (!deleteOriginals || item.can_trash),
+            (item) =>
+              item.can_download &&
+              (!deleteOriginals || item.can_trash) &&
+              (item.size_bytes == null || item.size_bytes <= MAX_XLSX_BYTES),
           )
           .map((item) => item.id),
       ),
@@ -161,7 +166,9 @@ export function DriveConverterPanel() {
     return [...result.entries()].sort(([a], [b]) => a.localeCompare(b, "vi"));
   }, [job.data?.items]);
   const selectable = (item: DriveConversionItem) =>
-    item.can_download && (!deleteOriginals || item.can_trash);
+    item.can_download &&
+    (!deleteOriginals || item.can_trash) &&
+    (item.size_bytes == null || item.size_bytes <= MAX_XLSX_BYTES);
   const toggleAll = () =>
     setSelected(
       selected.size
@@ -548,6 +555,9 @@ export function DriveConverterPanel() {
                             ? " · Không có quyền tải"
                             : deleteOriginals && !item.can_trash
                               ? " · Không có quyền xóa"
+                              : item.size_bytes != null &&
+                                  item.size_bytes > MAX_XLSX_BYTES
+                                ? " · Vượt giới hạn 25 MB"
                               : ""}
                         </span>
                       </span>

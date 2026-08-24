@@ -9,6 +9,8 @@ from app.models import (
     Customer,
     DebtReminderAutomation,
     DebtReminderRun,
+    DriveConversionFolder,
+    DriveConversionJob,
     MentionAutomation,
     MentionFollowup,
     ModelCallLog,
@@ -19,6 +21,7 @@ from app.models.entities import (
     DebtReminderStatus,
     DeliveryStatus,
     DeliveryType,
+    DriveConversionJobStatus,
     MentionFollowupStatus,
     MentionFollowupTrigger,
     ModelCallStatus,
@@ -180,6 +183,54 @@ async def test_finished_debt_reminder_runs_keep_exactly_45_days() -> None:
             (now.replace(tzinfo=None) - run.processed_at).days
             for run in remaining
             if run.processed_at is not None
+        ) == [10, 45]
+
+    await engine.dispose()
+
+
+async def test_finished_drive_jobs_keep_exactly_45_days() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 8, 24, 2, tzinfo=UTC)
+
+    async with session_factory() as db:
+        folder = DriveConversionFolder(
+            folder_id="retention-drive-folder",
+            name="Drive retention",
+            url="https://drive.google.com/drive/folders/retention-drive-folder",
+            capabilities={},
+            last_checked_at=now,
+        )
+        db.add(folder)
+        await db.flush()
+        for age in (46, 45, 10):
+            db.add(
+                DriveConversionJob(
+                    folder_id=folder.id,
+                    status=DriveConversionJobStatus.COMPLETED,
+                    finished_at=now - timedelta(days=age),
+                )
+            )
+        db.add(
+            DriveConversionJob(
+                folder_id=folder.id,
+                status=DriveConversionJobStatus.PROCESSING,
+                started_at=now - timedelta(days=90),
+            )
+        )
+        await db.commit()
+
+        await delete_expired_delivery_logs(db, now=now)
+        remaining = list(await db.scalars(select(DriveConversionJob)))
+
+        assert len(remaining) == 3
+        assert any(job.status == DriveConversionJobStatus.PROCESSING for job in remaining)
+        assert sorted(
+            (now.replace(tzinfo=None) - job.finished_at).days
+            for job in remaining
+            if job.finished_at is not None
         ) == [10, 45]
 
     await engine.dispose()

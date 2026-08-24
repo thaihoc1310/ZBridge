@@ -6,6 +6,7 @@ from datetime import datetime, time
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -634,6 +635,10 @@ class DriveConversionJob(TimestampMixin, Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_message: Mapped[str | None] = mapped_column(Text)
+    # Celery may redeliver an acks-late task. The token lets the same delivery
+    # resume after a crash while rejecting a different task trying to process
+    # the job concurrently.
+    claim_token: Mapped[str | None] = mapped_column(String(255), index=True)
 
     folder: Mapped[DriveConversionFolder] = relationship(back_populates="jobs")
     items: Mapped[list[DriveConversionItem]] = relationship(
@@ -662,7 +667,7 @@ class DriveConversionItem(TimestampMixin, Base):
     parent_folder_name: Mapped[str] = mapped_column(String(500), nullable=False)
     parent_folder_url: Mapped[str] = mapped_column(Text, nullable=False)
     relative_path: Mapped[str] = mapped_column(Text, nullable=False)
-    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger)
     can_download: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     can_trash: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     selected: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

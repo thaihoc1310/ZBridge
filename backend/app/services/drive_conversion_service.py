@@ -1,4 +1,3 @@
-import json
 import logging
 import re
 import uuid
@@ -34,7 +33,10 @@ logger = logging.getLogger("zbridge.drive_conversion")
 DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 SHEET_MIME = "application/vnd.google-apps.spreadsheet"
-MAX_XLSX_BYTES = 50 * 1024 * 1024
+MAX_XLSX_BYTES = 25 * 1024 * 1024
+MAX_SCAN_XLSX_FILES = 5000
+MAX_SCAN_FOLDERS = 10000
+MAX_SCAN_ENTRIES = 50000
 MAX_ITEM_ATTEMPTS = 3
 RETRYABLE_DRIVE_ERRORS = {"GOOGLE_API_ERROR", "GOOGLE_DRIVE_RATE_LIMIT"}
 
@@ -282,12 +284,24 @@ async def create_scan_job(
     await db.commit()
     from app.tasks.drive_conversion_tasks import scan_drive_folder_task
 
-    scan_drive_folder_task.delay(str(job.id))
+    try:
+        scan_drive_folder_task.delay(str(job.id))
+    except Exception as exc:
+        logger.exception("DRIVE_SCAN_ENQUEUE_FAILED job_id=%s", job.id)
+        job.status = DriveConversionJobStatus.FAILED
+        job.finished_at = datetime.now(UTC)
+        job.error_message = "Không đưa được tác vụ quét vào hàng đợi."
+        await db.commit()
+        raise AppError(
+            "DRIVE_QUEUE_UNAVAILABLE",
+            "Hàng đợi xử lý Drive đang không phản hồi. Hãy thử lại sau.",
+            503,
+        ) from exc
     return await get_conversion_job(db, job.id)
 
 
 async def _list_children(
-    client: httpx.AsyncClient, token: str, folder_id: str
+    client: httpx.AsyncClient, token: str, folder_id: str, *, remaining_entries: int
 ) -> list[dict[str, object]]:
     files: list[dict[str, object]] = []
     page_token: str | None = None
@@ -309,33 +323,59 @@ async def _list_children(
             client, "GET", "https://www.googleapis.com/drive/v3/files", token, params=params
         )
         files.extend(item for item in data.get("files", []) if isinstance(item, dict))
+        if len(files) > remaining_entries:
+            raise AppError(
+                "DRIVE_SCAN_ENTRY_LIMIT",
+                f"Folder có quá {MAX_SCAN_ENTRIES} mục nên không thể quét an toàn.",
+                422,
+            )
         page_token = str(data.get("nextPageToken") or "") or None
         if not page_token:
             return files
 
 
-async def scan_conversion_job(job_id: uuid.UUID) -> None:
+async def scan_conversion_job(job_id: uuid.UUID, task_token: str) -> None:
     async with SessionLocal() as db:
         job = await db.scalar(
             select(DriveConversionJob)
             .options(selectinload(DriveConversionJob.folder))
             .where(DriveConversionJob.id == job_id)
+            .with_for_update()
         )
         if job is None or job.status != DriveConversionJobStatus.SCANNING:
             return
+        if job.claim_token is not None and job.claim_token != task_token:
+            return
+        job.claim_token = task_token
+        await db.commit()
         folder = job.folder
         try:
             token = await google_oauth_tokens.access_token()
             discovered: list[DriveConversionItem] = []
             queue = deque([(folder.folder_id, folder.name, "")])
             visited: set[str] = set()
+            scanned_entries = 0
             async with httpx.AsyncClient(timeout=90, follow_redirects=True) as client:
                 while queue:
+                    if len(visited) >= MAX_SCAN_FOLDERS:
+                        raise AppError(
+                            "DRIVE_SCAN_FOLDER_LIMIT",
+                            f"Folder có quá {MAX_SCAN_FOLDERS} folder con nên không thể "
+                            "quét an toàn.",
+                            422,
+                        )
                     parent_id, parent_name, parent_path = queue.popleft()
                     if parent_id in visited:
                         continue
                     visited.add(parent_id)
-                    for entry in await _list_children(client, token, parent_id):
+                    entries = await _list_children(
+                        client,
+                        token,
+                        parent_id,
+                        remaining_entries=MAX_SCAN_ENTRIES - scanned_entries,
+                    )
+                    scanned_entries += len(entries)
+                    for entry in entries:
                         entry_id = str(entry.get("id") or "")
                         name = str(entry.get("name") or "Không tên")
                         mime = str(entry.get("mimeType") or "")
@@ -350,6 +390,13 @@ async def scan_conversion_job(job_id: uuid.UUID) -> None:
                             continue
                         if mime != XLSX_MIME and not name.lower().endswith(".xlsx"):
                             continue
+                        if len(discovered) >= MAX_SCAN_XLSX_FILES:
+                            raise AppError(
+                                "DRIVE_SCAN_FILE_LIMIT",
+                                f"Folder có quá {MAX_SCAN_XLSX_FILES} file XLSX. "
+                                "Hãy chia nhỏ folder rồi thử lại.",
+                                422,
+                            )
                         discovered.append(
                             DriveConversionItem(
                                 job_id=job.id,
@@ -380,6 +427,7 @@ async def scan_conversion_job(job_id: uuid.UUID) -> None:
             job.total_files = len(discovered)
             job.status = DriveConversionJobStatus.READY
             job.error_message = None
+            job.claim_token = None
             await db.commit()
         except Exception as exc:
             logger.exception("DRIVE_SCAN_FAILED job_id=%s", job_id)
@@ -390,6 +438,7 @@ async def scan_conversion_job(job_id: uuid.UUID) -> None:
                 else "Không quét được folder Google Drive."
             )
             job.finished_at = datetime.now(UTC)
+            job.claim_token = None
             await db.commit()
 
 
@@ -425,6 +474,17 @@ async def start_conversion_job(
             f"Không đủ quyền tải hoặc chuyển vào thùng rác: {', '.join(blocked[:5])}.",
             422,
         )
+    oversized = [
+        item.source_name
+        for item in selected_items
+        if item.size_bytes is not None and item.size_bytes > MAX_XLSX_BYTES
+    ]
+    if oversized:
+        raise AppError(
+            "XLSX_TOO_LARGE",
+            f"File XLSX vượt giới hạn 25 MB: {', '.join(oversized[:5])}.",
+            422,
+        )
     for item in job.items:
         item.selected = item.id in selected_ids
         if item.selected:
@@ -439,10 +499,23 @@ async def start_conversion_job(
     job.started_at = None
     job.finished_at = None
     job.error_message = None
+    job.claim_token = None
     await db.commit()
     from app.tasks.drive_conversion_tasks import process_drive_conversion_task
 
-    process_drive_conversion_task.delay(str(job.id))
+    try:
+        process_drive_conversion_task.delay(str(job.id))
+    except Exception as exc:
+        logger.exception("DRIVE_CONVERSION_ENQUEUE_FAILED job_id=%s", job.id)
+        job.status = DriveConversionJobStatus.FAILED
+        job.finished_at = datetime.now(UTC)
+        job.error_message = "Không đưa được tác vụ chuyển đổi vào hàng đợi."
+        await db.commit()
+        raise AppError(
+            "DRIVE_QUEUE_UNAVAILABLE",
+            "Hàng đợi xử lý Drive đang không phản hồi. Hãy thử lại sau.",
+            503,
+        ) from exc
     return await get_conversion_job(db, job.id)
 
 
@@ -481,6 +554,105 @@ async def _find_existing_destination(
     return None
 
 
+async def _download_xlsx(
+    client: httpx.AsyncClient, token: str, source_file_id: str
+) -> bytes:
+    async with client.stream(
+        "GET",
+        f"https://www.googleapis.com/drive/v3/files/{source_file_id}",
+        params={"alt": "media", "supportsAllDrives": "true"},
+        headers={"Authorization": f"Bearer {token}"},
+    ) as response:
+        if response.is_error:
+            await response.aread()
+            _raise_drive_response_error(response)
+        content_length = response.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > MAX_XLSX_BYTES:
+                    raise SheetExportError(
+                        "XLSX_TOO_LARGE", "File XLSX vượt giới hạn 25 MB."
+                    )
+            except ValueError:
+                pass
+        content = bytearray()
+        async for chunk in response.aiter_bytes():
+            if len(content) + len(chunk) > MAX_XLSX_BYTES:
+                raise SheetExportError(
+                    "XLSX_TOO_LARGE", "File XLSX vượt giới hạn 25 MB."
+                )
+            content.extend(chunk)
+        return bytes(content)
+
+
+async def _upload_xlsx_as_sheet(
+    client: httpx.AsyncClient,
+    token: str,
+    item: DriveConversionItem,
+    source_content: bytes,
+) -> dict[str, object]:
+    """Import an XLSX through a resumable session.
+
+    Drive documents multipart uploads as suitable only up to 5 MB, while this
+    tool intentionally accepts XLSX files up to 25 MB. A resumable session also
+    avoids constructing a second, multipart-framed copy of the workbook in RAM.
+    """
+    metadata = {
+        "name": re.sub(r"\.xlsx$", "", item.source_name, flags=re.IGNORECASE),
+        "mimeType": SHEET_MIME,
+        "parents": [item.parent_folder_id],
+        "appProperties": {
+            "zbridgeSourceId": item.source_file_id,
+            "zbridgeItemId": str(item.id),
+        },
+    }
+    session = await client.post(
+        "https://www.googleapis.com/upload/drive/v3/files",
+        params={
+            "uploadType": "resumable",
+            "supportsAllDrives": "true",
+            "fields": "id,name,mimeType,webViewLink",
+        },
+        json=metadata,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "X-Upload-Content-Type": XLSX_MIME,
+            "X-Upload-Content-Length": str(len(source_content)),
+        },
+    )
+    if session.is_error:
+        _raise_drive_response_error(session)
+    session_url = session.headers.get("location")
+    if not session_url:
+        raise SheetExportError(
+            "GOOGLE_RESPONSE_INVALID",
+            "Google Drive không trả về phiên upload chuyển đổi.",
+        )
+    upload = await client.put(
+        session_url,
+        content=source_content,
+        headers={
+            "Content-Type": XLSX_MIME,
+            "Content-Length": str(len(source_content)),
+        },
+    )
+    if upload.is_error:
+        _raise_drive_response_error(upload)
+    try:
+        payload = upload.json()
+    except ValueError as exc:
+        raise SheetExportError(
+            "GOOGLE_RESPONSE_INVALID",
+            "Google Drive trả về kết quả chuyển đổi không hợp lệ.",
+        ) from exc
+    if not payload.get("id"):
+        raise SheetExportError(
+            "GOOGLE_RESPONSE_INVALID",
+            "Google Drive không trả về mã Google Sheet vừa tạo.",
+        )
+    return payload
+
+
 async def _convert_one(item_id: uuid.UUID, delete_original: bool) -> None:
     for attempt in range(MAX_ITEM_ATTEMPTS):
         async with SessionLocal() as db:
@@ -514,54 +686,15 @@ async def _convert_one(item_id: uuid.UUID, delete_original: bool) -> None:
                             },
                         )
                     if existing is None:
-                        response = await client.get(
-                            f"https://www.googleapis.com/drive/v3/files/{item.source_file_id}",
-                            params={"alt": "media", "supportsAllDrives": "true"},
-                            headers={"Authorization": f"Bearer {token}"},
+                        source_content = await _download_xlsx(
+                            client, token, item.source_file_id
                         )
-                        if response.is_error:
-                            _raise_drive_response_error(response)
-                        if len(response.content) > MAX_XLSX_BYTES:
-                            raise SheetExportError(
-                                "XLSX_TOO_LARGE", "File XLSX vượt giới hạn 50 MB."
-                            )
-                        metadata = {
-                            "name": re.sub(r"\.xlsx$", "", item.source_name, flags=re.IGNORECASE),
-                            "mimeType": SHEET_MIME,
-                            "parents": [item.parent_folder_id],
-                            "appProperties": {
-                                "zbridgeSourceId": item.source_file_id,
-                                "zbridgeItemId": str(item.id),
-                            },
-                        }
-                        boundary = f"zbridge-{uuid.uuid4().hex}"
-                        metadata_json = json.dumps(metadata)
-                        body = (
-                            (
-                                f"--{boundary}\r\n"
-                                "Content-Type: application/json; charset=UTF-8\r\n\r\n"
-                                f"{metadata_json}\r\n--{boundary}\r\n"
-                                f"Content-Type: {XLSX_MIME}\r\n\r\n"
-                            ).encode()
-                            + response.content
-                            + f"\r\n--{boundary}--\r\n".encode()
+                        existing = await _upload_xlsx_as_sheet(
+                            client,
+                            token,
+                            item,
+                            source_content,
                         )
-                        upload = await client.post(
-                            "https://www.googleapis.com/upload/drive/v3/files",
-                            params={
-                                "uploadType": "multipart",
-                                "supportsAllDrives": "true",
-                                "fields": "id,name,mimeType,webViewLink",
-                            },
-                            content=body,
-                            headers={
-                                "Authorization": f"Bearer {token}",
-                                "Content-Type": f"multipart/related; boundary={boundary}",
-                            },
-                        )
-                        if upload.is_error:
-                            _raise_drive_response_error(upload)
-                        existing = upload.json()
                     item.destination_file_id = str(existing.get("id") or "")
                     item.destination_url = str(
                         existing.get("webViewLink")
@@ -611,15 +744,19 @@ async def _convert_one(item_id: uuid.UUID, delete_original: bool) -> None:
             logger.exception("DRIVE_CONVERSION_ITEM_FAILED item_id=%s", item_id)
 
 
-async def process_conversion_job(job_id: uuid.UUID) -> None:
+async def process_conversion_job(job_id: uuid.UUID, task_token: str) -> None:
     async with SessionLocal() as db:
         job = await db.scalar(
             select(DriveConversionJob).where(DriveConversionJob.id == job_id).with_for_update()
         )
-        if job is None or job.status not in {
-            DriveConversionJobStatus.QUEUED,
-            DriveConversionJobStatus.PROCESSING,
-        }:
+        if job is None:
+            return
+        if job.status == DriveConversionJobStatus.QUEUED:
+            job.claim_token = task_token
+        elif (
+            job.status != DriveConversionJobStatus.PROCESSING
+            or job.claim_token != task_token
+        ):
             return
         await db.execute(
             update(DriveConversionItem)
@@ -631,7 +768,7 @@ async def process_conversion_job(job_id: uuid.UUID) -> None:
             .values(status=DriveConversionItemStatus.PENDING)
         )
         job.status = DriveConversionJobStatus.PROCESSING
-        job.started_at = datetime.now(UTC)
+        job.started_at = job.started_at or datetime.now(UTC)
         item_ids = list(
             (
                 await db.scalars(
@@ -652,6 +789,11 @@ async def process_conversion_job(job_id: uuid.UUID) -> None:
             select(DriveConversionJob).where(DriveConversionJob.id == job_id).with_for_update()
         )
         if job is None:
+            return
+        if (
+            job.status != DriveConversionJobStatus.PROCESSING
+            or job.claim_token != task_token
+        ):
             return
         counts = dict(
             (
@@ -681,4 +823,5 @@ async def process_conversion_job(job_id: uuid.UUID) -> None:
         job.skipped_files = int(counts.get(DriveConversionItemStatus.SKIPPED, 0))
         job.status = DriveConversionJobStatus.COMPLETED
         job.finished_at = datetime.now(UTC)
+        job.claim_token = None
         await db.commit()

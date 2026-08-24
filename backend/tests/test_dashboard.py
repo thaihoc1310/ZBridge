@@ -74,7 +74,7 @@ async def test_dashboard_returns_debt_split_and_sent_messages_by_local_hour() ->
     assert result.customer_count == 2
     assert result.customers_with_debt == 1
     assert result.customers_without_debt == 1
-    assert result.messages_today == 3
+    assert result.messages_today == 2
     assert result.failed_today == 1
     assert len(result.messages_by_hour) == 24
     assert result.messages_by_hour[local_now.hour].count == 2

@@ -169,7 +169,11 @@ async def sync_debt_reminder_state(
             500,
         )
 
-    runnable = customer.has_debt and bool(customer.debt_file_url)
+    runnable = (
+        customer.has_debt
+        and bool(customer.debt_file_url)
+        and customer.group.is_available
+    )
     if runnable:
         if automation.next_run_at is None:
             automation.next_run_at = next_monthly_run(
@@ -252,7 +256,7 @@ async def save_debt_reminder(
         )
     )
     effective_now = _as_utc(now or datetime.now(UTC))
-    if customer.has_debt:
+    if customer.has_debt and customer.group.is_available:
         next_run_at = next_monthly_run(
             data.day_of_month, parsed_time, now=effective_now
         )

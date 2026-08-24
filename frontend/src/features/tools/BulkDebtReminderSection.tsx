@@ -252,8 +252,8 @@ export function BulkDebtReminderSection() {
           <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-600" />
           <h3 className="mt-4 font-display text-2xl">Đã áp lịch nhắc</h3>
           <p className="mt-2 text-sm text-muted-foreground">
-            Tạo mới {result.created} · cập nhật {result.updated} · giữ nguyên{" "}
-            {result.unchanged} · hủy {result.cancelled_runs} lượt lịch cũ
+            Cập nhật {result.updated} · giữ nguyên {result.unchanged} · hủy{" "}
+            {result.cancelled_runs} lượt lịch cũ
           </p>
           {result.skipped.length > 0 && (
             <p className="mt-3 text-xs text-amber-700">

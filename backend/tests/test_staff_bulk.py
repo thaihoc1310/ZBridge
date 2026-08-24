@@ -240,8 +240,8 @@ async def test_apply_refuses_when_membership_cannot_be_read(monkeypatch) -> None
     await engine.dispose()
 
 
-async def test_a_group_missing_from_the_batch_keeps_everyone(monkeypatch) -> None:
-    """If Zalo omits a group, write the full list rather than silently emptying it."""
+async def test_a_group_missing_from_the_batch_is_left_untouched(monkeypatch) -> None:
+    """A partial Zalo response must not write targets we could not verify."""
     engine, sessions = await _database()
     _stub_gateway(monkeypatch, members={"g-kho": MEMBERS["g-kho"]})
     async with sessions() as db:
@@ -250,6 +250,7 @@ async def test_a_group_missing_from_the_batch_keeps_everyone(monkeypatch) -> Non
             db, _payload([ids["g-hoaphat"], ids["g-kho"]])
         )
         assert result.dropped_members == {"Thu Hà": 1}
+        assert result.skipped == ["Cty Hoà Phát"]
 
     async with sessions() as db:
         automation = await db.scalar(
@@ -262,7 +263,7 @@ async def test_a_group_missing_from_the_batch_keeps_everyone(monkeypatch) -> Non
                 select(MentionTarget).where(MentionTarget.automation_id == automation.id)
             )
         ).all()
-        assert sorted(t.zalo_user_id for t in targets) == ["u-ketoan", "u-sales"]
+        assert sorted(t.zalo_user_id for t in targets) == ["u-cu"]
     await engine.dispose()
 
 

@@ -174,6 +174,16 @@ async def preview_bulk_mention(
                 group_id: {str(member.get("user_id") or "") for member in members}
                 for group_id, members in by_group.items()
             }
+            omitted = [
+                group.name
+                for group in available_groups
+                if group.zalo_group_id not in membership
+            ]
+            if omitted:
+                gateway_error = (
+                    f"Zalo không trả về thành viên của {len(omitted)} nhóm; "
+                    "các nhóm đó sẽ được bỏ qua khi áp"
+                )
         except GatewayError as exc:
             # Without membership we cannot say who would be dropped, so say that
             # rather than quietly presenting an empty warning column.
@@ -290,6 +300,7 @@ async def apply_bulk_mention(
 
     membership: dict[str, set[str]] = {}
     available = [group for _, group in pairs if group.is_available]
+    membership_required = bool(data.targets or data.price_targets)
     # Nobody to place means nothing to check. Asking the gateway anyway would
     # make switching tagging off impossible while the bot is disconnected, which
     # is exactly when somebody wants to switch it off.
@@ -315,6 +326,7 @@ async def apply_bulk_mention(
                 .where(
                     MentionAutomation.zalo_group_id.in_([group.id for _, group in pairs])
                 )
+                .with_for_update()
             )
         ).all()
     }
@@ -327,6 +339,12 @@ async def apply_bulk_mention(
             skipped.append(group.name)
             continue
         members = membership.get(group.zalo_group_id)
+        if membership_required and members is None:
+            # A locally available group can still be omitted by Zalo's batch
+            # response. Writing unverified users there creates a configuration
+            # that later fails every send, so leave that group untouched.
+            skipped.append(group.name)
+            continue
         kept: dict[MentionTargetKind, list] = {}
         # Per customer, and by name: somebody listed for both features who is
         # absent from this group is one missing person here, not two.

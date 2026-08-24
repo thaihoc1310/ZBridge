@@ -9,16 +9,22 @@ from app.db.database import SessionLocal
 from app.models import (
     BotDeliveryLog,
     DebtReminderRun,
+    DriveConversionJob,
     MentionContextMessage,
     MentionFollowup,
     ModelCallLog,
 )
-from app.models.entities import DebtReminderStatus, MentionFollowupStatus
+from app.models.entities import (
+    DebtReminderStatus,
+    DriveConversionJobStatus,
+    MentionFollowupStatus,
+)
 
 logger = logging.getLogger(__name__)
 
 ACTIVITY_LOG_RETENTION_DAYS = 7
 DEBT_REMINDER_RUN_RETENTION_DAYS = 45
+DRIVE_CONVERSION_JOB_RETENTION_DAYS = 45
 
 
 async def delete_expired_delivery_logs(
@@ -29,6 +35,7 @@ async def delete_expired_delivery_logs(
     reference = now or datetime.now(UTC)
     cutoff = reference - timedelta(days=ACTIVITY_LOG_RETENTION_DAYS)
     debt_cutoff = reference - timedelta(days=DEBT_REMINDER_RUN_RETENTION_DAYS)
+    drive_cutoff = reference - timedelta(days=DRIVE_CONVERSION_JOB_RETENTION_DAYS)
     result = await db.execute(
         delete(BotDeliveryLog).where(BotDeliveryLog.created_at < cutoff)
     )
@@ -56,6 +63,20 @@ async def delete_expired_delivery_logs(
                     MentionFollowupStatus.FAILED,
                     MentionFollowupStatus.SKIPPED,
                     MentionFollowupStatus.CANCELLED,
+                ]
+            ),
+        )
+    )
+    # Folder registrations are configuration and stay. Finished scan/conversion
+    # jobs are transient history; deleting a job cascades to its discovered item
+    # rows and prevents file metadata from accumulating forever.
+    await db.execute(
+        delete(DriveConversionJob).where(
+            DriveConversionJob.finished_at < drive_cutoff,
+            DriveConversionJob.status.in_(
+                [
+                    DriveConversionJobStatus.COMPLETED,
+                    DriveConversionJobStatus.FAILED,
                 ]
             ),
         )
@@ -99,9 +120,11 @@ async def purge_expired_delivery_logs() -> int:
 
     logger.info(
         "Activity log retention completed: retention_days=%d "
-        "debt_retention_days=%d delivery_deleted=%d model_calls_deleted=%d",
+        "debt_retention_days=%d drive_retention_days=%d "
+        "delivery_deleted=%d model_calls_deleted=%d",
         ACTIVITY_LOG_RETENTION_DAYS,
         DEBT_REMINDER_RUN_RETENTION_DAYS,
+        DRIVE_CONVERSION_JOB_RETENTION_DAYS,
         deleted_count,
         deleted_model_calls,
     )

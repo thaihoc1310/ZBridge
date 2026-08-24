@@ -46,11 +46,13 @@ async def claim_due_debt_reminders() -> list[uuid.UUID]:
                 await db.scalars(
                     select(DebtReminderAutomation)
                     .join(Customer)
+                    .join(ZaloGroup, ZaloGroup.id == Customer.zalo_group_id)
                     .options(selectinload(DebtReminderAutomation.customer))
                     .where(
                         Customer.has_debt.is_(True),
                         Customer.debt_file_url.is_not(None),
                         Customer.debt_file_url != "",
+                        ZaloGroup.is_available.is_(True),
                         DebtReminderAutomation.next_run_at.is_not(None),
                         DebtReminderAutomation.next_run_at <= now,
                     )

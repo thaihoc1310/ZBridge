@@ -218,8 +218,8 @@ export function BulkMentionSection({ canEdit }: { canEdit: boolean }) {
           {preview.data?.gateway_error && (
             <p className="mb-4 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              Không đọc được thành viên nhóm ({preview.data.gateway_error}). Vẫn áp được,
-              nhưng sẽ ghi cả những người có thể không có trong nhóm.
+              Không đọc được thành viên nhóm ({preview.data.gateway_error}). Khi bấm áp,
+              hệ thống sẽ kiểm tra lại; nhóm nào Zalo vẫn không trả dữ liệu sẽ được bỏ qua.
             </p>
           )}
           <p className="mb-4 text-xs leading-relaxed text-muted-foreground">

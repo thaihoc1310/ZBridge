@@ -35,7 +35,11 @@ async def dashboard(
         await db.scalar(
             select(func.count())
             .select_from(BotDeliveryLog)
-            .where(BotDeliveryLog.created_at >= today)
+            .where(
+                BotDeliveryLog.created_at >= today,
+                BotDeliveryLog.created_at < tomorrow,
+                BotDeliveryLog.status == DeliveryStatus.SENT,
+            )
         )
         or 0
     )

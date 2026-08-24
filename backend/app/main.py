@@ -1,8 +1,9 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from app.api import (
@@ -83,6 +84,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def reject_untrusted_browser_origin(request: Request, call_next):
+    """Block cross-origin browser mutations that would carry the session cookie.
+
+    CORS controls whether JavaScript may read a response, but a simple HTML form
+    can still submit a POST. Browsers attach ``Origin`` to such requests; machine
+    clients and the gateway do not, so internal secret-authenticated traffic is
+    unaffected.
+    """
+    origin = request.headers.get("origin")
+    if request.method not in {"GET", "HEAD", "OPTIONS"} and origin:
+        allowed = {value.rstrip("/") for value in settings.cors_origins}
+        if origin.rstrip("/") not in allowed:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": {
+                        "code": "UNTRUSTED_ORIGIN",
+                        "message": "Nguồn yêu cầu không được hệ thống cho phép.",
+                    }
+                },
+            )
+    return await call_next(request)
 
 app.include_router(health.router)
 app.include_router(internal_events.router)

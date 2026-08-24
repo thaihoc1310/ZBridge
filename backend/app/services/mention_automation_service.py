@@ -205,13 +205,18 @@ async def list_group_members(db: AsyncSession, group_id: uuid.UUID) -> list[Grou
     return [GroupMemberResponse.model_validate(member) for member in members]
 
 
-async def _load_automation(db: AsyncSession, group_id: uuid.UUID) -> MentionAutomation | None:
-    return await db.scalar(
+async def _load_automation(
+    db: AsyncSession, group_id: uuid.UUID, *, for_update: bool = False
+) -> MentionAutomation | None:
+    statement = (
         select(MentionAutomation)
         .options(selectinload(MentionAutomation.targets))
         .execution_options(populate_existing=True)
         .where(MentionAutomation.zalo_group_id == group_id)
     )
+    if for_update:
+        statement = statement.with_for_update()
+    return await db.scalar(statement)
 
 
 async def _to_response(
@@ -299,7 +304,10 @@ async def save_mention_automation(
     except ValueError as exc:
         raise AppError("INVALID_TIME_WINDOWS", str(exc), 422) from exc
 
-    automation = await _load_automation(db, group_id)
+    # Serialize configuration changes with incoming events. Otherwise an event
+    # can read the old targets, wait while this transaction disables them, then
+    # create a brand-new follow-up for a target that was just removed.
+    automation = await _load_automation(db, group_id, for_update=True)
     if automation is None:
         raise AppError(
             "MENTION_AUTOMATION_CONFIG_MISSING",
@@ -372,6 +380,7 @@ async def schedule_from_incoming_event(
             ZaloGroup.is_available.is_(True),
             MentionAutomation.enabled.is_(True),
         )
+        .with_for_update()
     )
     if automation is None:
         return IncomingEventResponse(scheduled=False)

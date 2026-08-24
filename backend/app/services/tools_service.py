@@ -178,7 +178,11 @@ async def preview_bulk_debt_reminders(
         current_day = automation.day_of_month
         current_repeat = automation.repeat_interval_days
         current_time = automation.send_time.strftime("%H:%M")
-        runnable = customer.has_debt and bool(customer.debt_file_url)
+        runnable = (
+            customer.group.is_available
+            and customer.has_debt
+            and bool(customer.debt_file_url)
+        )
         will_change = (
             automation.day_of_month != data.day_of_month
             or automation.repeat_interval_days != data.repeat_interval_days
@@ -221,6 +225,21 @@ async def apply_bulk_debt_reminders(
     if missing:
         raise AppError("CUSTOMER_NOT_FOUND", "Có khách hàng không còn tồn tại.", 404)
 
+    # The scheduler locks automation rows while materialising due runs. Lock the
+    # same rows here before deciding which runs to cancel and where to reschedule,
+    # otherwise a beat tick can create a run from the old schedule concurrently
+    # with this bulk update.
+    automation_by_customer = {
+        automation.customer_id: automation
+        for automation in (
+            await db.scalars(
+                select(DebtReminderAutomation)
+                .where(DebtReminderAutomation.customer_id.in_(found))
+                .with_for_update()
+            )
+        ).all()
+    }
+
     parsed_time = time.fromisoformat(data.send_time)
     now = datetime.now(UTC)
     updated_count = unchanged = cancelled = 0
@@ -229,8 +248,12 @@ async def apply_bulk_debt_reminders(
         if not customer.group.is_available:
             skipped.append(customer.group.name)
             continue
-        automation = customer.debt_reminder
-        runnable = customer.has_debt and bool(customer.debt_file_url)
+        automation = automation_by_customer.get(customer.id)
+        runnable = (
+            customer.group.is_available
+            and customer.has_debt
+            and bool(customer.debt_file_url)
+        )
         if automation is None:
             raise AppError(
                 "DEBT_REMINDER_CONFIG_MISSING",
