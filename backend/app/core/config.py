@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     fptai_api_key: str = ""
     openai_api_key: str = ""
     mention_context_messages: int = 8
-    mention_context_window_minutes: int = 15
+    mention_context_window_minutes: int = 30
     mention_context_retention_hours: int = 24
     mention_classification_deadline_minutes: int = 15
     google_service_account_file: str | None = None
