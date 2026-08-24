@@ -71,7 +71,7 @@ function HourlyMessagesChart({ data }: { data?: Dashboard }) {
       <div className="mt-5 grid h-36 items-end gap-1 border-b border-slate-200" style={{ gridTemplateColumns: "repeat(24, minmax(0, 1fr))" }} role="img" aria-label={`${sent} tin nhắn gửi thành công hôm nay theo từng giờ`}>
         {points.map(({ hour, count }) => (
           <div key={hour} className="group relative flex h-full items-end" title={`${hour.toString().padStart(2, "0")}:00 — ${count} tin`}>
-            <div className={`w-full min-w-0 rounded-t-sm transition-colors ${count ? "bg-accent/80 group-hover:bg-accent" : "bg-slate-100"}`} style={{ height: count ? `${Math.max(8, (count / maximum) * 100)}%` : "3px" }} />
+            <div className={`w-full min-w-0 rounded-t-sm transition-opacity ${count ? "bg-accent opacity-80 group-hover:opacity-100" : "bg-slate-100"}`} style={{ height: count ? `${Math.max(8, (count / maximum) * 100)}%` : "3px" }} />
             {count > 0 && <span className="pointer-events-none absolute -top-5 left-1/2 hidden -translate-x-1/2 rounded bg-foreground px-1.5 py-0.5 text-[9px] text-white group-hover:block">{count}</span>}
           </div>
         ))}
