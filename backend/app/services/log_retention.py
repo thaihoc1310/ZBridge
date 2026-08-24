@@ -11,12 +11,13 @@ from app.models import (
     DebtReminderRun,
     MentionContextMessage,
     MentionFollowup,
+    ModelCallLog,
 )
 from app.models.entities import DebtReminderStatus, MentionFollowupStatus
 
 logger = logging.getLogger(__name__)
 
-DELIVERY_LOG_RETENTION_DAYS = 30
+ACTIVITY_LOG_RETENTION_DAYS = 7
 
 
 async def delete_expired_delivery_logs(
@@ -24,7 +25,7 @@ async def delete_expired_delivery_logs(
     *,
     now: datetime | None = None,
 ) -> int:
-    cutoff = (now or datetime.now(UTC)) - timedelta(days=DELIVERY_LOG_RETENTION_DAYS)
+    cutoff = (now or datetime.now(UTC)) - timedelta(days=ACTIVITY_LOG_RETENTION_DAYS)
     result = await db.execute(
         delete(BotDeliveryLog).where(BotDeliveryLog.created_at < cutoff)
     )
@@ -60,6 +61,19 @@ async def delete_expired_delivery_logs(
     return result.rowcount or 0
 
 
+async def delete_expired_model_call_logs(
+    db: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> int:
+    cutoff = (now or datetime.now(UTC)) - timedelta(days=ACTIVITY_LOG_RETENTION_DAYS)
+    result = await db.execute(
+        delete(ModelCallLog).where(ModelCallLog.created_at < cutoff)
+    )
+    await db.commit()
+    return result.rowcount or 0
+
+
 async def delete_expired_mention_context(
     db: AsyncSession,
     *,
@@ -78,11 +92,14 @@ async def delete_expired_mention_context(
 async def purge_expired_delivery_logs() -> int:
     async with SessionLocal() as db:
         deleted_count = await delete_expired_delivery_logs(db)
+        deleted_model_calls = await delete_expired_model_call_logs(db)
 
     logger.info(
-        "Delivery log retention completed: retention_days=%d deleted=%d",
-        DELIVERY_LOG_RETENTION_DAYS,
+        "Activity log retention completed: retention_days=%d delivery_deleted=%d "
+        "model_calls_deleted=%d",
+        ACTIVITY_LOG_RETENTION_DAYS,
         deleted_count,
+        deleted_model_calls,
     )
     return deleted_count
 

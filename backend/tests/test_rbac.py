@@ -204,6 +204,7 @@ async def test_business_owner_runs_operations_but_cannot_manage_users(client) ->
     assert (await client.get("/api/customers")).status_code == 200
     assert (await client.get("/api/dashboard")).status_code == 200
     assert (await client.get("/api/activity")).status_code == 200
+    assert (await client.get("/api/activity/model-calls")).status_code == 200
 
     for path in ("/api/users", "/api/roles"):
         forbidden = await client.get(path)

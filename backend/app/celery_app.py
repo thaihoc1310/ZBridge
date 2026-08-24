@@ -52,7 +52,9 @@ celery_app.conf.update(
         },
         "purge-expired-delivery-logs": {
             "task": "zbridge.maintenance.purge_expired_delivery_logs",
-            "schedule": crontab(minute=0, hour=2, day_of_week="monday"),
+            # Keep exactly seven rolling days: every 02:00 removes anything
+            # older than the same time seven days earlier.
+            "schedule": crontab(minute=0, hour=2),
         },
         "purge-expired-mention-context": {
             "task": "zbridge.maintenance.purge_expired_mention_context",

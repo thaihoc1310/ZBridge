@@ -74,6 +74,31 @@ export type DeliveryLog = {
   created_at: string;
 };
 export type DeliveryLogList = { items: DeliveryLog[]; total: number; page: number; limit: number; pages: number };
+export type ModelCallStatus = "PROCESSING" | "SUCCEEDED" | "FAILED";
+export type ModelCallLog = {
+  id: string;
+  customer_id: string | null;
+  customer_name: string;
+  trigger: "MENTION" | "PRICE_INQUIRY";
+  provider: string;
+  model: string;
+  request_payload: Record<string, unknown>;
+  response_payload: Record<string, unknown> | null;
+  status: ModelCallStatus;
+  outcome: string | null;
+  error_type: string | null;
+  error_message: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  latency_ms: number | null;
+  scheduled_for_send: boolean;
+  message_sent: boolean;
+  zalo_message_id: string | null;
+  message_sent_at: string | null;
+  created_at: string;
+  finished_at: string | null;
+};
+export type ModelCallLogList = { items: ModelCallLog[]; total: number; page: number; limit: number; pages: number };
 export type Dashboard = {
   bot_status: BotStatus;
   customer_count: number;

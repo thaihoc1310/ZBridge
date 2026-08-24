@@ -9,14 +9,24 @@ from app.models import (
     Customer,
     MentionAutomation,
     MentionFollowup,
+    ModelCallLog,
     ZaloAccount,
     ZaloGroup,
 )
-from app.models.entities import DeliveryStatus, DeliveryType, MentionFollowupStatus
-from app.services.log_retention import delete_expired_delivery_logs
+from app.models.entities import (
+    DeliveryStatus,
+    DeliveryType,
+    MentionFollowupStatus,
+    MentionFollowupTrigger,
+    ModelCallStatus,
+)
+from app.services.log_retention import (
+    delete_expired_delivery_logs,
+    delete_expired_model_call_logs,
+)
 
 
-async def test_delivery_logs_are_deleted_only_after_30_days() -> None:
+async def test_delivery_logs_are_deleted_only_after_seven_days() -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -45,19 +55,19 @@ async def test_delivery_logs_are_deleted_only_after_30_days() -> None:
                     customer_id=group.id,
                     type=DeliveryType.MENTION_AUTOMATION,
                     status=DeliveryStatus.SENT,
-                    created_at=now - timedelta(days=31),
+                    created_at=now - timedelta(days=8),
                 ),
                 BotDeliveryLog(
                     customer_id=group.id,
                     type=DeliveryType.MENTION_AUTOMATION,
                     status=DeliveryStatus.FAILED,
-                    created_at=now - timedelta(days=30),
+                    created_at=now - timedelta(days=7),
                 ),
                 BotDeliveryLog(
                     customer_id=group.id,
                     type=DeliveryType.MANUAL_MESSAGE,
                     status=DeliveryStatus.SENT,
-                    created_at=now - timedelta(days=29),
+                    created_at=now - timedelta(days=6),
                 ),
             ]
         )
@@ -70,7 +80,39 @@ async def test_delivery_logs_are_deleted_only_after_30_days() -> None:
 
         assert deleted_count == 1
         assert len(remaining_logs) == 2
-        assert remaining_logs[0].created_at == (now - timedelta(days=30)).replace(tzinfo=None)
+        assert remaining_logs[0].created_at == (now - timedelta(days=7)).replace(tzinfo=None)
+
+    await engine.dispose()
+
+
+async def test_model_call_logs_keep_exactly_seven_days() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 8, 24, 2, tzinfo=UTC)
+
+    async with session_factory() as db:
+        for age in (8, 7, 6):
+            db.add(
+                ModelCallLog(
+                    customer_name=f"Khách {age}",
+                    trigger=MentionFollowupTrigger.MENTION,
+                    provider="fptcloud",
+                    model="DeepSeek-V4-Flash",
+                    request_payload={"conversation": [{"text": f"tin {age}"}]},
+                    status=ModelCallStatus.SUCCEEDED,
+                    outcome="SKIPPED",
+                    created_at=now - timedelta(days=age),
+                )
+            )
+        await db.commit()
+
+        assert await delete_expired_model_call_logs(db, now=now) == 1
+        remaining = list(
+            await db.scalars(select(ModelCallLog).order_by(ModelCallLog.created_at))
+        )
+        assert [row.customer_name for row in remaining] == ["Khách 7", "Khách 6"]
 
     await engine.dispose()
 

@@ -5,7 +5,14 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
-from app.models.entities import BotStatus, DebtReminderStatus, DeliveryStatus, DeliveryType
+from app.models.entities import (
+    BotStatus,
+    DebtReminderStatus,
+    DeliveryStatus,
+    DeliveryType,
+    MentionFollowupTrigger,
+    ModelCallStatus,
+)
 
 
 class LoginRequest(BaseModel):
@@ -167,6 +174,38 @@ class DeliveryLogResponse(BaseModel):
 
 class DeliveryLogListResponse(BaseModel):
     items: list[DeliveryLogResponse]
+    total: int
+    page: int
+    limit: int
+    pages: int
+
+
+class ModelCallLogResponse(BaseModel):
+    id: uuid.UUID
+    customer_id: uuid.UUID | None
+    customer_name: str
+    trigger: MentionFollowupTrigger
+    provider: str
+    model: str
+    request_payload: dict[str, object]
+    response_payload: dict[str, object] | None
+    status: ModelCallStatus
+    outcome: str | None
+    error_type: str | None
+    error_message: str | None
+    input_tokens: int | None
+    output_tokens: int | None
+    latency_ms: int | None
+    scheduled_for_send: bool
+    message_sent: bool
+    zalo_message_id: str | None
+    message_sent_at: datetime | None
+    created_at: datetime
+    finished_at: datetime | None
+
+
+class ModelCallLogListResponse(BaseModel):
+    items: list[ModelCallLogResponse]
     total: int
     page: int
     limit: int

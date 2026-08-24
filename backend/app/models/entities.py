@@ -84,6 +84,12 @@ class MentionFollowupStatus(enum.StrEnum):
     CANCELLED = "CANCELLED"
 
 
+class ModelCallStatus(enum.StrEnum):
+    PROCESSING = "PROCESSING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -419,6 +425,57 @@ class MentionFollowup(Base):
     )
 
     automation: Mapped[MentionAutomation] = relationship(back_populates="followups")
+
+
+class ModelCallLog(Base):
+    """Seven-day audit trail for classifier requests and their real send outcome."""
+
+    __tablename__ = "model_call_logs"
+    __table_args__ = (
+        Index("ix_model_call_logs_created", "created_at"),
+        Index("ix_model_call_logs_followup_created", "followup_id", "created_at"),
+        Index("ix_model_call_logs_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    followup_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("mention_followups.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("customers.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    customer_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    trigger: Mapped[MentionFollowupTrigger] = mapped_column(
+        Enum(MentionFollowupTrigger, native_enum=False), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    response_payload: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    status: Mapped[ModelCallStatus] = mapped_column(
+        Enum(ModelCallStatus, native_enum=False),
+        default=ModelCallStatus.PROCESSING,
+        nullable=False,
+    )
+    outcome: Mapped[str | None] = mapped_column(String(64))
+    error_type: Mapped[str | None] = mapped_column(String(128))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    scheduled_for_send: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    message_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    zalo_message_id: Mapped[str | None] = mapped_column(String(128))
+    message_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class DebtReminderAutomation(TimestampMixin, Base):

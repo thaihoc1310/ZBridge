@@ -3,12 +3,12 @@ import { cn } from "../../lib/cn";
 const labels: Record<string, string> = {
   CONNECTED: "Đã kết nối", DISCONNECTED: "Mất kết nối", CONNECTING: "Đang kết nối",
   AUTH_REQUIRED: "Cần xác thực", ERROR: "Có lỗi", SENT: "Đã gửi", FAILED: "Thất bại",
-  SENDING: "Đang gửi", available: "Khả dụng", unavailable: "Không khả dụng",
+  SUCCEEDED: "Thành công", PROCESSING: "Đang gọi", SENDING: "Đang gửi", available: "Khả dụng", unavailable: "Không khả dụng",
 };
 
 export function StatusBadge({ status }: { status: string }) {
-  const positive = ["CONNECTED", "SENT", "available"].includes(status);
-  const pending = ["CONNECTING", "SENDING"].includes(status);
+  const positive = ["CONNECTED", "SENT", "SUCCEEDED", "available"].includes(status);
+  const pending = ["CONNECTING", "PROCESSING", "SENDING"].includes(status);
   return (
     <span className={cn(
       "inline-flex items-center gap-2 rounded-full px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider",
@@ -20,4 +20,3 @@ export function StatusBadge({ status }: { status: string }) {
     </span>
   );
 }
-

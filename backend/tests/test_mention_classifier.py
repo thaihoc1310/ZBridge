@@ -11,6 +11,7 @@ from app.models import (
     MentionContextMessage,
     MentionFollowup,
     MentionTarget,
+    ModelCallLog,
     ZaloAccount,
     ZaloGroup,
 )
@@ -18,6 +19,7 @@ from app.models.entities import (
     MentionFollowupStatus,
     MentionFollowupTrigger,
     MentionTargetKind,
+    ModelCallStatus,
 )
 from app.schemas.api import IncomingGroupMessage, IncomingGroupReaction, IncomingMention
 from app.services import mention_classifier
@@ -383,6 +385,14 @@ async def test_low_confidence_ack_is_still_tagged(monkeypatch) -> None:
         assert followup.target_user_ids == ["target-user"]
         assert followup.classification_result[0]["skipped"] is False
         assert followup.classification_result[0]["confidence"] == 0.65
+        model_log = await db.scalar(select(ModelCallLog))
+        assert model_log is not None
+        assert model_log.status == ModelCallStatus.SUCCEEDED
+        assert model_log.outcome == "SCHEDULED"
+        assert model_log.scheduled_for_send is True
+        assert model_log.message_sent is False
+        assert model_log.request_payload["conversation"][-1]["text"]
+        assert model_log.response_payload["decisions"][0]["classification"] == "ACKNOWLEDGEMENT"
 
     await engine.dispose()
 
@@ -470,6 +480,11 @@ async def test_reaction_while_ai_is_in_flight_cannot_resurrect_loop(monkeypatch)
             assert followup.status == MentionFollowupStatus.CANCELLED
             assert followup.target_user_ids == []
             assert followup.classification_result is None
+            model_log = await db.scalar(select(ModelCallLog))
+            assert model_log.status == ModelCallStatus.SUCCEEDED
+            assert model_log.outcome == "CLAIM_LOST"
+            assert model_log.scheduled_for_send is False
+            assert model_log.message_sent is False
         await engine.dispose()
 
 
@@ -593,6 +608,11 @@ async def test_price_inquiry_stays_silent_when_the_model_fails(monkeypatch) -> N
         assert followup.status == MentionFollowupStatus.SKIPPED
         assert followup.target_user_ids == []
         assert "TimeoutError" in followup.classification_error
+        model_log = await db.scalar(select(ModelCallLog))
+        assert model_log.status == ModelCallStatus.FAILED
+        assert model_log.outcome == "SAFE_FALLBACK_SKIP"
+        assert model_log.error_type == "TimeoutError"
+        assert model_log.scheduled_for_send is False
     await engine.dispose()
 
 

@@ -16,10 +16,17 @@ from app.core.alerts import Severity
 from app.core.config import settings
 from app.db.database import SessionLocal
 from app.models import (
+    Customer,
+    MentionAutomation,
     MentionContextMessage,
     MentionFollowup,
+    ModelCallLog,
 )
-from app.models.entities import MentionFollowupStatus, MentionFollowupTrigger
+from app.models.entities import (
+    MentionFollowupStatus,
+    MentionFollowupTrigger,
+    ModelCallStatus,
+)
 from app.services.alerting import report_async
 from app.services.mention_rules import text_mentions_price
 from app.services.mention_settings_service import get_or_create_mention_settings
@@ -126,6 +133,8 @@ class _ClassificationJob:
     repoints: int
     target_labels: dict[str, str]
     payload: dict[str, object]
+    customer_id: uuid.UUID | None
+    customer_name: str
 
 
 @dataclass(frozen=True)
@@ -134,6 +143,7 @@ class _ModelResult:
     input_tokens: int | None
     output_tokens: int | None
     latency_ms: int
+    response_payload: dict[str, object] | None = None
 
 
 async def release_overdue_classifications() -> int:
@@ -244,7 +254,11 @@ async def _prepare_job(
     async with SessionLocal() as db:
         followup = await db.scalar(
             select(MentionFollowup)
-            .options(selectinload(MentionFollowup.automation))
+            .options(
+                selectinload(MentionFollowup.automation).selectinload(
+                    MentionAutomation.group
+                )
+            )
             .where(MentionFollowup.id == followup_id)
         )
         if (
@@ -320,6 +334,9 @@ async def _prepare_job(
                 }
             )
         is_price = followup.trigger == MentionFollowupTrigger.PRICE_INQUIRY
+        customer_id = await db.scalar(
+            select(Customer.id).where(Customer.zalo_group_id == automation.zalo_group_id)
+        )
         return _ClassificationJob(
             followup_id=followup.id,
             claimed_at=_aware(followup.claimed_at),
@@ -335,6 +352,8 @@ async def _prepare_job(
                 "targets": [{"target_id": label} for label in target_labels.values()],
                 "conversation": conversation,
             },
+            customer_id=customer_id,
+            customer_name=automation.group.name,
         )
 
 
@@ -436,6 +455,7 @@ async def classify_payload(
         input_tokens=getattr(usage, "prompt_tokens", None),
         output_tokens=getattr(usage, "completion_tokens", None),
         latency_ms=round((perf_counter() - started) * 1000),
+        response_payload=parsed.model_dump(mode="json"),
     )
 
 
@@ -453,10 +473,62 @@ def _shared_client(profile: _ProviderProfile) -> AsyncOpenAI:
     return client
 
 
+async def _start_model_call(job: _ClassificationJob) -> uuid.UUID:
+    async with SessionLocal() as db:
+        row = ModelCallLog(
+            followup_id=job.followup_id,
+            customer_id=job.customer_id,
+            customer_name=job.customer_name,
+            trigger=job.trigger,
+            provider=settings.llm_provider,
+            model=job.model,
+            request_payload=job.payload,
+            status=ModelCallStatus.PROCESSING,
+        )
+        db.add(row)
+        await db.flush()
+        row_id = row.id
+        await db.commit()
+        return row_id
+
+
+async def _finish_model_call(
+    db,
+    row_id: uuid.UUID,
+    *,
+    status: ModelCallStatus,
+    outcome: str,
+    scheduled_for_send: bool,
+    response_payload: dict[str, object] | None = None,
+    error_type: str | None = None,
+    error_message: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    latency_ms: int | None = None,
+) -> None:
+    row = await db.scalar(
+        select(ModelCallLog).where(ModelCallLog.id == row_id).with_for_update()
+    )
+    if row is None:
+        return
+    row.status = status
+    row.outcome = outcome
+    row.scheduled_for_send = scheduled_for_send
+    row.response_payload = response_payload
+    row.error_type = error_type
+    row.error_message = error_message
+    row.input_tokens = input_tokens
+    row.output_tokens = output_tokens
+    row.latency_ms = latency_ms
+    row.finished_at = datetime.now(UTC)
+
+
 async def process_classification(followup_id: uuid.UUID, claimed_at: datetime) -> None:
     job = await _prepare_job(followup_id, _aware(claimed_at))
     if job is None:
         return
+    model_call_id = await _start_model_call(job)
+    call_started = perf_counter()
     try:
         result = await classify_payload(job.payload, model=job.model, prompt=job.prompt)
     except Exception as exc:
@@ -465,8 +537,35 @@ async def process_classification(followup_id: uuid.UUID, claimed_at: datetime) -
             followup_id,
             type(exc).__name__,
         )
-        # Dedup keeps a sustained OpenAI outage down to a handful of messages.
         is_price = job.trigger == MentionFollowupTrigger.PRICE_INQUIRY
+        async with SessionLocal() as db:
+            followup = await _reload_claim(db, job)
+            scheduled_for_send = followup is not None and not is_price
+            await _finish_model_call(
+                db,
+                model_call_id,
+                status=ModelCallStatus.FAILED,
+                outcome=(
+                    "SAFE_FALLBACK_TAG"
+                    if scheduled_for_send
+                    else "SAFE_FALLBACK_SKIP" if followup is not None else "CLAIM_LOST"
+                ),
+                scheduled_for_send=scheduled_for_send,
+                error_type=type(exc).__name__,
+                error_message=str(exc)[:4000],
+                latency_ms=round((perf_counter() - call_started) * 1000),
+            )
+            if followup is not None:
+                await _resolve_without_model(
+                    db,
+                    followup,
+                    f"{type(exc).__name__}: LLM_CLASSIFICATION_FAILED",
+                    model=job.model,
+                )
+            else:
+                await db.commit()
+
+        # Dedup keeps a sustained provider outage down to a handful of messages.
         await report_async(
             "MENTION_CLASSIFICATION_FAILED",
             f"Không phân loại được bằng AI ({type(exc).__name__}); "
@@ -479,21 +578,24 @@ async def process_classification(followup_id: uuid.UUID, claimed_at: datetime) -
             service="celery-ai",
             context={"followup_id": str(followup_id)},
         )
-        async with SessionLocal() as db:
-            followup = await _reload_claim(db, job)
-            if followup is not None:
-                await _resolve_without_model(
-                    db,
-                    followup,
-                    f"{type(exc).__name__}: LLM_CLASSIFICATION_FAILED",
-                    model=job.model,
-                )
         return
 
     decisions_by_label = {decision.target_id: decision for decision in result.decisions}
     async with SessionLocal() as db:
         followup = await _reload_claim(db, job)
         if followup is None:
+            await _finish_model_call(
+                db,
+                model_call_id,
+                status=ModelCallStatus.SUCCEEDED,
+                outcome="CLAIM_LOST",
+                scheduled_for_send=False,
+                response_payload=result.response_payload,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+                latency_ms=result.latency_ms,
+            )
+            await db.commit()
             return
         kept: list[tuple[str, str]] = []
         persisted_decisions: list[dict[str, object]] = []
@@ -509,6 +611,7 @@ async def process_classification(followup_id: uuid.UUID, claimed_at: datetime) -
             persisted_decisions.append(
                 {
                     "target_user_id": user_id,
+                    "target_display_name": display_name,
                     "classification": (
                         decision.classification.value
                         if decision
@@ -537,6 +640,7 @@ async def process_classification(followup_id: uuid.UUID, claimed_at: datetime) -
             followup.target_display_names = [item[1] for item in kept]
             followup.status = MentionFollowupStatus.PENDING
             followup.processed_at = None
+            outcome = "SCHEDULED"
         else:
             newer = (
                 None
@@ -558,11 +662,27 @@ async def process_classification(followup_id: uuid.UUID, claimed_at: datetime) -
                     newer.message_id,
                     job.repoints + 1,
                 )
+                outcome = "REPOINTED"
             else:
                 followup.target_user_ids = []
                 followup.target_display_names = []
                 followup.status = MentionFollowupStatus.SKIPPED
                 followup.processed_at = datetime.now(UTC)
+                outcome = "SKIPPED"
+        await _finish_model_call(
+            db,
+            model_call_id,
+            status=ModelCallStatus.SUCCEEDED,
+            outcome=outcome,
+            scheduled_for_send=bool(kept),
+            response_payload={
+                "decisions": persisted_decisions,
+                "provider_response": result.response_payload,
+            },
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            latency_ms=result.latency_ms,
+        )
         await db.commit()
         logger.info(
             "MENTION_CLASSIFIED followup_id=%s scheduled_targets=%d total_targets=%d latency_ms=%d",
