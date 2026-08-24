@@ -42,16 +42,21 @@ function decisions(entry: ModelCallLog): Decision[] {
   return records(entry.response_payload?.decisions) as Decision[];
 }
 
-function outcomeLabel(outcome: string | null) {
-  const labels: Record<string, string> = {
-    SCHEDULED: "Model yêu cầu tag",
-    SKIPPED: "Model quyết định bỏ qua",
-    REPOINTED: "Chuyển sang tin mới",
-    CLAIM_LOST: "Đã phản hồi khi AI chạy",
-    SAFE_FALLBACK_TAG: "Lỗi AI · vẫn tag an toàn",
-    SAFE_FALLBACK_SKIP: "Lỗi AI · bỏ qua báo giá",
-  };
-  return outcome ? labels[outcome] ?? outcome : "Đang xử lý";
+function FinalTagDecision({ decision, showTarget }: { decision: Decision; showTarget: boolean }) {
+  if (typeof decision.skipped !== "boolean") return null;
+  const label = decision.target_display_name || "Target";
+  return <span className={`inline-flex max-w-full items-center rounded-full px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide ${decision.skipped ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700"}`} title={showTarget ? label : undefined}>
+    <span className="truncate">{showTarget ? `${label} · ` : ""}{decision.skipped ? "Không giữ tag" : "Giữ tag"}</span>
+  </span>;
+}
+
+function FinalTagDecisions({ entry, decisions: items }: { entry: ModelCallLog; decisions: Decision[] }) {
+  const decided = items.filter((decision) => typeof decision.skipped === "boolean");
+  if (decided.length) return <div className="mt-2 flex max-w-56 flex-col items-start gap-1.5">{decided.map((decision, index) => <FinalTagDecision key={`${decision.target_user_id}-${index}`} decision={decision} showTarget={decided.length > 1} />)}</div>;
+  if (entry.outcome === "SAFE_FALLBACK_TAG" || entry.outcome === "SAFE_FALLBACK_SKIP") {
+    return <div className="mt-2"><FinalTagDecision decision={{ skipped: entry.outcome === "SAFE_FALLBACK_SKIP" }} showTarget={false} /></div>;
+  }
+  return null;
 }
 
 export function ModelCallLogTable({ data, loading, page, onPageChange }: Props) {
@@ -73,9 +78,9 @@ export function ModelCallLogTable({ data, loading, page, onPageChange }: Props) 
                 <details className="group"><summary className="cursor-pointer list-none text-xs font-medium leading-relaxed text-foreground hover:text-accent"><span className="line-clamp-2">{currentText}</span><span className="mt-1 block text-[10px] text-muted-foreground group-open:hidden">Mở {messages.length} tin context</span></summary><div className="mt-3 max-h-72 space-y-2 overflow-y-auto rounded-xl bg-slate-950 p-3 text-[11px] text-slate-200">{messages.map((message, index) => <div key={`${message.message_id}-${index}`} className="border-b border-white/10 pb-2 last:border-0 last:pb-0"><span className="font-mono text-blue-300">{message.sender || "P?"}</span><p className="mt-1 whitespace-pre-wrap break-words leading-relaxed">{message.text || "(nội dung rỗng)"}</p></div>)}</div></details>
               </td>
               <td className="max-w-sm px-5 py-4">
-                {entry.status === "FAILED" ? <div className="text-xs leading-relaxed text-red-700"><strong>{entry.error_type || "MODEL_ERROR"}</strong>{entry.error_message && <p className="mt-1 line-clamp-3">{entry.error_message}</p>}</div> : modelDecisions.length ? <details className="group"><summary className="cursor-pointer list-none text-xs font-medium hover:text-accent">{modelDecisions.map((decision) => decision.classification).join(", ")}<span className="mt-1 block text-[10px] text-muted-foreground group-open:hidden">Mở chi tiết response</span></summary><div className="mt-2 space-y-2">{modelDecisions.map((decision, index) => <div key={`${decision.target_user_id}-${index}`} className="rounded-lg bg-muted/70 p-2 text-[10px]"><div className="flex items-center justify-between gap-2"><strong>{decision.target_display_name || `Target ${index + 1}`}</strong><span className={decision.skipped ? "text-slate-500" : "text-emerald-700"}>{decision.skipped ? "Bỏ qua" : "Giữ tag"}</span></div><p className="mt-1 font-mono text-muted-foreground">{decision.classification} · {typeof decision.confidence === "number" ? `${Math.round(decision.confidence * 100)}%` : "—"} · {decision.reason_code}</p></div>)}</div></details> : <span className="text-xs text-muted-foreground">{entry.status === "PROCESSING" ? "Đang chờ model phản hồi..." : "Không có response"}</span>}
+                {entry.status === "FAILED" ? <div className="text-xs leading-relaxed text-red-700"><strong>{entry.error_type || "MODEL_ERROR"}</strong>{entry.error_message && <p className="mt-1 line-clamp-3">{entry.error_message}</p>}</div> : modelDecisions.length ? <details className="group"><summary className="cursor-pointer list-none text-xs font-medium hover:text-accent">{modelDecisions.map((decision) => decision.classification).join(", ")}<span className="mt-1 block text-[10px] text-muted-foreground group-open:hidden">Mở chi tiết response</span></summary><div className="mt-2 space-y-2">{modelDecisions.map((decision, index) => <div key={`${decision.target_user_id}-${index}`} className="rounded-lg bg-muted/70 p-2 text-[10px]"><strong>{decision.target_display_name || `Target ${index + 1}`}</strong><p className="mt-1 font-mono text-muted-foreground">{decision.classification} · {typeof decision.confidence === "number" ? `${Math.round(decision.confidence * 100)}%` : "—"} · {decision.reason_code}</p></div>)}</div></details> : <span className="text-xs text-muted-foreground">{entry.status === "PROCESSING" ? "Đang chờ model phản hồi..." : "Không có response"}</span>}
               </td>
-              <td className="px-5 py-4"><StatusBadge status={entry.status} /><p className="mt-2 max-w-48 text-[11px] leading-relaxed text-muted-foreground">{outcomeLabel(entry.outcome)}</p></td>
+              <td className="px-5 py-4"><StatusBadge status={entry.status} /><FinalTagDecisions entry={entry} decisions={modelDecisions} /></td>
             </tr>;
           })}
         </tbody>
