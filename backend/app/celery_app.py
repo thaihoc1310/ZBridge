@@ -9,6 +9,7 @@ celery_app = Celery(
     include=[
         "app.tasks.alert_tasks",
         "app.tasks.debt_reminder_tasks",
+        "app.tasks.drive_conversion_tasks",
         "app.tasks.maintenance_tasks",
         "app.tasks.mention_tasks",
     ],
@@ -27,6 +28,7 @@ celery_app.conf.update(
     task_routes={
         "zbridge.alerts.*": {"queue": "alerts"},
         "zbridge.mentions.classify": {"queue": "ai"},
+        "zbridge.drive.*": {"queue": "drive"},
     },
     task_ignore_result=True,
     task_serializer="json",

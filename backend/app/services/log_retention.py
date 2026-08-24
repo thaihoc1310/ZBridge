@@ -18,6 +18,7 @@ from app.models.entities import DebtReminderStatus, MentionFollowupStatus
 logger = logging.getLogger(__name__)
 
 ACTIVITY_LOG_RETENTION_DAYS = 7
+DEBT_REMINDER_RUN_RETENTION_DAYS = 45
 
 
 async def delete_expired_delivery_logs(
@@ -25,13 +26,15 @@ async def delete_expired_delivery_logs(
     *,
     now: datetime | None = None,
 ) -> int:
-    cutoff = (now or datetime.now(UTC)) - timedelta(days=ACTIVITY_LOG_RETENTION_DAYS)
+    reference = now or datetime.now(UTC)
+    cutoff = reference - timedelta(days=ACTIVITY_LOG_RETENTION_DAYS)
+    debt_cutoff = reference - timedelta(days=DEBT_REMINDER_RUN_RETENTION_DAYS)
     result = await db.execute(
         delete(BotDeliveryLog).where(BotDeliveryLog.created_at < cutoff)
     )
     await db.execute(
         delete(DebtReminderRun).where(
-            DebtReminderRun.processed_at < cutoff,
+            DebtReminderRun.processed_at < debt_cutoff,
             DebtReminderRun.status.in_(
                 [
                     DebtReminderStatus.SENT,
@@ -95,9 +98,10 @@ async def purge_expired_delivery_logs() -> int:
         deleted_model_calls = await delete_expired_model_call_logs(db)
 
     logger.info(
-        "Activity log retention completed: retention_days=%d delivery_deleted=%d "
-        "model_calls_deleted=%d",
+        "Activity log retention completed: retention_days=%d "
+        "debt_retention_days=%d delivery_deleted=%d model_calls_deleted=%d",
         ACTIVITY_LOG_RETENTION_DAYS,
+        DEBT_REMINDER_RUN_RETENTION_DAYS,
         deleted_count,
         deleted_model_calls,
     )

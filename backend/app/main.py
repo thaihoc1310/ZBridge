@@ -16,6 +16,7 @@ from app.api import (
     mention_settings,
     roles,
     staff,
+    tools,
     users,
 )
 from app.core.config import settings
@@ -92,5 +93,6 @@ app.include_router(customers.router, prefix=settings.api_prefix)
 app.include_router(activity.router, prefix=settings.api_prefix)
 app.include_router(mention_settings.router, prefix=settings.api_prefix)
 app.include_router(staff.router, prefix=settings.api_prefix)
+app.include_router(tools.router, prefix=settings.api_prefix)
 app.include_router(users.router, prefix=settings.api_prefix)
 app.include_router(roles.router, prefix=settings.api_prefix)

@@ -84,6 +84,10 @@ services:
       ALERT_LINK_BASE_URL: ${ALERT_LINK_BASE_URL:-}
       # The API verifies a Google Sheet immediately when its link is saved.
       GOOGLE_SERVICE_ACCOUNT_FILE: ${GOOGLE_SERVICE_ACCOUNT_FILE:-/run/secrets/google-service-account.json}
+      GOOGLE_IMPERSONATED_USER: ${GOOGLE_IMPERSONATED_USER:-}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-}
       GOOGLE_API_TIMEOUT_SECONDS: ${GOOGLE_API_TIMEOUT_SECONDS:-90}
     volumes:
       - ./secrets:/run/secrets:ro
@@ -117,6 +121,7 @@ services:
       MENTION_SCHEDULER_INTERVAL_SECONDS: ${MENTION_SCHEDULER_INTERVAL_SECONDS:-15}
       DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS: ${DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS:-60}
       GOOGLE_SERVICE_ACCOUNT_FILE: ${GOOGLE_SERVICE_ACCOUNT_FILE:-/run/secrets/google-service-account.json}
+      GOOGLE_IMPERSONATED_USER: ${GOOGLE_IMPERSONATED_USER:-}
       MENTION_CLASSIFICATION_DEADLINE_MINUTES: ${MENTION_CLASSIFICATION_DEADLINE_MINUTES:-15}
       MENTION_CONTEXT_RETENTION_HOURS: ${MENTION_CONTEXT_RETENTION_HOURS:-24}
       GOOGLE_API_TIMEOUT_SECONDS: ${GOOGLE_API_TIMEOUT_SECONDS:-90}
@@ -160,6 +165,33 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks: [internal]
+
+  celery-drive:
+    build: ./backend
+    restart: unless-stopped
+    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=drive", "--concurrency=1"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://zbridge:zbridge@postgres:5432/zbridge}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-change-this-secret-at-least-32-bytes}
+      GOOGLE_SERVICE_ACCOUNT_FILE: ${GOOGLE_SERVICE_ACCOUNT_FILE:-/run/secrets/google-service-account.json}
+      GOOGLE_IMPERSONATED_USER: ${GOOGLE_IMPERSONATED_USER:-}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-}
+      GOOGLE_API_TIMEOUT_SECONDS: ${GOOGLE_API_TIMEOUT_SECONDS:-90}
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    volumes:
+      - ./secrets:/run/secrets:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    mem_limit: ${DRIVE_WORKER_MEM_LIMIT:-512m}
     networks: [internal]
 
   # Alert delivery runs in its own worker so a slow Telegram call can never take

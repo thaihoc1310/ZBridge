@@ -7,6 +7,7 @@ boot, so a role can never grant something the API does not actually check.
 from dataclasses import dataclass
 
 DASHBOARD_READ = "dashboard:read"
+TOOLS_READ = "tools:read"
 
 BOT_READ = "bot:read"
 BOT_CONNECT = "bot:connect"
@@ -30,9 +31,15 @@ MENTION_POLICY_MANAGE = "mention_policy:manage"
 #: a list of names, while one bulk apply overwrites every customer at once.
 STAFF_MANAGE = "staff:manage"
 MENTION_BULK_APPLY = "mention_bulk:apply"
+MENTION_FOLLOWUP_READ = "mention_followup:read"
+MENTION_FOLLOWUP_CANCEL = "mention_followup:cancel"
 
 DEBT_REMINDER_READ = "debt_reminder:read"
 DEBT_REMINDER_UPDATE = "debt_reminder:update"
+DEBT_REMINDER_BULK_APPLY = "debt_reminder_bulk:apply"
+DEBT_REMINDER_HISTORY_READ = "debt_reminder_history:read"
+
+DRIVE_CONVERSION_MANAGE = "drive_conversion:manage"
 
 ACTIVITY_READ = "activity:read"
 MODEL_ACTIVITY_READ = "model_activity:read"
@@ -45,6 +52,7 @@ ROLE_READ = "role:read"
 ROLE_MANAGE = "role:manage"
 
 CATEGORY_DASHBOARD = "Tổng quan"
+CATEGORY_TOOLS = "Công cụ"
 CATEGORY_BOT = "Zalo Bot"
 CATEGORY_CUSTOMER = "Khách hàng"
 CATEGORY_MESSAGE = "Tin nhắn"
@@ -63,6 +71,7 @@ class PermissionDef:
 
 PERMISSION_CATALOG: tuple[PermissionDef, ...] = (
     PermissionDef(DASHBOARD_READ, "Xem trang tổng quan", CATEGORY_DASHBOARD),
+    PermissionDef(TOOLS_READ, "Truy cập trang Công cụ", CATEGORY_TOOLS),
     PermissionDef(BOT_READ, "Xem trạng thái bot Zalo", CATEGORY_BOT),
     PermissionDef(BOT_CONNECT, "Kết nối bot và quét mã QR", CATEGORY_BOT),
     PermissionDef(BOT_DISCONNECT, "Đăng xuất bot khỏi Zalo", CATEGORY_BOT),
@@ -83,8 +92,15 @@ PERMISSION_CATALOG: tuple[PermissionDef, ...] = (
         "Áp cấu hình tag hàng loạt, ghi đè nhiều khách hàng",
         CATEGORY_MENTION,
     ),
+    PermissionDef(MENTION_FOLLOWUP_READ, "Xem các vòng tag đang hoạt động", CATEGORY_MENTION),
+    PermissionDef(MENTION_FOLLOWUP_CANCEL, "Dừng vòng tag đang hoạt động", CATEGORY_MENTION),
     PermissionDef(DEBT_REMINDER_READ, "Xem cấu hình nhắc công nợ", CATEGORY_DEBT),
     PermissionDef(DEBT_REMINDER_UPDATE, "Thay đổi cấu hình nhắc công nợ", CATEGORY_DEBT),
+    PermissionDef(DEBT_REMINDER_BULK_APPLY, "Áp lịch nhắc công nợ hàng loạt", CATEGORY_DEBT),
+    PermissionDef(DEBT_REMINDER_HISTORY_READ, "Xem lịch sử lượt nhắc công nợ", CATEGORY_DEBT),
+    PermissionDef(
+        DRIVE_CONVERSION_MANAGE, "Quản lý chuyển Excel sang Google Sheets", CATEGORY_TOOLS
+    ),
     PermissionDef(ACTIVITY_READ, "Xem nhật ký vận hành", CATEGORY_ACTIVITY),
     PermissionDef(MODEL_ACTIVITY_READ, "Xem nhật ký gọi model", CATEGORY_ACTIVITY),
     PermissionDef(USER_READ, "Xem danh sách người dùng", CATEGORY_ADMIN),

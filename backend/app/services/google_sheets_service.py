@@ -13,7 +13,7 @@ from PIL import Image, ImageChops
 
 from app.core.config import settings
 
-DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 SHEETS_READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
 GOOGLE_SHEET_MIME_TYPE = "application/vnd.google-apps.spreadsheet"
 MAX_PDF_BYTES = 20 * 1024 * 1024
@@ -186,28 +186,38 @@ class GoogleSheetsService:
     def __init__(self) -> None:
         self._credentials: service_account.Credentials | None = None
         self._credential_path: str | None = None
+        self._impersonated_user: str | None = None
         self._token_lock = asyncio.Lock()
 
     async def _access_token(self) -> str:
         credential_path = settings.google_service_account_file
+        impersonated_user = settings.google_impersonated_user
         if not credential_path or not Path(credential_path).is_file():
             raise SheetExportError(
                 "GOOGLE_DRIVE_NOT_CONFIGURED",
                 "Chưa cấu hình Google Service Account cho hệ thống.",
             )
         async with self._token_lock:
-            if self._credentials is None or self._credential_path != credential_path:
+            if (
+                self._credentials is None
+                or self._credential_path != credential_path
+                or self._impersonated_user != impersonated_user
+            ):
                 try:
-                    self._credentials = service_account.Credentials.from_service_account_file(
+                    credentials = service_account.Credentials.from_service_account_file(
                         credential_path,
-                        scopes=[DRIVE_READONLY_SCOPE, SHEETS_READONLY_SCOPE],
+                        scopes=[DRIVE_SCOPE, SHEETS_READONLY_SCOPE],
                     )
+                    if impersonated_user:
+                        credentials = credentials.with_subject(impersonated_user)
+                    self._credentials = credentials
                 except Exception as exc:
                     raise SheetExportError(
                         "GOOGLE_CREDENTIALS_INVALID",
                         "Google Service Account credential không hợp lệ.",
                     ) from exc
                 self._credential_path = credential_path
+                self._impersonated_user = impersonated_user
             if not self._credentials.valid or not self._credentials.token:
                 try:
                     await asyncio.to_thread(self._credentials.refresh, Request())
@@ -243,9 +253,7 @@ class GoogleSheetsService:
                 "Service Account chưa được chia sẻ quyền xem file Google Sheet này.",
             )
         if response.status_code == 404:
-            raise SheetExportError(
-                "GOOGLE_DRIVE_NOT_FOUND", "Không tìm thấy file Google Sheet."
-            )
+            raise SheetExportError("GOOGLE_DRIVE_NOT_FOUND", "Không tìm thấy file Google Sheet.")
         raise SheetExportError(
             "GOOGLE_API_ERROR", f"Google API gặp lỗi HTTP {response.status_code}."
         )
@@ -268,9 +276,7 @@ class GoogleSheetsService:
             )
         sheets = spreadsheet.get("sheets") or []
         if not sheets:
-            raise SheetExportError(
-                "GOOGLE_SHEET_EMPTY", "Google Sheet không có tab dữ liệu nào."
-            )
+            raise SheetExportError("GOOGLE_SHEET_EMPTY", "Google Sheet không có tab dữ liệu nào.")
         title = str(spreadsheet.get("properties", {}).get("title") or "Google Sheet")
         return file_id, title
 

@@ -1,4 +1,9 @@
-export type BotStatus = "CONNECTED" | "DISCONNECTED" | "CONNECTING" | "AUTH_REQUIRED" | "ERROR";
+export type BotStatus =
+  | "CONNECTED"
+  | "DISCONNECTED"
+  | "CONNECTING"
+  | "AUTH_REQUIRED"
+  | "ERROR";
 export type DeliveryStatus = "SENT" | "FAILED";
 export type DeliveryType =
   | "MANUAL_MESSAGE"
@@ -6,7 +11,21 @@ export type DeliveryType =
   | "DEBT_REMINDER_IMAGE"
   | "DEBT_REMINDER_LINK"
   | "DEBT_REMINDER_MESSAGE";
-export type DebtReminderStatus = "PENDING" | "PROCESSING" | "SENT" | "FAILED" | "SKIPPED" | "CANCELLED";
+export type DebtReminderStatus =
+  | "PENDING"
+  | "PROCESSING"
+  | "SENT"
+  | "FAILED"
+  | "SKIPPED"
+  | "CANCELLED";
+export type MentionFollowupStatus =
+  | "CLASSIFYING"
+  | "PENDING"
+  | "PROCESSING"
+  | "SENT"
+  | "FAILED"
+  | "SKIPPED"
+  | "CANCELLED";
 
 export type Permission = { code: string; name: string; category: string };
 
@@ -43,7 +62,11 @@ export type Bot = {
   listener_status: string | null;
   events_healthy: boolean;
 };
-export type QRState = { status: string; qr: string | null; account_name: string | null };
+export type QRState = {
+  status: string;
+  qr: string | null;
+  account_name: string | null;
+};
 export type Customer = {
   id: string;
   name: string;
@@ -60,8 +83,20 @@ export type Customer = {
   created_at: string;
   updated_at: string;
 };
-export type CustomerList = { items: Customer[]; total: number; page: number; limit: number; pages: number };
-export type SyncResult = { inserted: number; updated: number; unavailable: number; total: number; synced_at: string };
+export type CustomerList = {
+  items: Customer[];
+  total: number;
+  page: number;
+  limit: number;
+  pages: number;
+};
+export type SyncResult = {
+  inserted: number;
+  updated: number;
+  unavailable: number;
+  total: number;
+  synced_at: string;
+};
 export type DeliveryLog = {
   id: string;
   customer_id: string;
@@ -73,7 +108,13 @@ export type DeliveryLog = {
   error_message: string | null;
   created_at: string;
 };
-export type DeliveryLogList = { items: DeliveryLog[]; total: number; page: number; limit: number; pages: number };
+export type DeliveryLogList = {
+  items: DeliveryLog[];
+  total: number;
+  page: number;
+  limit: number;
+  pages: number;
+};
 export type ModelCallStatus = "PROCESSING" | "SUCCEEDED" | "FAILED";
 export type ModelCallLog = {
   id: string;
@@ -94,7 +135,13 @@ export type ModelCallLog = {
   created_at: string;
   finished_at: string | null;
 };
-export type ModelCallLogList = { items: ModelCallLog[]; total: number; page: number; limit: number; pages: number };
+export type ModelCallLogList = {
+  items: ModelCallLog[];
+  total: number;
+  page: number;
+  limit: number;
+  pages: number;
+};
 export type Dashboard = {
   bot_status: BotStatus;
   customer_count: number;
@@ -194,4 +241,157 @@ export type DebtReminder = {
   last_run_at: string | null;
   last_error: string | null;
   updated_at: string | null;
+};
+
+export type ActiveMentionTask = {
+  id: string;
+  trigger: "MENTION" | "PRICE_INQUIRY";
+  status: MentionFollowupStatus;
+  target_user_ids: string[];
+  target_display_names: string[];
+  due_at: string;
+  created_at: string;
+  attempt_count: number;
+  error_message: string | null;
+};
+export type ActiveMentionCompany = {
+  customer_id: string;
+  customer_name: string;
+  task_count: number;
+  next_due_at: string;
+  tasks: ActiveMentionTask[];
+};
+export type ActiveMentionCompanyList = {
+  items: ActiveMentionCompany[];
+  total_companies: number;
+  total_tasks: number;
+  page: number;
+  limit: number;
+  pages: number;
+};
+
+export type DebtBulkPreviewRow = {
+  customer_id: string;
+  name: string;
+  is_available: boolean;
+  has_debt: boolean;
+  has_debt_file: boolean;
+  has_automation: boolean;
+  enabled: boolean;
+  current_day_of_month: number | null;
+  current_repeat_interval_days: number | null;
+  current_send_time: string | null;
+  will_change: boolean;
+};
+export type DebtBulkPreview = { rows: DebtBulkPreviewRow[] };
+export type DebtBulkApplyResult = {
+  created: number;
+  updated: number;
+  unchanged: number;
+  cancelled_runs: number;
+  skipped: string[];
+};
+
+export type DebtReminderRunStep = {
+  type: "IMAGE" | "LINK" | "MESSAGE";
+  status: DebtReminderStatus;
+  zalo_message_id: string | null;
+  error_message: string | null;
+};
+export type DebtReminderRun = {
+  id: string;
+  customer_id: string;
+  customer_name: string;
+  status: DebtReminderStatus;
+  scheduled_for: string;
+  retry_at: string;
+  attempt_count: number;
+  created_at: string;
+  processed_at: string | null;
+  sheet_name: string | null;
+  sheet_url: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  steps: DebtReminderRunStep[];
+};
+export type DebtReminderRunList = {
+  items: DebtReminderRun[];
+  total: number;
+  page: number;
+  limit: number;
+  pages: number;
+  status_counts: Record<string, number>;
+  retention_days: number;
+};
+
+export type DriveFolder = {
+  id: string;
+  folder_id: string;
+  name: string;
+  url: string;
+  drive_id: string | null;
+  capabilities: Record<string, unknown>;
+  last_checked_at: string;
+  created_at: string;
+};
+export type GoogleOAuthStatus = {
+  configured: boolean;
+  connected: boolean;
+  email: string | null;
+  connected_at: string | null;
+  last_verified_at: string | null;
+  last_error: string | null;
+  redirect_uri: string;
+};
+export type GoogleOAuthStart = { authorization_url: string };
+export type DriveConversionItemStatus =
+  | "DISCOVERED"
+  | "PENDING"
+  | "PROCESSING"
+  | "CONVERTED"
+  | "FAILED"
+  | "SKIPPED";
+export type DriveConversionItem = {
+  id: string;
+  source_file_id: string;
+  source_name: string;
+  source_url: string;
+  parent_folder_id: string;
+  parent_folder_name: string;
+  parent_folder_url: string;
+  relative_path: string;
+  size_bytes: number | null;
+  can_download: boolean;
+  can_trash: boolean;
+  selected: boolean;
+  status: DriveConversionItemStatus;
+  destination_url: string | null;
+  original_trashed: boolean;
+  attempt_count: number;
+  error_code: string | null;
+  error_message: string | null;
+};
+export type DriveConversionJobStatus =
+  | "SCANNING"
+  | "READY"
+  | "QUEUED"
+  | "PROCESSING"
+  | "COMPLETED"
+  | "FAILED";
+export type DriveConversionJob = {
+  id: string;
+  folder_id: string;
+  folder_name: string;
+  status: DriveConversionJobStatus;
+  delete_originals: boolean;
+  total_files: number;
+  selected_files: number;
+  converted_files: number;
+  failed_files: number;
+  skipped_files: number;
+  started_at: string | null;
+  finished_at: string | null;
+  error_message: string | null;
+  created_at: string;
+  items: DriveConversionItem[];
 };

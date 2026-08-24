@@ -112,6 +112,10 @@ services:
       LOGIN_RATE_LIMIT_ACCOUNT_ATTEMPTS: ${LOGIN_RATE_LIMIT_ACCOUNT_ATTEMPTS:-20}
       # Saving a debt link validates the Sheet synchronously in the API.
       GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google-service-account.json
+      GOOGLE_IMPERSONATED_USER: ${GOOGLE_IMPERSONATED_USER:-}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-}
       GOOGLE_API_TIMEOUT_SECONDS: ${GOOGLE_API_TIMEOUT_SECONDS:-90}
       TZ: ${TZ:-Asia/Ho_Chi_Minh}
     volumes:
@@ -146,6 +150,7 @@ services:
       MENTION_SCHEDULER_INTERVAL_SECONDS: ${MENTION_SCHEDULER_INTERVAL_SECONDS:-15}
       DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS: ${DEBT_REMINDER_SCHEDULER_INTERVAL_SECONDS:-60}
       GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google-service-account.json
+      GOOGLE_IMPERSONATED_USER: ${GOOGLE_IMPERSONATED_USER:-}
       MENTION_CLASSIFICATION_DEADLINE_MINUTES: ${MENTION_CLASSIFICATION_DEADLINE_MINUTES:-15}
       MENTION_CONTEXT_RETENTION_HOURS: ${MENTION_CONTEXT_RETENTION_HOURS:-24}
       GOOGLE_API_TIMEOUT_SECONDS: ${GOOGLE_API_TIMEOUT_SECONDS:-90}
@@ -195,6 +200,35 @@ services:
       redis:
         condition: service_healthy
     mem_limit: ${AI_WORKER_MEM_LIMIT:-384m}
+    logging: *logging
+    networks: [internal]
+
+  celery-drive:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_OWNER}/zbridge-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=drive", "--concurrency=1"]
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      JWT_SECRET: ${JWT_SECRET}
+      GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google-service-account.json
+      GOOGLE_IMPERSONATED_USER: ${GOOGLE_IMPERSONATED_USER:-}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-}
+      GOOGLE_API_TIMEOUT_SECONDS: ${GOOGLE_API_TIMEOUT_SECONDS:-90}
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    volumes:
+      - ./secrets:/run/secrets:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    mem_limit: ${DRIVE_WORKER_MEM_LIMIT:-512m}
     logging: *logging
     networks: [internal]
 

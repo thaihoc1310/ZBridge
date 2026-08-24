@@ -7,6 +7,8 @@ from app.db.database import Base
 from app.models import (
     BotDeliveryLog,
     Customer,
+    DebtReminderAutomation,
+    DebtReminderRun,
     MentionAutomation,
     MentionFollowup,
     ModelCallLog,
@@ -14,6 +16,7 @@ from app.models import (
     ZaloGroup,
 )
 from app.models.entities import (
+    DebtReminderStatus,
     DeliveryStatus,
     DeliveryType,
     MentionFollowupStatus,
@@ -113,6 +116,72 @@ async def test_model_call_logs_keep_exactly_seven_days() -> None:
             await db.scalars(select(ModelCallLog).order_by(ModelCallLog.created_at))
         )
         assert [row.customer_name for row in remaining] == ["Khách 7", "Khách 6"]
+
+    await engine.dispose()
+
+
+async def test_finished_debt_reminder_runs_keep_exactly_45_days() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 8, 24, 2, tzinfo=UTC)
+
+    async with session_factory() as db:
+        account = ZaloAccount()
+        db.add(account)
+        await db.flush()
+        group = ZaloGroup(
+            zalo_account_id=account.id,
+            zalo_group_id="debt-run-retention",
+            name="Khách kiểm thử lịch sử công nợ",
+            member_count=2,
+            is_available=True,
+            last_synced_at=now,
+        )
+        db.add(group)
+        await db.flush()
+        customer = Customer(zalo_group_id=group.id)
+        db.add(customer)
+        await db.flush()
+        automation = DebtReminderAutomation(
+            customer_id=customer.id,
+            enabled=True,
+            message_parts=[{"type": "text", "text": "Nhắc nợ"}],
+        )
+        db.add(automation)
+        await db.flush()
+        for age in (46, 45, 10):
+            processed_at = now - timedelta(days=age)
+            db.add(
+                DebtReminderRun(
+                    automation_id=automation.id,
+                    scheduled_for=processed_at,
+                    retry_at=processed_at,
+                    status=DebtReminderStatus.SENT,
+                    processed_at=processed_at,
+                )
+            )
+        db.add(
+            DebtReminderRun(
+                automation_id=automation.id,
+                scheduled_for=now - timedelta(days=90),
+                retry_at=now - timedelta(days=90),
+                status=DebtReminderStatus.PENDING,
+            )
+        )
+        await db.commit()
+
+        await delete_expired_delivery_logs(db, now=now)
+        remaining = list(await db.scalars(select(DebtReminderRun)))
+
+        assert len(remaining) == 3
+        assert any(run.status == DebtReminderStatus.PENDING for run in remaining)
+        assert sorted(
+            (now.replace(tzinfo=None) - run.processed_at).days
+            for run in remaining
+            if run.processed_at is not None
+        ) == [10, 45]
 
     await engine.dispose()
 

@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     mention_context_retention_hours: int = 24
     mention_classification_deadline_minutes: int = 15
     google_service_account_file: str | None = None
+    # Optional Workspace user used through Domain-Wide Delegation for the
+    # Service Account-backed debt-sheet reader. Drive conversion uses OAuth.
+    google_impersonated_user: str | None = None
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    google_oauth_redirect_uri: str | None = None
     google_api_timeout_seconds: float = 90.0
 
     # Operator alerting to Telegram.
@@ -80,6 +86,13 @@ class Settings(BaseSettings):
     @property
     def telegram_enabled(self) -> bool:
         return bool(self.telegram_bot_token and self.telegram_chat_id)
+
+    @property
+    def google_oauth_callback_url(self) -> str:
+        if self.google_oauth_redirect_uri:
+            return self.google_oauth_redirect_uri
+        public_url = next(iter(self.cors_origins), "http://localhost:5173")
+        return f"{public_url.rstrip('/')}{self.api_prefix}/tools/google/oauth/callback"
 
 
 @lru_cache

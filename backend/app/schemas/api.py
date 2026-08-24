@@ -10,6 +10,9 @@ from app.models.entities import (
     DebtReminderStatus,
     DeliveryStatus,
     DeliveryType,
+    DriveConversionItemStatus,
+    DriveConversionJobStatus,
+    MentionFollowupStatus,
     MentionFollowupTrigger,
     ModelCallStatus,
 )
@@ -415,6 +418,178 @@ class DebtReminderResponse(BaseModel):
     last_run_at: datetime | None = None
     last_error: str | None = None
     updated_at: datetime | None = None
+
+
+class ActiveMentionTaskResponse(BaseModel):
+    id: uuid.UUID
+    trigger: MentionFollowupTrigger
+    status: MentionFollowupStatus
+    target_user_ids: list[str]
+    target_display_names: list[str]
+    due_at: datetime
+    created_at: datetime
+    attempt_count: int
+    error_message: str | None = None
+
+
+class ActiveMentionCompanyResponse(BaseModel):
+    customer_id: uuid.UUID
+    customer_name: str
+    task_count: int
+    next_due_at: datetime
+    tasks: list[ActiveMentionTaskResponse]
+
+
+class ActiveMentionCompanyListResponse(BaseModel):
+    items: list[ActiveMentionCompanyResponse]
+    total_companies: int
+    total_tasks: int
+    page: int
+    limit: int
+    pages: int
+
+
+class DebtReminderBulkSchedule(BaseModel):
+    day_of_month: int = Field(default=25, ge=1, le=31)
+    repeat_interval_days: int = Field(default=3, ge=1, le=31)
+    send_time: str = Field(default="09:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+
+class DebtReminderBulkApply(DebtReminderBulkSchedule):
+    customer_ids: list[uuid.UUID] = Field(default_factory=list, max_length=1000)
+
+
+class DebtReminderBulkPreviewRow(BaseModel):
+    customer_id: uuid.UUID
+    name: str
+    is_available: bool
+    has_debt: bool
+    has_debt_file: bool
+    has_automation: bool
+    enabled: bool
+    current_day_of_month: int | None = None
+    current_repeat_interval_days: int | None = None
+    current_send_time: str | None = None
+    will_change: bool
+
+
+class DebtReminderBulkPreviewResponse(BaseModel):
+    rows: list[DebtReminderBulkPreviewRow]
+
+
+class DebtReminderBulkApplyResponse(BaseModel):
+    created: int
+    updated: int
+    unchanged: int
+    cancelled_runs: int
+    skipped: list[str] = Field(default_factory=list)
+
+
+class DebtReminderRunStepResponse(BaseModel):
+    type: Literal["IMAGE", "LINK", "MESSAGE"]
+    status: Literal["PENDING", "PROCESSING", "SENT", "FAILED", "SKIPPED", "CANCELLED"]
+    zalo_message_id: str | None = None
+    error_message: str | None = None
+
+
+class DebtReminderRunResponse(BaseModel):
+    id: uuid.UUID
+    customer_id: uuid.UUID
+    customer_name: str
+    status: DebtReminderStatus
+    scheduled_for: datetime
+    retry_at: datetime
+    attempt_count: int
+    created_at: datetime
+    processed_at: datetime | None = None
+    sheet_name: str | None = None
+    sheet_url: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    steps: list[DebtReminderRunStepResponse]
+
+
+class DebtReminderRunListResponse(BaseModel):
+    items: list[DebtReminderRunResponse]
+    total: int
+    page: int
+    limit: int
+    pages: int
+    status_counts: dict[str, int]
+    retention_days: int = 45
+
+
+class DriveFolderCreate(BaseModel):
+    url: str = Field(min_length=1, max_length=2000)
+
+
+class GoogleOAuthStatusResponse(BaseModel):
+    configured: bool
+    connected: bool
+    email: str | None = None
+    connected_at: datetime | None = None
+    last_verified_at: datetime | None = None
+    last_error: str | None = None
+    redirect_uri: str
+
+
+class GoogleOAuthStartResponse(BaseModel):
+    authorization_url: str
+
+
+class DriveFolderResponse(BaseModel):
+    id: uuid.UUID
+    folder_id: str
+    name: str
+    url: str
+    drive_id: str | None = None
+    capabilities: dict[str, object]
+    last_checked_at: datetime
+    created_at: datetime
+
+
+class DriveConversionItemResponse(BaseModel):
+    id: uuid.UUID
+    source_file_id: str
+    source_name: str
+    source_url: str
+    parent_folder_id: str
+    parent_folder_name: str
+    parent_folder_url: str
+    relative_path: str
+    size_bytes: int | None = None
+    can_download: bool
+    can_trash: bool
+    selected: bool
+    status: DriveConversionItemStatus
+    destination_url: str | None = None
+    original_trashed: bool
+    attempt_count: int
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+class DriveConversionJobResponse(BaseModel):
+    id: uuid.UUID
+    folder_id: uuid.UUID
+    folder_name: str
+    status: DriveConversionJobStatus
+    delete_originals: bool
+    total_files: int
+    selected_files: int
+    converted_files: int
+    failed_files: int
+    skipped_files: int
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error_message: str | None = None
+    created_at: datetime
+    items: list[DriveConversionItemResponse] = Field(default_factory=list)
+
+
+class DriveConversionStart(BaseModel):
+    item_ids: list[uuid.UUID] = Field(min_length=1, max_length=5000)
+    delete_originals: bool = True
 
 
 class IncomingMention(BaseModel):

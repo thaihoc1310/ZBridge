@@ -1,6 +1,7 @@
 /** Mirrors app/core/permissions.py — keep both lists in step. */
 export const PERMISSIONS = {
   dashboardRead: "dashboard:read",
+  toolsRead: "tools:read",
   botRead: "bot:read",
   botConnect: "bot:connect",
   botDisconnect: "bot:disconnect",
@@ -13,8 +14,13 @@ export const PERMISSIONS = {
   mentionPolicyManage: "mention_policy:manage",
   staffManage: "staff:manage",
   mentionBulkApply: "mention_bulk:apply",
+  mentionFollowupRead: "mention_followup:read",
+  mentionFollowupCancel: "mention_followup:cancel",
   debtReminderRead: "debt_reminder:read",
   debtReminderUpdate: "debt_reminder:update",
+  debtReminderBulkApply: "debt_reminder_bulk:apply",
+  debtReminderHistoryRead: "debt_reminder_history:read",
+  driveConversionManage: "drive_conversion:manage",
   activityRead: "activity:read",
   modelActivityRead: "model_activity:read",
   userRead: "user:read",

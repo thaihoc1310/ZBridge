@@ -7,6 +7,7 @@ from datetime import datetime, time
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -88,6 +89,24 @@ class ModelCallStatus(enum.StrEnum):
     PROCESSING = "PROCESSING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
+
+
+class DriveConversionJobStatus(enum.StrEnum):
+    SCANNING = "SCANNING"
+    READY = "READY"
+    QUEUED = "QUEUED"
+    PROCESSING = "PROCESSING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class DriveConversionItemStatus(enum.StrEnum):
+    DISCOVERED = "DISCOVERED"
+    PENDING = "PENDING"
+    PROCESSING = "PROCESSING"
+    CONVERTED = "CONVERTED"
+    FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
 
 
 class TimestampMixin:
@@ -343,9 +362,7 @@ class MentionContextMessage(Base):
 class MentionTarget(TimestampMixin, Base):
     __tablename__ = "mention_targets"
     __table_args__ = (
-        UniqueConstraint(
-            "automation_id", "zalo_user_id", "kind", name="uq_mention_target_user"
-        ),
+        UniqueConstraint("automation_id", "zalo_user_id", "kind", name="uq_mention_target_user"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -505,9 +522,7 @@ class DebtReminderAutomation(TimestampMixin, Base):
 class DebtReminderRun(TimestampMixin, Base):
     __tablename__ = "debt_reminder_runs"
     __table_args__ = (
-        UniqueConstraint(
-            "automation_id", "scheduled_for", name="uq_debt_reminder_run_schedule"
-        ),
+        UniqueConstraint("automation_id", "scheduled_for", name="uq_debt_reminder_run_schedule"),
         Index("ix_debt_reminder_runs_due", "status", "retry_at"),
     )
 
@@ -538,3 +553,122 @@ class DebtReminderRun(TimestampMixin, Base):
     error_message: Mapped[str | None] = mapped_column(Text)
 
     automation: Mapped[DebtReminderAutomation] = relationship(back_populates="runs")
+
+
+class DriveConversionFolder(TimestampMixin, Base):
+    __tablename__ = "drive_conversion_folders"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    folder_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    drive_id: Mapped[str | None] = mapped_column(String(255))
+    capabilities: Mapped[dict[str, object]] = mapped_column(JSON, default=dict, nullable=False)
+    last_checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    jobs: Mapped[list[DriveConversionJob]] = relationship(
+        back_populates="folder", cascade="all, delete-orphan"
+    )
+
+
+class GoogleOAuthConnection(TimestampMixin, Base):
+    """Singleton Google account used by Drive conversion jobs.
+
+    The refresh token is encrypted by the application before it reaches this
+    table. Keeping the connection system-wide matches the system-wide Drive
+    converter permission and avoids different workers seeing different users.
+    """
+
+    __tablename__ = "google_oauth_connections"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_google_oauth_connection_singleton"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    encrypted_refresh_token: Mapped[str] = mapped_column(Text, nullable=False)
+    scopes: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    connected_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    connected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+
+class DriveConversionJob(TimestampMixin, Base):
+    __tablename__ = "drive_conversion_jobs"
+    __table_args__ = (
+        Index("ix_drive_conversion_jobs_folder_created", "folder_id", "created_at"),
+        Index("ix_drive_conversion_jobs_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    folder_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("drive_conversion_folders.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[DriveConversionJobStatus] = mapped_column(
+        Enum(DriveConversionJobStatus, native_enum=False),
+        default=DriveConversionJobStatus.SCANNING,
+        nullable=False,
+    )
+    delete_originals: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    total_files: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    selected_files: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    converted_files: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failed_files: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    skipped_files: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+    folder: Mapped[DriveConversionFolder] = relationship(back_populates="jobs")
+    items: Mapped[list[DriveConversionItem]] = relationship(
+        back_populates="job", cascade="all, delete-orphan"
+    )
+
+
+class DriveConversionItem(TimestampMixin, Base):
+    __tablename__ = "drive_conversion_items"
+    __table_args__ = (
+        UniqueConstraint("job_id", "source_file_id", name="uq_drive_conversion_job_source"),
+        Index("ix_drive_conversion_items_job_status", "job_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("drive_conversion_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_file_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_folder_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    parent_folder_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    parent_folder_url: Mapped[str] = mapped_column(Text, nullable=False)
+    relative_path: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    can_download: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    can_trash: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    selected: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status: Mapped[DriveConversionItemStatus] = mapped_column(
+        Enum(DriveConversionItemStatus, native_enum=False),
+        default=DriveConversionItemStatus.DISCOVERED,
+        nullable=False,
+    )
+    destination_file_id: Mapped[str | None] = mapped_column(String(255))
+    destination_url: Mapped[str | None] = mapped_column(Text)
+    original_trashed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    job: Mapped[DriveConversionJob] = relationship(back_populates="items")
