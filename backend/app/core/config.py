@@ -34,10 +34,10 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://mkp-api.fptcloud.com"
     llm_model: str = "DeepSeek-V4-Flash"
     llm_timeout_seconds: float = 30.0
-    # Calibration differs per model: DeepSeek stays clean up to 0.85 but peaks in
-    # recall at 0.75, while gpt-5.4-nano needs 0.85 before it stops skipping
-    # messages that wanted an answer. Raise this alongside LLM_PROVIDER.
-    llm_skip_confidence: float = 0.75
+    # A mention is allowed to start/continue a loop only on an affirmative model
+    # verdict. This intentionally fails closed: ACK/FYI/UNCERTAIN never tag,
+    # regardless of their confidence.
+    llm_mention_confidence: float = 0.65
     # The price trigger asks the opposite question, so this is the confidence
     # needed to TAG rather than to skip. Kept separate because the two decisions
     # are calibrated against different costs: a wrong skip loses a task, a wrong
@@ -45,8 +45,7 @@ class Settings(BaseSettings):
     llm_price_confidence: float = 0.65
     fptai_api_key: str = ""
     openai_api_key: str = ""
-    mention_context_messages: int = 8
-    mention_context_window_minutes: int = 30
+    mention_context_messages: int = 20
     mention_context_retention_hours: int = 24
     mention_classification_deadline_minutes: int = 15
     google_service_account_file: str | None = None

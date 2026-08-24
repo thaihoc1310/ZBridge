@@ -69,7 +69,10 @@ export function ModelCallLogTable({ data, loading, page, onPageChange }: Props) 
           {data?.items.map((entry) => {
             const messages = conversation(entry);
             const modelDecisions = decisions(entry);
-            const currentText = messages[messages.length - 1]?.text || "Không có text";
+            const currentMessageId = entry.request_payload.current_message_id;
+            const currentText = messages.find((message) => message.message_id === currentMessageId)?.text
+              || messages[messages.length - 1]?.text
+              || "Không có text";
             return <tr key={entry.id} className="border-b border-border align-top last:border-0 hover:bg-blue-50/30">
               <td className="whitespace-nowrap px-5 py-4 text-xs text-muted-foreground">{formatDate(entry.created_at)}<span className="mt-1 block font-mono text-[10px]">{entry.latency_ms == null ? "—" : `${entry.latency_ms} ms`}</span></td>
               <td className="max-w-48 px-5 py-4">{entry.customer_id ? <Link to={`/customers/${entry.customer_id}`} className="text-sm font-semibold hover:text-accent">{entry.customer_name}</Link> : <span className="text-sm font-semibold">{entry.customer_name}</span>}<span className="mt-1 block text-[10px] uppercase tracking-wide text-muted-foreground">{entry.trigger === "PRICE_INQUIRY" ? "Hỏi báo giá" : "Tag tên"}</span></td>

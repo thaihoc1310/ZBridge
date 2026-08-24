@@ -73,6 +73,15 @@ export function incomingReactionEvent(
   };
 }
 
+/** Preserve the semantic presence of an image without forwarding its large payload. */
+export function incomingMessageContent(data: {
+  msgType: string;
+  content: unknown;
+}): string {
+  if (data.msgType === "chat.photo") return "[image]";
+  return typeof data.content === "string" ? data.content : "";
+}
+
 export class ZcaJsClient implements ZaloClient {
   private api: API | null = null;
   private status: BotState["status"] = "AUTH_REQUIRED";
@@ -726,8 +735,7 @@ export class ZcaJsClient implements ZaloClient {
       .map((value) => String(value ?? ""))
       .find((value) => value !== "" && value !== "0");
     if (!messageId) return;
-    const content =
-      typeof message.data.content === "string" ? message.data.content : "";
+    const content = incomingMessageContent(message.data);
     const event: IncomingGroupMessageEvent = {
       event_type: "message",
       group_id: message.threadId,

@@ -219,17 +219,21 @@ không nhận được tin đến; gateway tự kết nối lại, và trong lú
 Khi có người tag một thành viên đã cấu hình, hệ thống quyết định theo 3 lớp:
 
 1. **Luật** — câu khớp chính xác danh sách bỏ qua (`ok`, `cảm ơn`, `đã rõ`...) thì
-   bỏ luôn, không gọi AI. Tag trống (chỉ `@Tên`, không có chữ nào khác) thì luôn
-   coi là cần trả lời.
-2. **AI** — trường hợp lưng chừng thì gửi sang LLM, phân loại từng người được
-   tag: `NEED_RESPONSE` / `ACKNOWLEDGEMENT` / `FYI` / `UNCERTAIN`. Chỉ **bỏ** khi
-   là ACK hoặc FYI **và** confidence ≥ `LLM_SKIP_CONFIDENCE`. `UNCERTAIN`
-   thì luôn tag.
-3. **Fail-open** — không có API key, LLM lỗi, hoặc tắt AI trong Settings: vẫn tag
-   như bình thường. Hệ thống chọn "thà tag thừa hơn bỏ sót yêu cầu thật".
+   bỏ luôn, không gọi AI. Tag trống (chỉ `@Tên`, không có chữ nào khác) tạo task
+   ngay nhưng vẫn được AI đọc lại trước lúc gửi.
+2. **AI** — hệ thống gửi tối đa 20 tin gần nhất trong ngày và phân loại từng người:
+   `NEED_RESPONSE` / `ACKNOWLEDGEMENT` / `FYI` / `UNCERTAIN`. Chỉ **giữ tag** khi
+   là `NEED_RESPONSE` và confidence ≥ `LLM_MENTION_CONFIDENCE` (mặc định 0.65).
+   AI đọc lại ngay trước mỗi lượt gửi, nên câu trả lời đầy đủ của người khác đến
+   sau tin nguồn cũng có thể kết thúc vòng.
+3. **Fail-closed** — không có API key hoặc LLM lỗi thì lượt tag tên được hoãn để
+   thử phân loại lại, không gửi Zalo khi chưa có verdict. Tắt AI trong Settings là
+   thao tác override có chủ đích và giữ hành vi tag trực tiếp.
 
 Chỉ có **P1/P2** và **T1/T2** được gửi sang LLM; tên thật, user id Zalo và mention
-đều bị thay bằng nhãn. Mặc định (`LLM_PROVIDER=fptcloud`) nội dung chỉ đi tới hạ
+đều bị thay bằng nhãn. Nếu chính target nói, trường `sender` dùng đúng nhãn
+`T1/T2`, nên model biết người nói có phải người đang được chờ hay không. Mặc định
+(`LLM_PROVIDER=fptcloud`) nội dung chỉ đi tới hạ
 tầng FPT Cloud trong nước; khi đổi sang `openai` thì request gửi kèm `store=False`
 nên OpenAI không lưu lại.
 
@@ -242,7 +246,7 @@ xem có phải hỏi giá thật không. Chỉ tag khi AI trả `NEED_RESPONSE` 
 ≥ `LLM_PRICE_CONFIDENCE` (mặc định 0.65). Người được tag lấy từ danh sách riêng,
 còn khung giờ và thời gian chờ dùng chung với tag nhắc việc.
 
-> **Nhánh này fail-closed, ngược với tag nhắc việc.** AI lỗi, hết key, hoặc tắt
+> **Nhánh này fail-closed và không retry như tag nhắc việc.** AI lỗi, hết key, hoặc tắt
 > bộ phân loại → **không tag ai**, vì không có ai tag trước cả và chỉ mỗi AI đứng
 > giữa chữ "giá" vô tình với việc bot làm phiền nhóm khách. Hệ quả là khi AI chết
 > thì tính năng tắt câm, nên có cảnh báo Telegram riêng cho trường hợp này.
@@ -258,14 +262,15 @@ Sửa vai trò**.
 
 Cần `FPTAI_API_KEY` trong `.env.prod`. Chi phí đo bằng `backend/bench` khoảng
 **$0.00012/lượt** với `DeepSeek-V4-Flash` (so với ~$0.0002 của `gpt-5.4-nano`).
-Đổi model chỉ cần sửa `LLM_PROVIDER` / `LLM_MODEL` / `LLM_SKIP_CONFIDENCE` rồi
+Đổi model chỉ cần sửa `LLM_PROVIDER` / `LLM_MODEL` / `LLM_MENTION_CONFIDENCE` rồi
 `dc up -d celery-ai`, không cần build lại. Nếu `celery-ai` chết hoặc không được tạo, sau
-`MENTION_CLASSIFICATION_DEADLINE_MINUTES` (mặc định 15) thì `celery-worker` tự nhả
-các lượt đang chờ ra để gửi bình thường **và bắn cảnh báo
+`MENTION_CLASSIFICATION_DEADLINE_MINUTES` (mặc định 15) thì hệ thống hoãn tag tên
+để thử lại, dừng lượt báo giá và **bắn cảnh báo
 `MENTION_CLASSIFICATION_STUCK`** về Telegram.
 
 Nội dung tin nhắn dùng làm ngữ cảnh chỉ lưu `MENTION_CONTEXT_RETENTION_HOURS` giờ
-(mặc định 24) rồi bị xoá tự động.
+(mặc định 24) rồi bị xoá tự động; riêng tin nguồn của vòng đang chạy được giữ lại
+đến khi task kết thúc.
 
 ## 9. Backup và phục hồi
 
@@ -424,10 +429,10 @@ Xem `.env.prod.example` để có danh sách đầy đủ kèm chú thích. Nhó
   `ALERT_DEDUP_WINDOW_SECONDS`, `ALERT_HEARTBEAT_INTERVAL_SECONDS`,
   `LOGIN_FAILURE_ALERT_THRESHOLD`, `LOGIN_FAILURE_WINDOW_SECONDS`
 - **AI phân loại tag**: `LLM_PROVIDER`, `LLM_MODEL`, `LLM_BASE_URL`,
-  `LLM_TIMEOUT_SECONDS`, `LLM_SKIP_CONFIDENCE`, `FPTAI_API_KEY`, `OPENAI_API_KEY`,
+  `LLM_TIMEOUT_SECONDS`, `LLM_MENTION_CONFIDENCE`, `LLM_PRICE_CONFIDENCE`,
+  `FPTAI_API_KEY`, `OPENAI_API_KEY`,
   `MENTION_CLASSIFIER_INTERVAL_SECONDS`, `MENTION_CLASSIFICATION_DEADLINE_MINUTES`,
-  `MENTION_CONTEXT_MESSAGES`, `MENTION_CONTEXT_WINDOW_MINUTES`,
-  `MENTION_CONTEXT_RETENTION_HOURS`
+  `MENTION_CONTEXT_MESSAGES`, `MENTION_CONTEXT_RETENTION_HOURS`
 - **Backup**: `BACKUP_PASSPHRASE`, `BACKUP_REMOTE`, `RETENTION_DAYS`, `RCLONE_CONFIG_R2_*`
 - **Giới hạn tài nguyên**: `*_MEM_LIMIT`, `CELERY_CONCURRENCY`, `AI_CONCURRENCY`,
   `ALERT_CONCURRENCY`

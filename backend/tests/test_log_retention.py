@@ -12,6 +12,7 @@ from app.models import (
     DriveConversionFolder,
     DriveConversionJob,
     MentionAutomation,
+    MentionContextMessage,
     MentionFollowup,
     ModelCallLog,
     ZaloAccount,
@@ -28,6 +29,7 @@ from app.models.entities import (
 )
 from app.services.log_retention import (
     delete_expired_delivery_logs,
+    delete_expired_mention_context,
     delete_expired_model_call_logs,
 )
 
@@ -119,6 +121,69 @@ async def test_model_call_logs_keep_exactly_seven_days() -> None:
             await db.scalars(select(ModelCallLog).order_by(ModelCallLog.created_at))
         )
         assert [row.customer_name for row in remaining] == ["Khách 7", "Khách 6"]
+
+    await engine.dispose()
+
+
+async def test_context_keeps_the_source_of_an_active_loop() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 8, 24, 2, tzinfo=UTC)
+    old = now - timedelta(days=3)
+
+    async with session_factory() as db:
+        account = ZaloAccount()
+        db.add(account)
+        await db.flush()
+        group = ZaloGroup(
+            zalo_account_id=account.id,
+            zalo_group_id="context-retention",
+            name="Nhóm giữ nguồn",
+            member_count=2,
+            is_available=True,
+            last_synced_at=now,
+        )
+        db.add(group)
+        await db.flush()
+        automation = MentionAutomation(
+            zalo_group_id=group.id,
+            enabled=True,
+            delay_minutes=60,
+            active_windows=[{"start": "00:00", "end": "23:59"}],
+        )
+        db.add(automation)
+        await db.flush()
+        db.add_all(
+            [
+                MentionContextMessage(
+                    automation_id=automation.id,
+                    message_id="active-source",
+                    content="@A xử lý giúp",
+                    sent_at=old,
+                ),
+                MentionContextMessage(
+                    automation_id=automation.id,
+                    message_id="unreferenced-old",
+                    content="tin cũ",
+                    sent_at=old,
+                ),
+                MentionFollowup(
+                    automation_id=automation.id,
+                    source_message_id="active-source",
+                    target_user_ids=["a"],
+                    target_display_names=["A"],
+                    due_at=now,
+                    status=MentionFollowupStatus.PENDING,
+                ),
+            ]
+        )
+        await db.commit()
+
+        assert await delete_expired_mention_context(db, now=now) == 1
+        remaining = list(await db.scalars(select(MentionContextMessage.message_id)))
+        assert remaining == ["active-source"]
 
     await engine.dispose()
 

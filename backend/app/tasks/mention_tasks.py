@@ -24,7 +24,7 @@ def dispatch_classifications() -> None:
 
 @celery_app.task(name="zbridge.mentions.classify", ignore_result=True)
 def process_mention_classification(followup_id: str, claimed_at: str) -> None:
-    # The service itself always fails open to PENDING when OpenAI is unavailable.
+    # The service fails closed when the model is unavailable, preventing tag spam.
     run_async(
         process_classification(uuid.UUID(followup_id), datetime.fromisoformat(claimed_at))
     )

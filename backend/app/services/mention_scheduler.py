@@ -62,6 +62,9 @@ async def claim_due_followups() -> list[uuid.UUID]:
                     .where(
                         MentionFollowup.status == MentionFollowupStatus.PENDING,
                         MentionFollowup.due_at <= now,
+                        MentionFollowup.evaluated_due_at.is_not_distinct_from(
+                            MentionFollowup.due_at
+                        ),
                     )
                     .order_by(MentionFollowup.due_at)
                     .limit(20)

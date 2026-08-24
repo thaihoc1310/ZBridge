@@ -91,6 +91,7 @@ def _acknowledge_target(
         if remaining_targets:
             followup.target_user_ids = [target[0] for target in remaining_targets]
             followup.target_display_names = [target[1] for target in remaining_targets]
+            followup.evaluated_due_at = None
             # A worker may already hold a snapshot containing the person who just
             # acknowledged. Invalidate that claim so it cannot tag/classify the
             # stale target list, then let the appropriate dispatcher pick it up.
@@ -109,6 +110,27 @@ def _acknowledge_target(
             followup.claimed_at = None
             followup.processed_at = now
     return acknowledged
+
+
+def _invalidate_for_new_context(followups: list[MentionFollowup]) -> None:
+    """Make every live loop read a newly arrived message before its next send.
+
+    This also invalidates in-flight classification/send claims. Whichever side
+    already holds the row lock commits first; the other side then observes the
+    changed claim instead of applying a verdict based on stale conversation.
+    """
+    for followup in followups:
+        if followup.status not in ACTIVE_FOLLOWUP_STATUSES:
+            continue
+        followup.evaluated_due_at = None
+        if followup.status == MentionFollowupStatus.PROCESSING:
+            followup.status = MentionFollowupStatus.PENDING
+        if followup.status in {
+            MentionFollowupStatus.CLASSIFYING,
+            MentionFollowupStatus.PENDING,
+        }:
+            followup.claimed_at = None
+            followup.attempt_count = 0
 
 
 async def _started_at_by_source(
@@ -443,6 +465,11 @@ async def schedule_from_incoming_event(
             event.sender_id,
             acknowledged_followups,
         )
+
+    # A coworker may have answered on the target's behalf. Even when this sender
+    # is not a configured target, no previously approved send may ignore the new
+    # context; the due dispatcher will wait for another AI verdict.
+    _invalidate_for_new_context(active_followups)
 
     existing = await db.scalar(
         select(MentionFollowup.id).where(

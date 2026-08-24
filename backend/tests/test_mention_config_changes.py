@@ -75,6 +75,7 @@ async def _automation_with_a_running_reminder(due_at: datetime | None = None):
         await save_mention_automation(db, group.id, MentionAutomationUpdate(**BASE))
         automation = await db.scalar(select(MentionAutomation))
         await db.execute(delete(MentionFollowup))
+        scheduled_at = due_at or datetime.now(UTC)
         db.add(
             MentionFollowup(
                 automation_id=automation.id,
@@ -82,7 +83,8 @@ async def _automation_with_a_running_reminder(due_at: datetime | None = None):
                 trigger=MentionFollowupTrigger.MENTION,
                 target_user_ids=["u-eng"],
                 target_display_names=["Eng"],
-                due_at=due_at or datetime.now(UTC),
+                due_at=scheduled_at,
+                evaluated_due_at=scheduled_at,
                 status=MentionFollowupStatus.PENDING,
             )
         )

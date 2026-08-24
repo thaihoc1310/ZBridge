@@ -1,7 +1,7 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete
+from sqlalchemy import delete, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -106,8 +106,24 @@ async def delete_expired_mention_context(
     cutoff = (now or datetime.now(UTC)) - timedelta(
         hours=settings.mention_context_retention_hours
     )
+    active_source = exists(
+        select(MentionFollowup.id).where(
+            MentionFollowup.automation_id == MentionContextMessage.automation_id,
+            MentionFollowup.source_message_id == MentionContextMessage.message_id,
+            MentionFollowup.status.in_(
+                {
+                    MentionFollowupStatus.CLASSIFYING,
+                    MentionFollowupStatus.PENDING,
+                    MentionFollowupStatus.PROCESSING,
+                }
+            ),
+        )
+    )
     result = await db.execute(
-        delete(MentionContextMessage).where(MentionContextMessage.sent_at < cutoff)
+        delete(MentionContextMessage).where(
+            MentionContextMessage.sent_at < cutoff,
+            ~active_source,
+        )
     )
     await db.commit()
     return result.rowcount or 0

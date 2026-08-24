@@ -1,6 +1,7 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -22,7 +23,7 @@ from app.models.entities import (
     ModelCallStatus,
 )
 from app.schemas.api import IncomingGroupMessage, IncomingGroupReaction, IncomingMention
-from app.services import mention_classifier
+from app.services import mention_classifier, mention_scheduler
 from app.services.mention_automation_service import (
     acknowledge_from_reaction,
     schedule_from_incoming_event,
@@ -179,7 +180,173 @@ async def test_ai_skips_only_high_confidence_ack(monkeypatch) -> None:
     await engine.dispose()
 
 
-async def test_ai_error_safely_schedules_followup(monkeypatch) -> None:
+async def test_payload_reads_later_messages_and_identifies_target_senders(
+    monkeypatch,
+) -> None:
+    engine, sessions = await _database()
+    monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
+    captured: list[dict[str, object]] = []
+
+    async def classify(payload, *, model=None, prompt=None):
+        captured.append(payload)
+        return _ModelResult(
+            decisions=[
+                MentionDecision(
+                    target_id="T1",
+                    classification=MentionClassification.FYI,
+                    confidence=0.99,
+                    reason_code=MentionReasonCode.PRIOR_CONTEXT,
+                )
+            ],
+            input_tokens=1,
+            output_tokens=1,
+            latency_ms=1,
+        )
+
+    monkeypatch.setattr(mention_classifier, "classify_payload", classify)
+    now = datetime.now(UTC)
+    async with sessions() as db:
+        await schedule_from_incoming_event(
+            db,
+            IncomingGroupMessage(
+                group_id="classifier-group",
+                message_id="target-earlier",
+                sender_id="target-user",
+                sender_display_name="Abcd",
+                sent_at=now - timedelta(minutes=3),
+                content="em đang xem nhóm nhé",
+            ),
+        )
+        source = await schedule_from_incoming_event(
+            db,
+            IncomingGroupMessage(
+                group_id="classifier-group",
+                message_id="source-with-question",
+                sender_id="sender-user",
+                sender_display_name="Minh",
+                sent_at=now - timedelta(minutes=2),
+                content="@Abcd kiểm tra giúp anh đơn này",
+                mentions=[
+                    IncomingMention(
+                        user_id="target-user",
+                        position=0,
+                        length=5,
+                        text="@Abcd",
+                    )
+                ],
+            ),
+        )
+        await schedule_from_incoming_event(
+            db,
+            IncomingGroupMessage(
+                group_id="classifier-group",
+                message_id="answered-later",
+                sender_id="another-user",
+                sender_display_name="Lan",
+                sent_at=now - timedelta(minutes=1),
+                content="mình xử lý xong đơn này rồi anh nhé",
+            ),
+        )
+
+    claimed = await mention_classifier.claim_pending_classifications()
+    await mention_classifier.process_classification(*claimed[0])
+
+    conversation = captured[0]["conversation"]
+    assert [message["message_id"] for message in conversation] == [
+        "target-earlier",
+        "source-with-question",
+        "answered-later",
+    ]
+    assert conversation[0]["sender"] == "T1"
+    assert conversation[1]["sender"].startswith("P")
+    assert conversation[2]["sender"].startswith("P")
+    assert conversation[1]["sender"] != conversation[2]["sender"]
+    async with sessions() as db:
+        followup = await db.get(MentionFollowup, source.followup_id)
+        assert followup.status == MentionFollowupStatus.SKIPPED
+    await engine.dispose()
+
+
+async def test_due_loop_is_rechecked_and_a_later_answer_stops_it(monkeypatch) -> None:
+    engine, sessions = await _database()
+    monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
+    monkeypatch.setattr(mention_scheduler, "SessionLocal", sessions)
+    calls: list[dict[str, object]] = []
+
+    async def classify(payload, *, model=None, prompt=None):
+        calls.append(payload)
+        label = (
+            MentionClassification.NEED_RESPONSE
+            if len(calls) == 1
+            else MentionClassification.FYI
+        )
+        return _ModelResult(
+            decisions=[
+                MentionDecision(
+                    target_id="T1",
+                    classification=label,
+                    confidence=0.99,
+                    reason_code=MentionReasonCode.PRIOR_CONTEXT,
+                )
+            ],
+            input_tokens=1,
+            output_tokens=1,
+            latency_ms=1,
+        )
+
+    monkeypatch.setattr(mention_classifier, "classify_payload", classify)
+    async with sessions() as db:
+        source = await schedule_from_incoming_event(
+            db, _mention_event("loop-source", "@Abcd xử lý giúp anh đơn này")
+        )
+    claimed = await mention_classifier.claim_pending_classifications()
+    await mention_classifier.process_classification(*claimed[0])
+
+    async with sessions() as db:
+        followup = await db.get(MentionFollowup, source.followup_id)
+        approved_due = datetime.now(UTC) - timedelta(seconds=1)
+        followup.due_at = approved_due
+        followup.evaluated_due_at = approved_due
+        followup.status = MentionFollowupStatus.PROCESSING
+        followup.claimed_at = datetime.now(UTC)
+        followup.attempt_count = 1
+        await db.commit()
+        await schedule_from_incoming_event(
+            db,
+            IncomingGroupMessage(
+                group_id="classifier-group",
+                message_id="coworker-answer",
+                sender_id="coworker-user",
+                sender_display_name="Lan",
+                sent_at=datetime.now(UTC),
+                content="Lan đã xử lý và gửi khách xong rồi nhé",
+            ),
+        )
+        followup = await db.get(MentionFollowup, source.followup_id)
+        assert followup.status == MentionFollowupStatus.PENDING
+        assert followup.evaluated_due_at is None
+        assert followup.claimed_at is None
+
+    # A Celery task holding the old PROCESSING snapshot is now harmless.
+    await mention_scheduler.process_followup(source.followup_id)
+
+    # An unverified due cycle can never be claimed by the Zalo sender.
+    assert await mention_scheduler.claim_due_followups() == []
+    recheck = await mention_classifier.claim_pending_classifications()
+    assert [item[0] for item in recheck] == [source.followup_id]
+    await mention_classifier.process_classification(*recheck[0])
+
+    assert len(calls) == 2
+    assert calls[1]["conversation"][-1]["message_id"] == "coworker-answer"
+    assert await mention_scheduler.claim_due_followups() == []
+    async with sessions() as db:
+        followup = await db.get(MentionFollowup, source.followup_id)
+        assert followup.status == MentionFollowupStatus.SKIPPED
+        assert followup.target_user_ids == []
+    await engine.dispose()
+
+
+async def test_ai_error_fails_closed_and_retries_without_tagging(monkeypatch) -> None:
     engine, sessions = await _database()
     monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
 
@@ -197,12 +364,14 @@ async def test_ai_error_safely_schedules_followup(monkeypatch) -> None:
     async with sessions() as db:
         followup = await db.get(MentionFollowup, response.followup_id)
         assert followup.status == MentionFollowupStatus.PENDING
+        assert followup.target_user_ids == ["target-user"]
+        assert followup.evaluated_due_at is None
         assert followup.classification_error.startswith("TimeoutError")
     await engine.dispose()
 
 
 async def test_overdue_classification_is_released_and_alerts(monkeypatch) -> None:
-    """A stopped AI worker must not silently stop everyone from being tagged."""
+    """A stopped AI worker must not let reminders bypass the model."""
     engine, sessions = await _database()
     async with sessions() as db:
         automation = await db.scalar(select(MentionAutomation))
@@ -250,8 +419,9 @@ async def test_overdue_classification_is_released_and_alerts(monkeypatch) -> Non
             row.source_message_id: row
             for row in (await db.scalars(select(MentionFollowup))).all()
         }
-        # Released so the sender picks it up: better a tag than silence.
         assert rows["stuck-long-ago"].status == MentionFollowupStatus.PENDING
+        assert rows["stuck-long-ago"].target_user_ids == ["target-user"]
+        assert rows["stuck-long-ago"].evaluated_due_at is None
         assert rows["stuck-long-ago"].classification_error == "CLASSIFICATION_DEADLINE_EXCEEDED"
         assert rows["stuck-long-ago"].attempt_count == 0
         # Still inside the deadline, so the AI worker keeps its chance.
@@ -265,7 +435,7 @@ async def test_overdue_classification_is_released_and_alerts(monkeypatch) -> Non
     await engine.dispose()
 
 
-async def test_classification_failure_alerts_and_still_tags(monkeypatch) -> None:
+async def test_classification_failure_alerts_and_postpones_tag(monkeypatch) -> None:
     engine, sessions = await _database()
     async with sessions() as db:
         scheduled = await schedule_from_incoming_event(
@@ -295,6 +465,8 @@ async def test_classification_failure_alerts_and_still_tags(monkeypatch) -> None
         followup = await db.get(MentionFollowup, followup_id)
         assert followup is not None
         assert followup.status == MentionFollowupStatus.PENDING
+        assert followup.target_user_ids == ["target-user"]
+        assert followup.evaluated_due_at is None
         assert "TimeoutError" in (followup.classification_error or "")
 
     await engine.dispose()
@@ -350,20 +522,30 @@ async def test_stale_duplicate_task_does_not_spend_another_openai_call(monkeypat
     await engine.dispose()
 
 
-async def test_low_confidence_ack_is_still_tagged(monkeypatch) -> None:
-    """The skip threshold is the safety valve: below it, we tag rather than guess."""
+@pytest.mark.parametrize(
+    ("classification", "confidence", "expected"),
+    [
+        (MentionClassification.NEED_RESPONSE, 0.65, MentionFollowupStatus.PENDING),
+        (MentionClassification.NEED_RESPONSE, 0.649, MentionFollowupStatus.SKIPPED),
+        (MentionClassification.ACKNOWLEDGEMENT, 0.99, MentionFollowupStatus.SKIPPED),
+        (MentionClassification.FYI, 0.01, MentionFollowupStatus.SKIPPED),
+        (MentionClassification.UNCERTAIN, 0.99, MentionFollowupStatus.SKIPPED),
+    ],
+)
+async def test_mention_tags_only_on_confident_need_response(
+    monkeypatch, classification, confidence, expected
+) -> None:
     engine, sessions = await _database()
     monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
-    monkeypatch.setattr(mention_classifier.settings, "llm_skip_confidence", 0.70)
 
     async def classify(_payload, *, model=None, prompt=None):
         return _ModelResult(
             decisions=[
                 MentionDecision(
                     target_id="T1",
-                    classification=MentionClassification.ACKNOWLEDGEMENT,
-                    confidence=0.65,
-                    reason_code=MentionReasonCode.ACK_ONLY,
+                    classification=classification,
+                    confidence=confidence,
+                    reason_code=MentionReasonCode.AMBIGUOUS,
                 )
             ],
             input_tokens=10,
@@ -374,7 +556,7 @@ async def test_low_confidence_ack_is_still_tagged(monkeypatch) -> None:
     monkeypatch.setattr(mention_classifier, "classify_payload", classify)
     async with sessions() as db:
         response = await schedule_from_incoming_event(
-            db, _mention_event("low-conf", "chuyen nay xong roi @Abcd nhe")
+            db, _mention_event("threshold", "@Abcd xem giúp mình việc này")
         )
     claimed = await mention_classifier.claim_pending_classifications()
     await mention_classifier.process_classification(*claimed[0])
@@ -382,16 +564,10 @@ async def test_low_confidence_ack_is_still_tagged(monkeypatch) -> None:
     async with sessions() as db:
         followup = await db.get(MentionFollowup, response.followup_id)
         assert followup is not None
-        assert followup.status == MentionFollowupStatus.PENDING
-        assert followup.target_user_ids == ["target-user"]
-        assert followup.classification_result[0]["skipped"] is False
-        assert followup.classification_result[0]["confidence"] == 0.65
-        model_log = await db.scalar(select(ModelCallLog))
-        assert model_log is not None
-        assert model_log.status == ModelCallStatus.SUCCEEDED
-        assert model_log.outcome == "SCHEDULED"
-        assert model_log.request_payload["conversation"][-1]["text"]
-        assert model_log.response_payload["decisions"][0]["classification"] == "ACKNOWLEDGEMENT"
+        assert followup.status == expected
+        assert followup.classification_result[0]["skipped"] is (
+            expected == MentionFollowupStatus.SKIPPED
+        )
 
     await engine.dispose()
 
@@ -612,10 +788,10 @@ async def test_price_inquiry_stays_silent_when_the_model_fails(monkeypatch) -> N
     await engine.dispose()
 
 
-async def test_overdue_price_inquiry_is_dropped_while_a_mention_is_released(
+async def test_overdue_mention_retries_but_price_is_dropped(
     monkeypatch,
 ) -> None:
-    """The deadline sweep is the other place the two triggers must part ways."""
+    """Neither trigger bypasses AI; a human mention may retry without sending."""
     engine, sessions = await _price_database()
     monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
 
@@ -651,6 +827,8 @@ async def test_overdue_price_inquiry_is_dropped_while_a_mention_is_released(
             for row in (await db.scalars(select(MentionFollowup))).all()
         }
         assert rows["old-mention"].status == MentionFollowupStatus.PENDING
+        assert rows["old-mention"].target_user_ids == ["target-user"]
+        assert rows["old-mention"].evaluated_due_at is None
         assert rows["old-price"].status == MentionFollowupStatus.SKIPPED
         assert rows["old-price"].target_user_ids == []
     await engine.dispose()

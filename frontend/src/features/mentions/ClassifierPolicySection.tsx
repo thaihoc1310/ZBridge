@@ -46,7 +46,7 @@ export function ClassifierPolicySection({ canUpdate }: { canUpdate: boolean }) {
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50"><BrainCircuit className="h-5 w-5 text-accent" /></span>
           <div className="min-w-0 flex-1">
             <h2 className="font-display text-2xl">Bộ phân loại AI</h2>
-            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">AI đọc context gần nhất và chỉ bỏ qua ACKNOWLEDGEMENT/FYI khi đủ chắc chắn. NEED_RESPONSE, UNCERTAIN hoặc lỗi API vẫn được lên lịch.</p>
+            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">AI đọc tối đa 20 tin gần nhất trong ngày và đọc lại trước mỗi lượt gửi. Chỉ NEED_RESPONSE từ 65% mới giữ vòng tag; ACKNOWLEDGEMENT, FYI và UNCERTAIN đều dừng. Nếu API lỗi, lượt gửi được hoãn để thử phân loại lại và không tag khi chưa có kết luận.</p>
           </div>
           <Toggle checked={aiEnabled} onChange={setAiEnabled} disabled={!canUpdate || query.isLoading} label="Bật bộ phân loại AI" />
         </div>

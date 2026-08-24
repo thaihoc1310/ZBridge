@@ -64,13 +64,7 @@ class MentionTargetKind(enum.StrEnum):
 
 
 class MentionFollowupTrigger(enum.StrEnum):
-    """What created the follow-up, and therefore how a failed classification ends.
-
-    MENTION fails open — a human already tagged somebody, so tagging again costs
-    one message. PRICE_INQUIRY fails closed — nobody tagged anyone and only the
-    classifier separates "báo giá cho anh" from "đánh giá nhân viên", so a
-    failure here must stay silent rather than spam the customer's group.
-    """
+    """What created the follow-up; both paths require a confident AI verdict."""
 
     MENTION = "MENTION"
     PRICE_INQUIRY = "PRICE_INQUIRY"
@@ -422,6 +416,10 @@ class MentionFollowup(Base):
     target_user_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     target_display_names: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # The exact due_at value whose send was most recently approved by the model.
+    # A successful send/postpone changes due_at, making the next cycle require a
+    # fresh read of the conversation before it can reach Zalo.
+    evaluated_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[MentionFollowupStatus] = mapped_column(
         Enum(MentionFollowupStatus, native_enum=False),
         default=MentionFollowupStatus.PENDING,
