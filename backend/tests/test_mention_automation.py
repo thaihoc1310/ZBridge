@@ -11,7 +11,6 @@ from app.models import (
     MentionContextMessage,
     MentionFollowup,
     MentionTarget,
-    ModelCallLog,
     ZaloAccount,
     ZaloGroup,
 )
@@ -19,8 +18,6 @@ from app.models.entities import (
     DeliveryStatus,
     DeliveryType,
     MentionFollowupStatus,
-    MentionFollowupTrigger,
-    ModelCallStatus,
 )
 from app.schemas.api import (
     IncomingGroupMessage,
@@ -495,23 +492,8 @@ async def test_successful_followup_is_scheduled_again(monkeypatch) -> None:
         )
         db.add(followup)
         await db.flush()
-        model_log = ModelCallLog(
-            followup_id=followup.id,
-            customer_id=customer.id,
-            customer_name=group.name,
-            trigger=MentionFollowupTrigger.MENTION,
-            provider="fptcloud",
-            model="DeepSeek-V4-Flash",
-            request_payload={"conversation": []},
-            response_payload={"decisions": []},
-            status=ModelCallStatus.SUCCEEDED,
-            outcome="SCHEDULED",
-            scheduled_for_send=True,
-        )
-        db.add(model_log)
         await db.commit()
         followup_id = followup.id
-        model_log_id = model_log.id
         customer_id = customer.id
 
     sent: list[tuple[str, list[dict[str, str]]]] = []
@@ -534,7 +516,6 @@ async def test_successful_followup_is_scheduled_again(monkeypatch) -> None:
     async with session_factory() as db:
         repeated = await db.get(MentionFollowup, followup_id)
         delivery_log = await db.scalar(select(BotDeliveryLog))
-        stored_model_log = await db.get(ModelCallLog, model_log_id)
         assert repeated is not None
         assert repeated.status == MentionFollowupStatus.PENDING
         assert repeated.attempt_count == 0
@@ -547,10 +528,6 @@ async def test_successful_followup_is_scheduled_again(monkeypatch) -> None:
         assert delivery_log.type == DeliveryType.MENTION_AUTOMATION
         assert delivery_log.customer_id == customer_id
         assert delivery_log.customer_id != group.id
-        assert stored_model_log is not None
-        assert stored_model_log.message_sent is True
-        assert stored_model_log.zalo_message_id == "sent-message"
-        assert stored_model_log.message_sent_at is not None
     assert sent == [
         (
             "group-repeat",

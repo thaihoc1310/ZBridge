@@ -63,10 +63,6 @@ async def list_model_call_logs(
                 input_tokens=row.input_tokens,
                 output_tokens=row.output_tokens,
                 latency_ms=row.latency_ms,
-                scheduled_for_send=row.scheduled_for_send,
-                message_sent=row.message_sent,
-                zalo_message_id=row.zalo_message_id,
-                message_sent_at=row.message_sent_at,
                 created_at=row.created_at,
                 finished_at=row.finished_at,
             )

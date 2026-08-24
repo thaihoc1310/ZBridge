@@ -94,7 +94,7 @@ export function ActivityPage() {
 
   return <div className="mx-auto max-w-[1500px]">
     <Link to="/" className="mb-5 inline-flex items-center gap-2 text-sm font-medium text-muted-foreground transition hover:text-accent"><ArrowLeft className="h-4 w-4" />Về tổng quan</Link>
-    <PageHeader eyebrow="Operations log" heading={<ActivityHeading view={view} views={views} onChange={changeView} />} description={view === "model" ? "Theo dõi context gửi tới AI, response phân loại và việc bot có thực sự gửi Zalo hay không. Dữ liệu được giữ 7 ngày." : "Theo dõi lượt bot gửi thành công hoặc thất bại mà không lưu nội dung tin nhắn. Dữ liệu được giữ 7 ngày."} />
+    <PageHeader eyebrow="Operations log" heading={<ActivityHeading view={view} views={views} onChange={changeView} />} description={view === "model" ? "Theo dõi context gửi tới AI, response phân loại, token và độ trễ của từng lượt gọi. Dữ liệu được giữ 7 ngày." : "Theo dõi lượt bot gửi thành công hoặc thất bại mà không lưu nội dung tin nhắn. Dữ liệu được giữ 7 ngày."} />
     <section className="card overflow-hidden">
       <div className="flex flex-col gap-3 border-b border-border p-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="relative w-full max-w-xl"><Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input className="field pl-11" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={view === "model" ? "Tìm khách hàng, model hoặc lỗi..." : "Tìm khách hàng hoặc nguyên nhân lỗi..."} />{search && <button className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1 text-muted-foreground hover:bg-muted" onClick={() => setSearch("")}><X className="h-4 w-4" /></button>}</div>

@@ -428,7 +428,7 @@ class MentionFollowup(Base):
 
 
 class ModelCallLog(Base):
-    """Seven-day audit trail for classifier requests and their real send outcome."""
+    """Seven-day audit trail for classifier requests and model responses."""
 
     __tablename__ = "model_call_logs"
     __table_args__ = (
@@ -468,10 +468,6 @@ class ModelCallLog(Base):
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
-    scheduled_for_send: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    message_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    zalo_message_id: Mapped[str | None] = mapped_column(String(128))
-    message_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

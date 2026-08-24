@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.alerts import Severity
 from app.db.database import SessionLocal
-from app.models import Customer, MentionAutomation, MentionFollowup, ModelCallLog
+from app.models import Customer, MentionAutomation, MentionFollowup
 from app.models.entities import (
     BotStatus,
     DeliveryStatus,
@@ -229,26 +229,8 @@ async def _postpone(job: _FollowupJob, reason: str, delay: timedelta) -> None:
 
 async def _record_success(job: _FollowupJob, message_id: str | None) -> None:
     async with SessionLocal() as db:
-        # The gateway has already accepted the send at this point. Record that
-        # fact even if an incoming reply concurrently cancelled the follow-up
-        # before its claim can be reloaded below.
-        model_call = await db.scalar(
-            select(ModelCallLog)
-            .where(
-                ModelCallLog.followup_id == job.followup_id,
-                ModelCallLog.scheduled_for_send.is_(True),
-            )
-            .order_by(ModelCallLog.created_at.desc())
-            .limit(1)
-            .with_for_update()
-        )
-        if model_call is not None:
-            model_call.message_sent = True
-            model_call.message_sent_at = datetime.now(UTC)
-            model_call.zalo_message_id = message_id
         followup = await _reload_claim(db, job)
         if followup is None:
-            await db.commit()
             return
         await _log_delivery(
             db, job.customer_id, DeliveryStatus.SENT, zalo_message_id=message_id

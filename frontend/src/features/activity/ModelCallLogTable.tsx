@@ -1,4 +1,4 @@
-import { Bot, CheckCircle2, ChevronLeft, ChevronRight, Clock3, MessageSquareOff, Send } from "lucide-react";
+import { Bot, CheckCircle2, ChevronLeft, ChevronRight } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { ModelCallLog, ModelCallLogList } from "../../api/types";
 import { formatDate } from "../../lib/format";
@@ -54,12 +54,6 @@ function outcomeLabel(outcome: string | null) {
   return outcome ? labels[outcome] ?? outcome : "Đang xử lý";
 }
 
-function SendOutcome({ entry }: { entry: ModelCallLog }) {
-  if (entry.message_sent) return <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700"><Send className="h-3 w-3" />Đã gửi Zalo</span>;
-  if (entry.scheduled_for_send) return <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700"><Clock3 className="h-3 w-3" />Chưa gửi Zalo</span>;
-  return <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600"><MessageSquareOff className="h-3 w-3" />Không gửi</span>;
-}
-
 export function ModelCallLogTable({ data, loading, page, onPageChange }: Props) {
   return <>
     <div className="app-scrollbar overflow-x-auto">
@@ -81,7 +75,7 @@ export function ModelCallLogTable({ data, loading, page, onPageChange }: Props) 
               <td className="max-w-sm px-5 py-4">
                 {entry.status === "FAILED" ? <div className="text-xs leading-relaxed text-red-700"><strong>{entry.error_type || "MODEL_ERROR"}</strong>{entry.error_message && <p className="mt-1 line-clamp-3">{entry.error_message}</p>}</div> : modelDecisions.length ? <details className="group"><summary className="cursor-pointer list-none text-xs font-medium hover:text-accent">{modelDecisions.map((decision) => decision.classification).join(", ")}<span className="mt-1 block text-[10px] text-muted-foreground group-open:hidden">Mở chi tiết response</span></summary><div className="mt-2 space-y-2">{modelDecisions.map((decision, index) => <div key={`${decision.target_user_id}-${index}`} className="rounded-lg bg-muted/70 p-2 text-[10px]"><div className="flex items-center justify-between gap-2"><strong>{decision.target_display_name || `Target ${index + 1}`}</strong><span className={decision.skipped ? "text-slate-500" : "text-emerald-700"}>{decision.skipped ? "Bỏ qua" : "Giữ tag"}</span></div><p className="mt-1 font-mono text-muted-foreground">{decision.classification} · {typeof decision.confidence === "number" ? `${Math.round(decision.confidence * 100)}%` : "—"} · {decision.reason_code}</p></div>)}</div></details> : <span className="text-xs text-muted-foreground">{entry.status === "PROCESSING" ? "Đang chờ model phản hồi..." : "Không có response"}</span>}
               </td>
-              <td className="px-5 py-4"><StatusBadge status={entry.status} /><p className="mt-2 max-w-48 text-[11px] leading-relaxed text-muted-foreground">{outcomeLabel(entry.outcome)}</p><div className="mt-2"><SendOutcome entry={entry} /></div>{entry.message_sent_at && <p className="mt-1 text-[10px] text-muted-foreground">{formatDate(entry.message_sent_at)}</p>}</td>
+              <td className="px-5 py-4"><StatusBadge status={entry.status} /><p className="mt-2 max-w-48 text-[11px] leading-relaxed text-muted-foreground">{outcomeLabel(entry.outcome)}</p></td>
             </tr>;
           })}
         </tbody>

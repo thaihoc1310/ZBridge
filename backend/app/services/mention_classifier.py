@@ -498,7 +498,6 @@ async def _finish_model_call(
     *,
     status: ModelCallStatus,
     outcome: str,
-    scheduled_for_send: bool,
     response_payload: dict[str, object] | None = None,
     error_type: str | None = None,
     error_message: str | None = None,
@@ -513,7 +512,6 @@ async def _finish_model_call(
         return
     row.status = status
     row.outcome = outcome
-    row.scheduled_for_send = scheduled_for_send
     row.response_payload = response_payload
     row.error_type = error_type
     row.error_message = error_message
@@ -540,17 +538,16 @@ async def process_classification(followup_id: uuid.UUID, claimed_at: datetime) -
         is_price = job.trigger == MentionFollowupTrigger.PRICE_INQUIRY
         async with SessionLocal() as db:
             followup = await _reload_claim(db, job)
-            scheduled_for_send = followup is not None and not is_price
+            falls_back_to_tag = followup is not None and not is_price
             await _finish_model_call(
                 db,
                 model_call_id,
                 status=ModelCallStatus.FAILED,
                 outcome=(
                     "SAFE_FALLBACK_TAG"
-                    if scheduled_for_send
+                    if falls_back_to_tag
                     else "SAFE_FALLBACK_SKIP" if followup is not None else "CLAIM_LOST"
                 ),
-                scheduled_for_send=scheduled_for_send,
                 error_type=type(exc).__name__,
                 error_message=str(exc)[:4000],
                 latency_ms=round((perf_counter() - call_started) * 1000),
@@ -589,7 +586,6 @@ async def process_classification(followup_id: uuid.UUID, claimed_at: datetime) -
                 model_call_id,
                 status=ModelCallStatus.SUCCEEDED,
                 outcome="CLAIM_LOST",
-                scheduled_for_send=False,
                 response_payload=result.response_payload,
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
@@ -674,7 +670,6 @@ async def process_classification(followup_id: uuid.UUID, claimed_at: datetime) -
             model_call_id,
             status=ModelCallStatus.SUCCEEDED,
             outcome=outcome,
-            scheduled_for_send=bool(kept),
             response_payload={
                 "decisions": persisted_decisions,
                 "provider_response": result.response_payload,

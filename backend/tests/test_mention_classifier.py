@@ -389,8 +389,6 @@ async def test_low_confidence_ack_is_still_tagged(monkeypatch) -> None:
         assert model_log is not None
         assert model_log.status == ModelCallStatus.SUCCEEDED
         assert model_log.outcome == "SCHEDULED"
-        assert model_log.scheduled_for_send is True
-        assert model_log.message_sent is False
         assert model_log.request_payload["conversation"][-1]["text"]
         assert model_log.response_payload["decisions"][0]["classification"] == "ACKNOWLEDGEMENT"
 
@@ -483,8 +481,6 @@ async def test_reaction_while_ai_is_in_flight_cannot_resurrect_loop(monkeypatch)
             model_log = await db.scalar(select(ModelCallLog))
             assert model_log.status == ModelCallStatus.SUCCEEDED
             assert model_log.outcome == "CLAIM_LOST"
-            assert model_log.scheduled_for_send is False
-            assert model_log.message_sent is False
         await engine.dispose()
 
 
@@ -612,7 +608,6 @@ async def test_price_inquiry_stays_silent_when_the_model_fails(monkeypatch) -> N
         assert model_log.status == ModelCallStatus.FAILED
         assert model_log.outcome == "SAFE_FALLBACK_SKIP"
         assert model_log.error_type == "TimeoutError"
-        assert model_log.scheduled_for_send is False
     await engine.dispose()
 
 

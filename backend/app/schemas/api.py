@@ -196,10 +196,6 @@ class ModelCallLogResponse(BaseModel):
     input_tokens: int | None
     output_tokens: int | None
     latency_ms: int | None
-    scheduled_for_send: bool
-    message_sent: bool
-    zalo_message_id: str | None
-    message_sent_at: datetime | None
     created_at: datetime
     finished_at: datetime | None
 

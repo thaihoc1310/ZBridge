@@ -91,10 +91,6 @@ export type ModelCallLog = {
   input_tokens: number | null;
   output_tokens: number | null;
   latency_ms: number | null;
-  scheduled_for_send: boolean;
-  message_sent: boolean;
-  zalo_message_id: string | null;
-  message_sent_at: string | null;
   created_at: string;
   finished_at: string | null;
 };
