@@ -156,7 +156,7 @@ services:
       LLM_PRICE_CONFIDENCE: ${LLM_PRICE_CONFIDENCE:-0.65}
       FPTAI_API_KEY: ${FPTAI_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      MENTION_CONTEXT_MESSAGES: ${MENTION_CONTEXT_MESSAGES:-20}
+      MENTION_CONTEXT_MESSAGES: ${MENTION_CONTEXT_MESSAGES:-15}
     depends_on:
       migrate:
         condition: service_completed_successfully

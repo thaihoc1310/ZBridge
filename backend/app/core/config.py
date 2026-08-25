@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     llm_price_confidence: float = 0.65
     fptai_api_key: str = ""
     openai_api_key: str = ""
-    mention_context_messages: int = 20
+    mention_context_messages: int = 15
     mention_context_retention_hours: int = 24
     mention_classification_deadline_minutes: int = 15
     google_service_account_file: str | None = None

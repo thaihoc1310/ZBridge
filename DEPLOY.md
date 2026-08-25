@@ -221,7 +221,7 @@ Khi có người tag một thành viên đã cấu hình, hệ thống quyết �
 1. **Luật** — câu khớp chính xác danh sách bỏ qua (`ok`, `cảm ơn`, `đã rõ`...) thì
    bỏ luôn, không gọi AI. Tag trống (chỉ `@Tên`, không có chữ nào khác) tạo task
    ngay nhưng vẫn được AI đọc lại trước lúc gửi.
-2. **AI** — hệ thống gửi tối đa 20 tin gần nhất trong ngày và phân loại từng người:
+2. **AI** — hệ thống gửi tối đa 15 tin liên quan gần nhất và phân loại từng người:
    `NEED_RESPONSE` / `ACKNOWLEDGEMENT` / `FYI` / `UNCERTAIN`. Chỉ **giữ tag** khi
    là `NEED_RESPONSE` và confidence ≥ `LLM_MENTION_CONFIDENCE` (mặc định 0.65).
    AI đọc lại ngay trước mỗi lượt gửi, nên câu trả lời đầy đủ của người khác đến

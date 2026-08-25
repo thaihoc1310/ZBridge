@@ -61,7 +61,7 @@ Mỗi khách hàng cần có link thư mục Drive trong hồ sơ. File dùng đ
 6. Mở **Phân loại tag** để chỉnh chính sách AI, bare mention và câu bỏ qua. Đây là cấu hình global, áp dụng cho mọi nhóm/khách hàng.
 7. Với khách còn nợ, thêm thư mục Drive rồi mở **Nhắc thanh toán công nợ** để đặt ngày, giờ và nội dung gửi hàng tháng.
 
-Khi một tin nhắn trong nhóm tag người đã chọn, gateway chuyển sự kiện cho backend. Bare mention được tạo task ngay; các câu bỏ qua khớp chính xác dùng rule; phần còn lại được `celery-ai` phân loại bằng LLM. Mỗi lần sắp gửi, AI đọc lại tối đa 20 tin gần nhất trong ngày và chỉ giữ tag khi `NEED_RESPONSE` đạt ngưỡng; `ACKNOWLEDGEMENT`, `FYI` và `UNCERTAIN` đều dừng. Thiếu key hoặc lỗi API khiến tag tên được hoãn để thử phân loại lại, tuyệt đối không gửi khi chưa có verdict. Context thường tự xóa sau 24 giờ, riêng tin nguồn của vòng đang chạy được giữ đến khi vòng kết thúc.
+Khi một tin nhắn trong nhóm tag người đã chọn, gateway chuyển sự kiện cho backend. Bare mention được tạo task ngay; các câu bỏ qua khớp chính xác dùng rule; phần còn lại được `celery-ai` phân loại bằng LLM. Mỗi lần sắp gửi, AI đọc lại tối đa 15 tin liên quan gần nhất và chỉ giữ tag khi `NEED_RESPONSE` đạt ngưỡng; `ACKNOWLEDGEMENT`, `FYI` và `UNCERTAIN` đều dừng. Thiếu key hoặc lỗi API khiến tag tên được hoãn để thử phân loại lại, tuyệt đối không gửi khi chưa có verdict. Context thường tự xóa sau 24 giờ, riêng tin nguồn của vòng đang chạy được giữ đến khi vòng kết thúc.
 
 Mặc định dùng DeepSeek-V4-Flash trên FPT Cloud. Đặt API key chính chủ trong `.env` (không commit file này):
 

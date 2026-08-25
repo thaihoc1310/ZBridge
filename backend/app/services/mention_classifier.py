@@ -46,7 +46,7 @@ PRICE_PROMPT_VERSION = "price-inquiry-v5"
 LOCAL_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 MAX_CLASSIFICATIONS_PER_TICK = 20
 MAX_DUE_RECHECKS_PER_TICK = 10
-MAX_CONTEXT_MESSAGES = 20
+MAX_CONTEXT_MESSAGES = 15
 
 SHARED_HANDOFF_RULES = """- A later participant supersedes an original target when they
   substantively take over the request — for example, they provide an answer, quotation,
