@@ -18,7 +18,7 @@ from app.models.entities import (
 )
 from app.services.alerting import customer_link, report_async
 from app.services.debt_reminder_service import (
-    defer_lunar_debt_reminder,
+    defer_debt_reminder,
     next_debt_reminder_run,
 )
 from app.services.delivery_service import add_delivery_log
@@ -69,7 +69,7 @@ async def claim_due_debt_reminders() -> list[uuid.UUID]:
             scheduled_for = automation.next_run_at
             if scheduled_for is None:
                 continue
-            deferred_for = defer_lunar_debt_reminder(scheduled_for)
+            deferred_for = defer_debt_reminder(scheduled_for)
             scheduled_for_utc = (
                 scheduled_for.replace(tzinfo=UTC)
                 if scheduled_for.tzinfo is None

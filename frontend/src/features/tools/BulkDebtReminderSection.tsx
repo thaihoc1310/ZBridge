@@ -97,7 +97,8 @@ export function BulkDebtReminderSection() {
             động khi khách còn nợ và có Google Sheet; khi đã thanh toán thì tạm
             ngừng nhưng không mất cấu hình. Lịch rơi vào mùng 1 hoặc ngày rằm
             âm lịch sẽ tự lùi sang ngày hôm sau; dịp Tết tạm dừng từ 28 tháng
-            Chạp đến hết mùng 1 tháng Hai, bắt đầu gửi lại từ mùng 2 tháng Hai.
+            Chạp đến hết mùng 1 tháng Hai, bắt đầu gửi lại từ mùng 2 tháng Hai;
+            các ngày 01/01, 30/04, 01/05 và 02/09 dương lịch cũng không gửi.
           </div>
           <div className="grid gap-4 sm:grid-cols-3">
             <Field icon={CalendarClock} label="Ngày gửi hàng tháng">

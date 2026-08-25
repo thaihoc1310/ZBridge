@@ -24,8 +24,8 @@ from app.services.debt_reminder_scheduler import (
     process_debt_reminder,
 )
 from app.services.debt_reminder_service import (
-    defer_lunar_debt_reminder,
-    is_lunar_debt_reminder_blackout,
+    defer_debt_reminder,
+    is_debt_reminder_blackout,
     next_debt_reminder_run,
     next_monthly_run,
     save_debt_reminder,
@@ -78,13 +78,13 @@ def test_debt_schedule_is_independent_of_the_server_timezone(
 
 def test_vietnamese_lunar_blackouts_are_deferred_even_across_solar_months() -> None:
     # Tết 2026 is mùng 1 and 2026-03-03 is rằm tháng Giêng in Vietnam.
-    assert is_lunar_debt_reminder_blackout(datetime(2026, 2, 17).date())
-    assert is_lunar_debt_reminder_blackout(datetime(2026, 3, 3).date())
-    assert is_lunar_debt_reminder_blackout(datetime(2026, 3, 19).date())
-    assert is_lunar_debt_reminder_blackout(datetime(2026, 4, 2).date())
-    assert not is_lunar_debt_reminder_blackout(datetime(2026, 3, 20).date())
+    assert is_debt_reminder_blackout(datetime(2026, 2, 17).date())
+    assert is_debt_reminder_blackout(datetime(2026, 3, 3).date())
+    assert is_debt_reminder_blackout(datetime(2026, 3, 19).date())
+    assert is_debt_reminder_blackout(datetime(2026, 4, 2).date())
+    assert not is_debt_reminder_blackout(datetime(2026, 3, 20).date())
 
-    assert defer_lunar_debt_reminder(
+    assert defer_debt_reminder(
         datetime(2026, 2, 17, 2, tzinfo=UTC)
     ) == datetime(2026, 3, 20, 2, tzinfo=UTC)
 
@@ -98,17 +98,46 @@ def test_vietnamese_lunar_blackouts_are_deferred_even_across_solar_months() -> N
     ) == datetime(2026, 6, 1, 2, tzinfo=UTC)
 
 
+def test_solar_new_year_is_deferred_to_january_second() -> None:
+    assert is_debt_reminder_blackout(datetime(2027, 1, 1).date())
+    assert not is_debt_reminder_blackout(datetime(2027, 1, 2).date())
+    assert defer_debt_reminder(
+        datetime(2027, 1, 1, 2, tzinfo=UTC)
+    ) == datetime(2027, 1, 2, 2, tzinfo=UTC)
+
+
+def test_fixed_solar_holidays_are_deferred_to_the_next_working_day() -> None:
+    for month, day in ((4, 30), (5, 1), (9, 2)):
+        assert is_debt_reminder_blackout(datetime(2027, month, day).date())
+
+    # 30/04 and 01/05 are consecutive, so the first allowed day is 02/05.
+    assert defer_debt_reminder(
+        datetime(2027, 4, 30, 2, tzinfo=UTC)
+    ) == datetime(2027, 5, 2, 2, tzinfo=UTC)
+    assert defer_debt_reminder(
+        datetime(2027, 5, 1, 2, tzinfo=UTC)
+    ) == datetime(2027, 5, 2, 2, tzinfo=UTC)
+    assert defer_debt_reminder(
+        datetime(2027, 9, 2, 2, tzinfo=UTC)
+    ) == datetime(2027, 9, 3, 2, tzinfo=UTC)
+    assert next_monthly_run(
+        1,
+        time(9, 0),
+        now=datetime(2026, 12, 31, 10, tzinfo=UTC),
+    ) == datetime(2027, 1, 2, 2, tzinfo=UTC)
+
+
 def test_tet_break_runs_from_28_thang_chap_until_mung_2_thang_hai() -> None:
     # In 2026: 14/02 is 27/12, 15/02 is 28/12, 19/03 is 01/02,
     # and reminders resume on 20/03, which is 02/02.
-    assert not is_lunar_debt_reminder_blackout(datetime(2026, 2, 14).date())
-    assert is_lunar_debt_reminder_blackout(datetime(2026, 2, 15).date())
-    assert is_lunar_debt_reminder_blackout(datetime(2026, 3, 4).date())
-    assert is_lunar_debt_reminder_blackout(datetime(2026, 3, 19).date())
-    assert not is_lunar_debt_reminder_blackout(datetime(2026, 3, 20).date())
+    assert not is_debt_reminder_blackout(datetime(2026, 2, 14).date())
+    assert is_debt_reminder_blackout(datetime(2026, 2, 15).date())
+    assert is_debt_reminder_blackout(datetime(2026, 3, 4).date())
+    assert is_debt_reminder_blackout(datetime(2026, 3, 19).date())
+    assert not is_debt_reminder_blackout(datetime(2026, 3, 20).date())
 
     # Keep the configured Vietnam-local send time while crossing the solar month.
-    assert defer_lunar_debt_reminder(
+    assert defer_debt_reminder(
         datetime(2026, 2, 15, 2, tzinfo=UTC)
     ) == datetime(2026, 3, 20, 2, tzinfo=UTC)
 
