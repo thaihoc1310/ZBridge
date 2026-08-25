@@ -381,16 +381,10 @@ async def _prepare_job(
             .replace(hour=0, minute=0, second=0, microsecond=0)
             .astimezone(UTC)
         )
-        source_local_start = (
-            _aware(source.sent_at)
-            .astimezone(LOCAL_TIMEZONE)
-            .replace(hour=0, minute=0, second=0, microsecond=0)
-            .astimezone(UTC)
-        )
         # Normally this is today's conversation. If a loop crosses midnight,
-        # include the source's whole local day as well. Starting at the source
-        # itself would lose the immediately preceding context around 00:00.
-        context_start = min(local_start, source_local_start)
+        # retain up to 24 hours before its source too. A calendar-day-only
+        # window would lose a 23:59 message when the source arrives at 00:00.
+        context_start = min(local_start, _aware(source.sent_at) - timedelta(days=1))
         context_limit = min(MAX_CONTEXT_MESSAGES, max(1, settings.mention_context_messages))
         recent_messages = list(
             (
