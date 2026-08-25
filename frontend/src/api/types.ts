@@ -231,6 +231,7 @@ export type DebtReminder = {
   id: string;
   customer_id: string;
   day_of_month: number;
+  repeat_enabled: boolean;
   repeat_interval_days: number;
   send_time: string;
   message_parts: DebtReminderPart[];
@@ -276,6 +277,7 @@ export type DebtBulkPreviewRow = {
   has_debt: boolean;
   has_debt_file: boolean;
   current_day_of_month: number | null;
+  current_repeat_enabled: boolean | null;
   current_repeat_interval_days: number | null;
   current_send_time: string | null;
   will_change: boolean;

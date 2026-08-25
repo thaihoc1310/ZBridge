@@ -1,4 +1,5 @@
 import os
+import time as system_time
 from datetime import UTC, datetime, time, timedelta
 
 import pytest
@@ -18,8 +19,13 @@ from app.models import (
 from app.models.entities import BotStatus, DebtReminderStatus, DeliveryStatus, DeliveryType
 from app.schemas.api import DebtReminderUpdate
 from app.services import debt_reminder_scheduler, google_sheets_service
-from app.services.debt_reminder_scheduler import process_debt_reminder
+from app.services.debt_reminder_scheduler import (
+    claim_due_debt_reminders,
+    process_debt_reminder,
+)
 from app.services.debt_reminder_service import (
+    defer_lunar_debt_reminder,
+    is_lunar_debt_reminder_blackout,
     next_debt_reminder_run,
     next_monthly_run,
     save_debt_reminder,
@@ -43,9 +49,87 @@ def test_next_monthly_run_uses_vietnam_time_and_clamps_short_months() -> None:
     february_run = next_monthly_run(
         31,
         time(9, 0),
-        now=datetime(2027, 2, 1, tzinfo=UTC),
+        # February 2031 ends on lunar 08/02, outside the Tết blackout.
+        now=datetime(2031, 2, 1, tzinfo=UTC),
     )
-    assert february_run == datetime(2027, 2, 28, 2, tzinfo=UTC)
+    assert february_run == datetime(2031, 2, 28, 2, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("server_timezone", ["UTC", "Asia/Singapore"])
+def test_debt_schedule_is_independent_of_the_server_timezone(
+    server_timezone: str,
+) -> None:
+    previous_timezone = os.environ.get("TZ")
+    try:
+        os.environ["TZ"] = server_timezone
+        system_time.tzset()
+        assert next_monthly_run(
+            25,
+            time(9, 0),
+            now=datetime(2026, 8, 24, 10, tzinfo=UTC),
+        ) == datetime(2026, 8, 25, 2, tzinfo=UTC)
+    finally:
+        if previous_timezone is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = previous_timezone
+        system_time.tzset()
+
+
+def test_vietnamese_lunar_blackouts_are_deferred_even_across_solar_months() -> None:
+    # Tết 2026 is mùng 1 and 2026-03-03 is rằm tháng Giêng in Vietnam.
+    assert is_lunar_debt_reminder_blackout(datetime(2026, 2, 17).date())
+    assert is_lunar_debt_reminder_blackout(datetime(2026, 3, 3).date())
+    assert is_lunar_debt_reminder_blackout(datetime(2026, 3, 19).date())
+    assert is_lunar_debt_reminder_blackout(datetime(2026, 4, 2).date())
+    assert not is_lunar_debt_reminder_blackout(datetime(2026, 3, 20).date())
+
+    assert defer_lunar_debt_reminder(
+        datetime(2026, 2, 17, 2, tzinfo=UTC)
+    ) == datetime(2026, 3, 20, 2, tzinfo=UTC)
+
+    # 31/05/2026 is lunar 15/04, so a configured day 31 must run on 01/06.
+    assert next_monthly_run(
+        31,
+        time(9, 0),
+        # It is already after the configured 09:00 on 31/05, but the deferred
+        # occurrence has not run yet and must not be skipped to the end of June.
+        now=datetime(2026, 5, 31, 3, tzinfo=UTC),
+    ) == datetime(2026, 6, 1, 2, tzinfo=UTC)
+
+
+def test_tet_break_runs_from_28_thang_chap_until_mung_2_thang_hai() -> None:
+    # In 2026: 14/02 is 27/12, 15/02 is 28/12, 19/03 is 01/02,
+    # and reminders resume on 20/03, which is 02/02.
+    assert not is_lunar_debt_reminder_blackout(datetime(2026, 2, 14).date())
+    assert is_lunar_debt_reminder_blackout(datetime(2026, 2, 15).date())
+    assert is_lunar_debt_reminder_blackout(datetime(2026, 3, 4).date())
+    assert is_lunar_debt_reminder_blackout(datetime(2026, 3, 19).date())
+    assert not is_lunar_debt_reminder_blackout(datetime(2026, 3, 20).date())
+
+    # Keep the configured Vietnam-local send time while crossing the solar month.
+    assert defer_lunar_debt_reminder(
+        datetime(2026, 2, 15, 2, tzinfo=UTC)
+    ) == datetime(2026, 3, 20, 2, tzinfo=UTC)
+
+    # The clamped end of February can also fall inside tháng Giêng and must
+    # wait for mùng 2 tháng Hai rather than send at the solar month boundary.
+    assert next_monthly_run(
+        31,
+        time(9, 0),
+        now=datetime(2027, 2, 1, tzinfo=UTC),
+    ) == datetime(2027, 3, 9, 2, tzinfo=UTC)
+
+    # An interval landing on 28 tháng Chạp also resumes on 02 tháng Hai.
+    february_12 = datetime(2026, 2, 12, 2, tzinfo=UTC)
+    assert next_debt_reminder_run(
+        31,
+        time(9, 0),
+        3,
+        february_12,
+        has_debt=True,
+        now=february_12,
+    ) == datetime(2026, 3, 20, 2, tzinfo=UTC)
 
 
 def test_debt_reminder_has_no_independent_enabled_field() -> None:
@@ -62,10 +146,36 @@ def test_next_debt_reminder_repeats_and_preserves_monthly_anchor() -> None:
     ) == datetime(2026, 8, 28, 2, tzinfo=UTC)
     assert next_debt_reminder_run(
         25, send_time, 3, september_24, has_debt=True, now=september_24
-    ) == datetime(2026, 9, 25, 2, tzinfo=UTC)
+    ) == datetime(2026, 9, 26, 2, tzinfo=UTC)
     assert next_debt_reminder_run(
         25, send_time, 3, august_25, has_debt=False, now=august_25
-    ) == datetime(2026, 9, 25, 2, tzinfo=UTC)
+    ) == datetime(2026, 9, 26, 2, tzinfo=UTC)
+
+
+def test_lunar_deferred_repeat_becomes_the_next_interval_anchor() -> None:
+    # 27/08/2026 is lunar 15/07. The 3-day interval from 24/08 therefore
+    # moves to 28/08, and the following interval is anchored at 28 -> 31.
+    august_24 = datetime(2026, 8, 24, 2, tzinfo=UTC)
+    august_28 = datetime(2026, 8, 28, 2, tzinfo=UTC)
+    assert next_debt_reminder_run(
+        31, time(9, 0), 3, august_24, has_debt=True, now=august_24
+    ) == august_28
+    assert next_debt_reminder_run(
+        31, time(9, 0), 3, august_28, has_debt=True, now=august_28
+    ) == datetime(2026, 8, 31, 2, tzinfo=UTC)
+
+
+def test_disabled_repeat_waits_for_the_next_monthly_anchor() -> None:
+    august_25 = datetime(2026, 8, 25, 2, tzinfo=UTC)
+    assert next_debt_reminder_run(
+        25,
+        time(9, 0),
+        3,
+        august_25,
+        repeat_enabled=False,
+        has_debt=True,
+        now=august_25,
+    ) == datetime(2026, 9, 26, 2, tzinfo=UTC)
 
 
 def test_outage_does_not_replay_every_missed_reminder() -> None:
@@ -89,6 +199,57 @@ def test_outage_does_not_replay_every_missed_reminder() -> None:
     assert next_debt_reminder_run(
         18, time(0, 53), 3, following, has_debt=True, now=now
     ) > now
+
+
+async def test_scheduler_defers_a_legacy_blackout_schedule_before_creating_a_run(
+    monkeypatch,
+) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    lunar_new_year = datetime(2026, 2, 17, 2, tzinfo=UTC)
+
+    async with sessions() as db:
+        account = ZaloAccount(status=BotStatus.CONNECTED)
+        db.add(account)
+        await db.flush()
+        group = ZaloGroup(
+            zalo_account_id=account.id,
+            zalo_group_id="legacy-lunar-blackout",
+            name="Lịch cũ trùng mùng một",
+            member_count=2,
+            is_available=True,
+            last_synced_at=lunar_new_year,
+        )
+        db.add(group)
+        await db.flush()
+        customer = Customer(
+            zalo_group_id=group.id,
+            has_debt=True,
+            debt_file_url="https://docs.google.com/spreadsheets/d/legacy/edit",
+        )
+        db.add(customer)
+        await db.flush()
+        db.add(
+            DebtReminderAutomation(
+                customer_id=customer.id,
+                next_run_at=lunar_new_year,
+            )
+        )
+        await db.commit()
+
+    monkeypatch.setattr(debt_reminder_scheduler, "SessionLocal", sessions)
+    assert await claim_due_debt_reminders() == []
+
+    async with sessions() as db:
+        automation = await db.scalar(select(DebtReminderAutomation))
+        assert automation is not None
+        assert automation.next_run_at.replace(tzinfo=UTC) == datetime(
+            2026, 3, 20, 2, tzinfo=UTC
+        )
+        assert list((await db.scalars(select(DebtReminderRun))).all()) == []
+    await engine.dispose()
 
 
 def test_extract_spreadsheet_id() -> None:
@@ -192,6 +353,20 @@ async def test_overdue_repeat_stays_due_after_editing_the_config() -> None:
         assert updated.next_run_at is not None
         assert updated.next_run_at.replace(tzinfo=UTC) == now
 
+        # During the Tết blackout, the same overdue path must resume at the
+        # configured 09:00 rather than at the wall-clock time the form was saved.
+        tet_now = datetime(2027, 2, 10, 7, 37, tzinfo=UTC)
+        updated_during_tet = await save_debt_reminder(
+            db,
+            customer.id,
+            config,
+            now=tet_now,
+        )
+        assert updated_during_tet.next_run_at is not None
+        assert updated_during_tet.next_run_at.replace(tzinfo=UTC) == datetime(
+            2027, 3, 9, 2, tzinfo=UTC
+        )
+
     await engine.dispose()
 
 
@@ -240,6 +415,7 @@ async def test_debt_reminder_config_and_three_required_deliveries(monkeypatch) -
             ],
         )
         response = await save_debt_reminder(db, customer.id, config, now=now)
+        assert response.repeat_enabled is True
         assert response.repeat_interval_days == 3
         assert response.next_run_at is not None
         assert response.next_run_at.replace(tzinfo=UTC) == datetime(

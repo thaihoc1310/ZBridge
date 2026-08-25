@@ -176,6 +176,7 @@ async def preview_bulk_debt_reminders(
                 500,
             )
         current_day = automation.day_of_month
+        current_repeat_enabled = automation.repeat_enabled
         current_repeat = automation.repeat_interval_days
         current_time = automation.send_time.strftime("%H:%M")
         runnable = (
@@ -185,6 +186,7 @@ async def preview_bulk_debt_reminders(
         )
         will_change = (
             automation.day_of_month != data.day_of_month
+            or automation.repeat_enabled != data.repeat_enabled
             or automation.repeat_interval_days != data.repeat_interval_days
             or current_time != data.send_time
             or runnable != (automation.next_run_at is not None)
@@ -197,6 +199,7 @@ async def preview_bulk_debt_reminders(
                 has_debt=customer.has_debt,
                 has_debt_file=bool(customer.debt_file_url),
                 current_day_of_month=current_day,
+                current_repeat_enabled=current_repeat_enabled,
                 current_repeat_interval_days=current_repeat,
                 current_send_time=current_time,
                 will_change=will_change,
@@ -262,6 +265,7 @@ async def apply_bulk_debt_reminders(
             )
         schedule_unchanged = (
             automation.day_of_month == data.day_of_month
+            and automation.repeat_enabled == data.repeat_enabled
             and automation.repeat_interval_days == data.repeat_interval_days
             and automation.send_time == parsed_time
         )
@@ -286,6 +290,7 @@ async def apply_bulk_debt_reminders(
         )
         cancelled += result.rowcount or 0
         automation.day_of_month = data.day_of_month
+        automation.repeat_enabled = data.repeat_enabled
         automation.repeat_interval_days = data.repeat_interval_days
         automation.send_time = parsed_time
         if runnable:
@@ -305,6 +310,7 @@ async def apply_bulk_debt_reminders(
                     parsed_time,
                     data.repeat_interval_days,
                     last_sent.scheduled_for,
+                    repeat_enabled=data.repeat_enabled,
                     has_debt=True,
                     now=now,
                 )

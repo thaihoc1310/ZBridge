@@ -117,7 +117,12 @@ async def test_active_followups_are_grouped_and_cancelled_atomically() -> None:
 
 async def test_bulk_debt_schedule_preserves_message_and_cancels_old_run() -> None:
     engine, sessions, customer_id, _followup_id, run_id = await _database()
-    schedule = DebtReminderBulkSchedule(day_of_month=28, repeat_interval_days=5, send_time="10:30")
+    schedule = DebtReminderBulkSchedule(
+        day_of_month=28,
+        repeat_enabled=False,
+        repeat_interval_days=5,
+        send_time="10:30",
+    )
     async with sessions() as db:
         preview = await preview_bulk_debt_reminders(db, schedule)
         assert preview.rows[0].will_change is True
@@ -136,6 +141,7 @@ async def test_bulk_debt_schedule_preserves_message_and_cancels_old_run() -> Non
             {"type": "text", "text": "Nội dung riêng không được ghi đè"}
         ]
         assert automation.day_of_month == 28
+        assert automation.repeat_enabled is False
         assert automation.repeat_interval_days == 5
         assert automation.send_time == time(10, 30)
         old_run = await db.get(DebtReminderRun, run_id)

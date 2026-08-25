@@ -85,6 +85,7 @@ async def sync_groups(db: AsyncSession) -> SyncResponse:
                     DebtReminderAutomation(
                         customer_id=group_id,
                         day_of_month=25,
+                        repeat_enabled=True,
                         repeat_interval_days=3,
                         send_time=time(9, 0),
                         next_run_at=None,

@@ -18,6 +18,7 @@ export function BulkDebtReminderSection() {
   const queryClient = useQueryClient();
   const [step, setStep] = useState<Step>("config");
   const [day, setDay] = useState<number | "">(25);
+  const [repeatEnabled, setRepeatEnabled] = useState(true);
   const [repeat, setRepeat] = useState<number | "">(3);
   const [sendTime, setSendTime] = useState("09:00");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -26,6 +27,7 @@ export function BulkDebtReminderSection() {
   const [error, setError] = useState<string | null>(null);
   const payload = {
     day_of_month: Number(day),
+    repeat_enabled: repeatEnabled,
     repeat_interval_days: Number(repeat),
     send_time: sendTime,
   };
@@ -72,7 +74,7 @@ export function BulkDebtReminderSection() {
   const start = () => {
     if (!Number.isInteger(day) || Number(day) < 1 || Number(day) > 31)
       return setError("Ngày gửi phải từ 1 đến 31.");
-    if (!Number.isInteger(repeat) || Number(repeat) < 1 || Number(repeat) > 31)
+    if (repeatEnabled && (!Number.isInteger(repeat) || Number(repeat) < 1 || Number(repeat) > 31))
       return setError("Khoảng lặp phải từ 1 đến 31 ngày.");
     preview.mutate();
   };
@@ -93,7 +95,9 @@ export function BulkDebtReminderSection() {
             <strong>Chỉ ghi đè lịch gửi.</strong> Nội dung nhắc cuối cùng và
             cấu hình riêng của từng khách hàng được giữ nguyên. Lịch tự hoạt
             động khi khách còn nợ và có Google Sheet; khi đã thanh toán thì tạm
-            ngừng nhưng không mất cấu hình.
+            ngừng nhưng không mất cấu hình. Lịch rơi vào mùng 1 hoặc ngày rằm
+            âm lịch sẽ tự lùi sang ngày hôm sau; dịp Tết tạm dừng từ 28 tháng
+            Chạp đến hết mùng 1 tháng Hai, bắt đầu gửi lại từ mùng 2 tháng Hai.
           </div>
           <div className="grid gap-4 sm:grid-cols-3">
             <Field icon={CalendarClock} label="Ngày gửi hàng tháng">
@@ -111,12 +115,31 @@ export function BulkDebtReminderSection() {
               />
             </Field>
             <Field icon={Repeat2} label="Lặp lại sau">
+              <div className="mb-2 flex items-center justify-between rounded-lg border border-border bg-white px-3 py-2">
+                <span className="text-xs font-medium text-slate-600">
+                  {repeatEnabled ? "Đang bật" : "Đã tắt"}
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={repeatEnabled}
+                  aria-label="Bật hoặc tắt nhắc lặp hàng loạt"
+                  className={`relative h-6 w-11 rounded-full transition ${repeatEnabled ? "bg-blue-600" : "bg-slate-300"}`}
+                  onClick={() => {
+                    setRepeatEnabled((current) => !current);
+                    setError(null);
+                  }}
+                >
+                  <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition ${repeatEnabled ? "translate-x-5" : ""}`} />
+                </button>
+              </div>
               <div className="relative">
                 <input
-                  className="field pr-14"
+                  className="field pr-14 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                   type="number"
                   min={1}
                   max={31}
+                  disabled={!repeatEnabled}
                   value={repeat}
                   onChange={(event) =>
                     setRepeat(
@@ -201,7 +224,7 @@ export function BulkDebtReminderSection() {
                     {row.name}
                   </span>
                   <span className="mt-1 block text-xs text-muted-foreground">
-                    {`Hiện tại: ngày ${row.current_day_of_month}, mỗi ${row.current_repeat_interval_days} ngày, lúc ${row.current_send_time}`}
+                    {`Hiện tại: ngày ${row.current_day_of_month}, ${row.current_repeat_enabled ? `mỗi ${row.current_repeat_interval_days} ngày` : "không lặp"}, lúc ${row.current_send_time}`}
                   </span>
                   <span className="mt-1 flex flex-wrap gap-2 text-[11px]">
                     <em

@@ -386,6 +386,7 @@ DebtReminderMessagePart = DebtReminderTextPart | DebtReminderMentionPart
 
 class DebtReminderUpdate(BaseModel):
     day_of_month: int = Field(default=25, ge=1, le=31)
+    repeat_enabled: bool = True
     repeat_interval_days: int = Field(default=3, ge=1, le=31)
     send_time: str = Field(default="09:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
     message_parts: list[DebtReminderMessagePart] = Field(min_length=1, max_length=200)
@@ -407,6 +408,7 @@ class DebtReminderResponse(BaseModel):
     id: uuid.UUID
     customer_id: uuid.UUID
     day_of_month: int
+    repeat_enabled: bool
     repeat_interval_days: int
     send_time: str
     message_parts: list[DebtReminderMessagePart]
@@ -449,6 +451,7 @@ class ActiveMentionCompanyListResponse(BaseModel):
 
 class DebtReminderBulkSchedule(BaseModel):
     day_of_month: int = Field(default=25, ge=1, le=31)
+    repeat_enabled: bool = True
     repeat_interval_days: int = Field(default=3, ge=1, le=31)
     send_time: str = Field(default="09:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
@@ -464,6 +467,7 @@ class DebtReminderBulkPreviewRow(BaseModel):
     has_debt: bool
     has_debt_file: bool
     current_day_of_month: int | None = None
+    current_repeat_enabled: bool | None = None
     current_repeat_interval_days: int | None = None
     current_send_time: str | None = None
     will_change: bool

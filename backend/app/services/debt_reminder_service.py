@@ -3,6 +3,7 @@ import uuid
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from lunar_vn import solar_to_lunar
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -24,6 +25,32 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+def is_lunar_debt_reminder_blackout(value: date) -> bool:
+    """Return whether a Vietnam-local date is excluded from debt reminders.
+
+    Besides every mùng 1 and ngày rằm, the Tết break runs continuously from
+    28 tháng Chạp through mùng 1 tháng Hai (inclusive). Reminders resume on
+    mùng 2 tháng Hai.
+    """
+    lunar = solar_to_lunar(value)
+    in_tet_break = (lunar.month == 12 and lunar.day >= 28) or lunar.month == 1 or (
+        lunar.month == 2 and lunar.day == 1
+    )
+    return in_tet_break or lunar.day in {1, 15}
+
+
+def defer_lunar_debt_reminder(value: datetime) -> datetime:
+    """Move a reminder to the first allowed following local day."""
+    local_value = _as_utc(value).astimezone(LOCAL_TIMEZONE)
+    while is_lunar_debt_reminder_blackout(local_value.date()):
+        local_value = datetime.combine(
+            local_value.date() + timedelta(days=1),
+            local_value.timetz().replace(tzinfo=None),
+            tzinfo=LOCAL_TIMEZONE,
+        )
+    return local_value.astimezone(UTC)
+
+
 def next_monthly_run(
     day_of_month: int,
     send_time: time,
@@ -39,6 +66,7 @@ def next_monthly_run(
             send_time,
             tzinfo=LOCAL_TIMEZONE,
         )
+        candidate = defer_lunar_debt_reminder(candidate).astimezone(LOCAL_TIMEZONE)
         if candidate > local_now:
             return candidate.astimezone(UTC)
         if month == 12:
@@ -54,6 +82,7 @@ def next_debt_reminder_run(
     repeat_interval_days: int,
     scheduled_for: datetime,
     *,
+    repeat_enabled: bool = True,
     has_debt: bool,
     now: datetime | None = None,
 ) -> datetime:
@@ -69,13 +98,14 @@ def next_debt_reminder_run(
     monthly_anchor = next_monthly_run(
         day_of_month, send_time, now=max(scheduled_for, reference)
     )
-    if not has_debt:
+    if not has_debt or not repeat_enabled:
         return monthly_anchor
     step = timedelta(days=repeat_interval_days)
-    repeated_run = scheduled_for + step
-    if repeated_run <= reference:
-        missed = (reference - repeated_run) // step + 1
-        repeated_run += missed * step
+    repeated_run = defer_lunar_debt_reminder(scheduled_for + step)
+    # A lunar deferral becomes the anchor for the next interval. Iterate instead
+    # of arithmetically skipping missed slots so a 7 -> 8 shift yields 8 -> 11.
+    while repeated_run <= reference:
+        repeated_run = defer_lunar_debt_reminder(repeated_run + step)
     return min(repeated_run, monthly_anchor)
 
 
@@ -114,6 +144,7 @@ async def _response(
         id=automation.id,
         customer_id=customer_id,
         day_of_month=automation.day_of_month,
+        repeat_enabled=automation.repeat_enabled,
         repeat_interval_days=automation.repeat_interval_days,
         send_time=automation.send_time.strftime("%H:%M"),
         message_parts=automation.message_parts,
@@ -237,6 +268,7 @@ async def save_debt_reminder(
             500,
         )
     automation.day_of_month = data.day_of_month
+    automation.repeat_enabled = data.repeat_enabled
     automation.repeat_interval_days = data.repeat_interval_days
     automation.send_time = parsed_time
     automation.message_parts = parts
@@ -261,13 +293,28 @@ async def save_debt_reminder(
             data.day_of_month, parsed_time, now=effective_now
         )
         last_sent = await _latest_sent_run(db, automation.id)
-        if last_sent is not None:
-            repeated_run = _as_utc(last_sent.scheduled_for) + timedelta(
-                days=data.repeat_interval_days
+        if last_sent is not None and data.repeat_enabled:
+            repeated_run = defer_lunar_debt_reminder(
+                _as_utc(last_sent.scheduled_for)
+                + timedelta(days=data.repeat_interval_days)
             )
-            # An already-overdue repeat must fire now. Dropping it would push a
-            # still-indebted customer all the way to next month's anchor.
-            next_run_at = min(next_run_at, max(repeated_run, effective_now))
+            # Preserve the config-edit behaviour: an overdue repeat is due now,
+            # except that lunar blackout dates still move it to the first
+            # permitted following day at the configured send time.
+            local_now = effective_now.astimezone(LOCAL_TIMEZONE)
+            overdue_floor = effective_now
+            if is_lunar_debt_reminder_blackout(local_now.date()):
+                overdue_floor = defer_lunar_debt_reminder(
+                    datetime.combine(
+                        local_now.date(),
+                        parsed_time,
+                        tzinfo=LOCAL_TIMEZONE,
+                    )
+                )
+            next_run_at = min(
+                next_run_at,
+                max(repeated_run, overdue_floor),
+            )
         automation.next_run_at = next_run_at
     else:
         automation.next_run_at = None

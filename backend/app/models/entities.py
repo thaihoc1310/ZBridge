@@ -505,6 +505,9 @@ class DebtReminderAutomation(TimestampMixin, Base):
         index=True,
     )
     day_of_month: Mapped[int] = mapped_column(Integer, default=25, nullable=False)
+    repeat_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
     repeat_interval_days: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     send_time: Mapped[time] = mapped_column(
         Time(timezone=False), default=time(9, 0), nullable=False

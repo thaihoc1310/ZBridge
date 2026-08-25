@@ -198,6 +198,7 @@ export function DebtReminderModal({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
   const [dayOfMonth, setDayOfMonth] = useState<number | "">(25);
+  const [repeatEnabled, setRepeatEnabled] = useState(true);
   const [repeatIntervalDays, setRepeatIntervalDays] = useState<number | "">(3);
   const [sendTime, setSendTime] = useState("09:00");
   const [text, setText] = useState(defaultText);
@@ -224,6 +225,7 @@ export function DebtReminderModal({
     if (!open || !reminder.data) return;
     const editor = editorFromParts(reminder.data.message_parts);
     setDayOfMonth(reminder.data.day_of_month);
+    setRepeatEnabled(reminder.data.repeat_enabled);
     setRepeatIntervalDays(reminder.data.repeat_interval_days);
     setSendTime(reminder.data.send_time);
     setText(editor.text);
@@ -261,7 +263,7 @@ export function DebtReminderModal({
       if (!Number.isInteger(dayOfMonth) || Number(dayOfMonth) < 1 || Number(dayOfMonth) > 31) {
         throw new Error("Ngày gửi phải nằm trong khoảng từ 1 đến 31.");
       }
-      if (!Number.isInteger(repeatIntervalDays) || Number(repeatIntervalDays) < 1 || Number(repeatIntervalDays) > 31) {
+      if (repeatEnabled && (!Number.isInteger(repeatIntervalDays) || Number(repeatIntervalDays) < 1 || Number(repeatIntervalDays) > 31)) {
         throw new Error("Khoảng cách giữa các lần gửi phải từ 1 đến 31 ngày.");
       }
       if (!text.trim()) throw new Error("Nội dung nhắc công nợ không được để trống.");
@@ -272,6 +274,7 @@ export function DebtReminderModal({
         method: "PUT",
         body: JSON.stringify({
           day_of_month: Number(dayOfMonth),
+          repeat_enabled: repeatEnabled,
           repeat_interval_days: Number(repeatIntervalDays),
           send_time: sendTime,
           message_parts: partsFromEditor(text, mentions),
@@ -381,9 +384,13 @@ export function DebtReminderModal({
                   })}
                 </div>
                 <p className="mt-3">
-                  Sau đó bot tiếp tục gửi lại mỗi {repeatIntervalDays || "—"} ngày cho
-                  đến khi khách hàng được chuyển sang “Đã thanh toán”. Mốc ngày hàng
-                  tháng vẫn luôn được ưu tiên.
+                  {repeatEnabled
+                    ? `Sau đó bot tiếp tục gửi lại mỗi ${repeatIntervalDays || "—"} ngày cho đến khi khách hàng được chuyển sang “Đã thanh toán”. `
+                    : "Bot không gửi các lượt lặp xen giữa. "}
+                  Mốc ngày hàng tháng vẫn luôn hoạt động. Nếu lịch rơi vào mùng 1
+                  hoặc ngày rằm âm lịch, lượt nhắc sẽ lùi sang ngày hôm sau. Dịp
+                  Tết, bot tạm dừng từ 28 tháng Chạp đến hết mùng 1 tháng Hai và
+                  bắt đầu gửi lại từ mùng 2 tháng Hai.
                 </p>
               </div>
             )}
@@ -415,16 +422,32 @@ export function DebtReminderModal({
                 Tháng ngắn sẽ dùng ngày cuối cùng của tháng.
               </span>
             </label>
-            <label>
-              <span className="mb-2 flex items-center gap-2 text-sm font-semibold">
-                <Repeat2 className="h-4 w-4 text-accent" />Lặp lại sau
+            <div>
+              <span className="mb-2 flex items-center justify-between gap-2 text-sm font-semibold">
+                <span className="flex items-center gap-2">
+                  <Repeat2 className="h-4 w-4 text-accent" />Lặp lại sau
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={repeatEnabled}
+                  aria-label="Bật hoặc tắt nhắc lặp"
+                  className={`relative h-6 w-11 rounded-full transition ${repeatEnabled ? "bg-blue-600" : "bg-slate-300"}`}
+                  onClick={() => {
+                    setRepeatEnabled((current) => !current);
+                    setFormError(null);
+                  }}
+                >
+                  <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition ${repeatEnabled ? "translate-x-5" : ""}`} />
+                </button>
               </span>
               <div className="relative">
                 <input
-                  className="field pr-14"
+                  className="field pr-14 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                   type="number"
                   min={1}
                   max={31}
+                  disabled={!repeatEnabled}
                   value={repeatIntervalDays}
                   onChange={(event) => {
                     setRepeatIntervalDays(event.target.value === "" ? "" : Number(event.target.value));
@@ -436,9 +459,9 @@ export function DebtReminderModal({
                 </span>
               </div>
               <span className="mt-2 block text-xs text-muted-foreground">
-                Lặp đến khi đã thanh toán.
+                {repeatEnabled ? "Lặp đến khi đã thanh toán." : "Đã tắt các lượt nhắc lặp."}
               </span>
-            </label>
+            </div>
             <label>
               <span className="mb-2 flex items-center gap-2 text-sm font-semibold">
                 <Clock3 className="h-4 w-4 text-accent" />Giờ gửi

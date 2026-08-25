@@ -192,6 +192,7 @@ async def test_group_sync_creates_customer_and_default_automations_atomically(
 
         assert customer.id == group.id
         assert debt.day_of_month == 25
+        assert debt.repeat_enabled is True
         assert debt.repeat_interval_days == 3
         assert debt.next_run_at is None
         assert mention.enabled is False

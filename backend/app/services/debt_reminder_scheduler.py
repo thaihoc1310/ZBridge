@@ -17,7 +17,10 @@ from app.models.entities import (
     DeliveryType,
 )
 from app.services.alerting import customer_link, report_async
-from app.services.debt_reminder_service import next_debt_reminder_run
+from app.services.debt_reminder_service import (
+    defer_lunar_debt_reminder,
+    next_debt_reminder_run,
+)
 from app.services.delivery_service import add_delivery_log
 from app.services.google_sheets_service import SheetExportError, google_sheets
 from app.services.zalo_gateway_client import GatewayError, zalo_gateway
@@ -66,6 +69,15 @@ async def claim_due_debt_reminders() -> list[uuid.UUID]:
             scheduled_for = automation.next_run_at
             if scheduled_for is None:
                 continue
+            deferred_for = defer_lunar_debt_reminder(scheduled_for)
+            scheduled_for_utc = (
+                scheduled_for.replace(tzinfo=UTC)
+                if scheduled_for.tzinfo is None
+                else scheduled_for.astimezone(UTC)
+            )
+            if deferred_for != scheduled_for_utc:
+                automation.next_run_at = deferred_for
+                continue
             db.add(
                 DebtReminderRun(
                     automation_id=automation.id,
@@ -79,6 +91,7 @@ async def claim_due_debt_reminders() -> list[uuid.UUID]:
                 automation.send_time,
                 automation.repeat_interval_days,
                 scheduled_for,
+                repeat_enabled=automation.repeat_enabled,
                 has_debt=automation.customer.has_debt,
                 now=now,
             )
