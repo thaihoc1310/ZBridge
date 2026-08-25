@@ -98,6 +98,18 @@ def test_vietnamese_lunar_blackouts_are_deferred_even_across_solar_months() -> N
     ) == datetime(2026, 6, 1, 2, tzinfo=UTC)
 
 
+@pytest.mark.parametrize(
+    ("solar_year", "solar_month", "solar_day"),
+    [(2026, 4, 26), (2027, 4, 16), (2028, 4, 4), (2029, 4, 23), (2030, 4, 12)],
+)
+def test_hung_kings_commemoration_is_deferred(
+    solar_year: int, solar_month: int, solar_day: int
+) -> None:
+    holiday = datetime(solar_year, solar_month, solar_day, 2, tzinfo=UTC)
+    assert is_debt_reminder_blackout(holiday.date())
+    assert defer_debt_reminder(holiday) == holiday + timedelta(days=1)
+
+
 def test_solar_new_year_is_deferred_to_january_second() -> None:
     assert is_debt_reminder_blackout(datetime(2027, 1, 1).date())
     assert not is_debt_reminder_blackout(datetime(2027, 1, 2).date())
