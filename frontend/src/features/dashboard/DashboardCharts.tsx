@@ -1,18 +1,40 @@
 import { CircleDollarSign, MessageSquareText } from "lucide-react";
 import type { Dashboard } from "../../api/types";
 
+function DebtBar({
+  label,
+  value,
+  max,
+  barClass,
+  trackClass,
+  valueClass,
+}: {
+  label: string;
+  value: number;
+  max: number;
+  barClass: string;
+  trackClass: string;
+  valueClass: string;
+}) {
+  const width = max > 0 ? Math.round((value / max) * 100) : 0;
+  return (
+    <div>
+      <div className="mb-1.5 flex items-baseline justify-between gap-3">
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
+        <span className={`font-display text-xl leading-none ${valueClass}`}>{value}</span>
+      </div>
+      <div className={`h-3 overflow-hidden rounded-full ${trackClass}`}>
+        <div className={`h-full rounded-full ${barClass}`} style={{ width: `${width}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function DebtChart({ data }: { data?: Dashboard }) {
   const owing = data?.customers_with_debt ?? 0;
   const paid = data?.customers_without_debt ?? 0;
   const total = owing + paid;
-  const owingPercent = total ? Math.round((owing / total) * 100) : 0;
-  const paidPercent = total ? 100 - owingPercent : 0;
-  const radius = 38;
-  const circumference = 2 * Math.PI * radius;
-  const split = owing > 0 && paid > 0;
-  const gap = split ? 8 : 0;
-  const owingLength = total ? Math.max(0, (owing / total) * circumference - gap) : 0;
-  const paidLength = total ? Math.max(0, (paid / total) * circumference - gap) : 0;
+  const max = Math.max(owing, paid, 1);
 
   return (
     <article className="card min-w-0 p-4">
@@ -28,68 +50,27 @@ function DebtChart({ data }: { data?: Dashboard }) {
         </span>
       </div>
 
-      <div className="mt-3 flex items-center gap-4">
-        <div
-          className="relative h-[5.5rem] w-[5.5rem] shrink-0"
-          role="img"
-          aria-label={`${owing} khách còn nợ, ${paid} khách không còn nợ`}
-        >
-          <svg className="h-full w-full -rotate-90" viewBox="0 0 120 120" aria-hidden="true">
-            <circle cx="60" cy="60" r={radius} fill="none" stroke="rgb(var(--muted))" strokeWidth="14" />
-            {paid > 0 && (
-              <circle
-                cx="60"
-                cy="60"
-                r={radius}
-                fill="none"
-                stroke="rgb(var(--success-fg))"
-                strokeWidth="14"
-                strokeLinecap="round"
-                strokeDasharray={`${paidLength} ${circumference}`}
-                strokeDashoffset={-(owingLength + (owing > 0 ? gap : 0))}
-              />
-            )}
-            {owing > 0 && (
-              <circle
-                cx="60"
-                cy="60"
-                r={radius}
-                fill="none"
-                stroke="#f59e0b"
-                strokeWidth="14"
-                strokeLinecap="round"
-                strokeDasharray={`${owingLength} ${circumference}`}
-              />
-            )}
-          </svg>
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="font-display text-2xl leading-none">{owingPercent}%</span>
-            <span className="mt-0.5 text-[9px] uppercase tracking-wider text-muted-foreground">còn nợ</span>
-          </div>
-        </div>
-
-        <div className="min-w-0 flex-1 space-y-2.5">
-          <div className="flex h-2 overflow-hidden rounded-full bg-muted">
-            {owing > 0 && <div className="h-full rounded-full bg-amber-500" style={{ width: `${owingPercent}%` }} />}
-            {paid > 0 && <div className="h-full rounded-full bg-emerald-500/80" style={{ width: `${paidPercent}%` }} />}
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div className="rounded-xl border border-warning-border bg-warning-bg px-3 py-2">
-              <p className="flex items-center gap-1.5 text-[11px] font-medium text-warning-fg">
-                <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                Còn nợ
-              </p>
-              <p className="mt-1 font-display text-xl leading-none text-warning-fg">{owing}</p>
-            </div>
-            <div className="rounded-xl border border-success-border bg-success-bg px-3 py-2">
-              <p className="flex items-center gap-1.5 text-[11px] font-medium text-success-fg">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                Không nợ
-              </p>
-              <p className="mt-1 font-display text-xl leading-none text-foreground">{paid}</p>
-            </div>
-          </div>
-        </div>
+      <div
+        className="mt-5 space-y-4"
+        role="img"
+        aria-label={`${owing} khách còn nợ, ${paid} khách không còn nợ`}
+      >
+        <DebtBar
+          label="Còn nợ"
+          value={owing}
+          max={max}
+          barClass="bg-amber-500"
+          trackClass="bg-warning-bg"
+          valueClass="text-warning-fg"
+        />
+        <DebtBar
+          label="Không nợ"
+          value={paid}
+          max={max}
+          barClass="bg-emerald-500"
+          trackClass="bg-success-bg"
+          valueClass="text-success-fg"
+        />
       </div>
     </article>
   );
