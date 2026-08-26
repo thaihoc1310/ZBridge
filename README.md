@@ -86,6 +86,8 @@ Credential (`cookie`, `imei`, `userAgent`) được mã hóa AES-256-GCM tại `
 
 > Mỗi tài khoản chỉ chạy được một Zalo Web listener tại một thời điểm. Không mở Zalo Web bằng cùng tài khoản bot khi gateway đang chạy, nếu không listener automation có thể bị ngắt. Ứng dụng Zalo trên điện thoại vẫn dùng để quét QR và quản lý tài khoản.
 
+
+
 ## Phát triển từng service
 
 Backend (cần PostgreSQL đang chạy):
@@ -123,6 +125,8 @@ npm install
 npm run dev
 ```
 
+
+
 ## API chính
 
 - `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`
@@ -146,3 +150,11 @@ cd ../zalo-gateway && npm run typecheck && npm run build
 cd ../frontend && npm run build
 docker compose config
 ```
+
+
+
+Zalo Gateway:
+
+[https://github.com/RFS-ADRENO/zca-js](https://github.com/RFS-ADRENO/zca-js)
+
+[https://zca-js.tdung.com/](https://zca-js.tdung.com/)
