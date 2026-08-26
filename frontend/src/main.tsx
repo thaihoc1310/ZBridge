@@ -19,6 +19,7 @@ import type { User } from "./api/types";
 import { AppShell } from "./components/AppShell";
 import { PERMISSIONS, type PermissionCode } from "./lib/permissions";
 import { SessionProvider, usePermissions } from "./lib/session";
+import { ThemeProvider } from "./lib/theme";
 import { LoginPage } from "./pages/LoginPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { BotPage } from "./pages/BotPage";
@@ -53,8 +54,8 @@ function Protected() {
   });
   if (isLoading)
     return (
-      <div className="flex min-h-screen items-center justify-center bg-foreground text-white">
-        <div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-blue-400" />
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="h-10 w-10 animate-spin rounded-full border-2 border-border border-t-accent" />
       </div>
     );
   if (isError || !data)
@@ -69,8 +70,8 @@ function Protected() {
 function NoAccess() {
   return (
     <div className="mx-auto max-w-lg py-24 text-center">
-      <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-50">
-        <ShieldOff className="h-7 w-7 text-amber-600" />
+      <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-warning-bg">
+        <ShieldOff className="h-7 w-7 text-warning-fg" />
       </span>
       <h1 className="mt-5 font-display text-3xl">Không có quyền truy cập</h1>
       <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
@@ -176,10 +177,12 @@ function LegacyGroupRedirect() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <App />
+        </BrowserRouter>
+      </QueryClientProvider>
+    </ThemeProvider>
   </StrictMode>,
 );

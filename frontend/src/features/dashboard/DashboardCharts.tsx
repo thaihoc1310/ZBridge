@@ -16,7 +16,7 @@ function DebtChart({ data }: { data?: Dashboard }) {
           <p className="text-sm font-semibold">Tình trạng công nợ</p>
           <p className="mt-1 text-xs text-muted-foreground">Phân bố trên toàn bộ khách hàng</p>
         </div>
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-warning-bg text-warning-fg">
           <CircleDollarSign className="h-4 w-4" />
         </span>
       </div>
@@ -24,7 +24,7 @@ function DebtChart({ data }: { data?: Dashboard }) {
       <div className="mt-5 flex flex-col items-center gap-5 sm:flex-row lg:flex-col xl:flex-row">
         <div className="relative h-36 w-36 shrink-0" role="img" aria-label={`${owing} khách còn nợ, ${paid} khách không còn nợ`}>
           <svg className="h-full w-full -rotate-90" viewBox="0 0 120 120" aria-hidden="true">
-            <circle cx="60" cy="60" r="48" fill="none" stroke="#e2e8f0" strokeWidth="13" />
+            <circle cx="60" cy="60" r="48" fill="none" stroke="var(--border)" strokeWidth="13" />
             {total > 0 && <circle cx="60" cy="60" r="48" fill="none" stroke="#f59e0b" strokeWidth="13" strokeLinecap="round" strokeDasharray={`${owingLength} ${circumference}`} />}
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
@@ -33,13 +33,13 @@ function DebtChart({ data }: { data?: Dashboard }) {
           </div>
         </div>
         <div className="grid w-full grid-cols-2 gap-3 sm:max-w-xs 2xl:max-w-none">
-          <div className="rounded-xl bg-amber-50 p-3">
-            <span className="flex items-center gap-2 text-xs text-amber-800"><span className="h-2 w-2 rounded-full bg-amber-500" />Còn nợ</span>
-            <strong className="mt-2 block text-xl text-amber-950">{owing}</strong>
+          <div className="rounded-xl bg-warning-bg p-3">
+            <span className="flex items-center gap-2 text-xs text-warning-fg"><span className="h-2 w-2 rounded-full bg-amber-500" />Còn nợ</span>
+            <strong className="mt-2 block text-xl text-warning-fg">{owing}</strong>
           </div>
-          <div className="rounded-xl bg-slate-50 p-3">
-            <span className="flex items-center gap-2 text-xs text-slate-600"><span className="h-2 w-2 rounded-full bg-slate-300" />Không nợ</span>
-            <strong className="mt-2 block text-xl text-slate-900">{paid}</strong>
+          <div className="rounded-xl bg-muted p-3">
+            <span className="flex items-center gap-2 text-xs text-muted-foreground"><span className="h-2 w-2 rounded-full bg-muted-foreground/50" />Không nợ</span>
+            <strong className="mt-2 block text-xl text-foreground">{paid}</strong>
           </div>
         </div>
       </div>
@@ -59,7 +59,7 @@ function HourlyMessagesChart({ data }: { data?: Dashboard }) {
           <p className="text-sm font-semibold">Tin nhắn gửi theo giờ</p>
           <p className="mt-1 text-xs text-muted-foreground">Các lượt gửi thành công trong hôm nay</p>
         </div>
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-accent">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
           <MessageSquareText className="h-4 w-4" />
         </span>
       </div>
@@ -68,11 +68,11 @@ function HourlyMessagesChart({ data }: { data?: Dashboard }) {
         <div><span className="font-display text-3xl">{sent}</span><span className="ml-2 text-xs text-muted-foreground">đã gửi</span></div>
         <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Cao nhất {maximum === 1 && sent === 0 ? 0 : maximum}/giờ</span>
       </div>
-      <div className="mt-5 grid h-36 items-end gap-1 border-b border-slate-200" style={{ gridTemplateColumns: "repeat(24, minmax(0, 1fr))" }} role="img" aria-label={`${sent} tin nhắn gửi thành công hôm nay theo từng giờ`}>
+      <div className="mt-5 grid h-36 items-end gap-1 border-b border-border" style={{ gridTemplateColumns: "repeat(24, minmax(0, 1fr))" }} role="img" aria-label={`${sent} tin nhắn gửi thành công hôm nay theo từng giờ`}>
         {points.map(({ hour, count }) => (
           <div key={hour} className="group relative flex h-full items-end" title={`${hour.toString().padStart(2, "0")}:00 — ${count} tin`}>
-            <div className={`w-full min-w-0 rounded-t-sm transition-opacity ${count ? "bg-accent opacity-80 group-hover:opacity-100" : "bg-slate-100"}`} style={{ height: count ? `${Math.max(8, (count / maximum) * 100)}%` : "3px" }} />
-            {count > 0 && <span className="pointer-events-none absolute -top-5 left-1/2 hidden -translate-x-1/2 rounded bg-foreground px-1.5 py-0.5 text-[9px] text-white group-hover:block">{count}</span>}
+            <div className={`w-full min-w-0 rounded-t-sm transition-opacity ${count ? "bg-accent opacity-80 group-hover:opacity-100" : "bg-muted"}`} style={{ height: count ? `${Math.max(8, (count / maximum) * 100)}%` : "3px" }} />
+            {count > 0 && <span className="pointer-events-none absolute -top-5 left-1/2 hidden -translate-x-1/2 rounded bg-inverse px-1.5 py-0.5 text-[9px] text-inverse-fg group-hover:block">{count}</span>}
           </div>
         ))}
       </div>

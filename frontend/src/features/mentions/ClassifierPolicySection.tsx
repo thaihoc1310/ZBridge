@@ -37,13 +37,13 @@ export function ClassifierPolicySection({ canUpdate }: { canUpdate: boolean }) {
 
   const error = query.error ?? save.error;
   return <div className="space-y-5">
-    {error && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error instanceof ApiError ? error.message : "Không tải được cấu hình."}</div>}
-    {save.isSuccess && <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700"><ShieldCheck className="h-4 w-4" />Đã cập nhật chính sách cho toàn hệ thống.</div>}
+    {error && <div className="rounded-xl border border-danger-border bg-danger-bg p-4 text-sm text-danger-fg">{error instanceof ApiError ? error.message : "Không tải được cấu hình."}</div>}
+    {save.isSuccess && <div className="flex items-center gap-2 rounded-xl border border-success-border bg-success-bg p-4 text-sm text-success-fg"><ShieldCheck className="h-4 w-4" />Đã cập nhật chính sách cho toàn hệ thống.</div>}
 
     <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
       <section>
         <div className="flex items-start gap-4">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50"><BrainCircuit className="h-5 w-5 text-accent" /></span>
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-soft"><BrainCircuit className="h-5 w-5 text-accent" /></span>
           <div className="min-w-0 flex-1">
             <h2 className="font-display text-2xl">Bộ phân loại AI</h2>
             <p className="mt-1 text-sm leading-relaxed text-muted-foreground">AI đọc tối đa 15 tin liên quan gần nhất và đọc lại trước mỗi lượt gửi. Chỉ NEED_RESPONSE từ 65% mới giữ vòng tag; ACKNOWLEDGEMENT, FYI và UNCERTAIN đều dừng. Nếu API lỗi, lượt gửi được hoãn để thử phân loại lại và không tag khi chưa có kết luận.</p>
@@ -53,7 +53,7 @@ export function ClassifierPolicySection({ canUpdate }: { canUpdate: boolean }) {
 
         <div className="my-7 border-t border-border" />
         <div className="flex items-start gap-4">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-50"><AtSign className="h-5 w-5 text-violet-600" /></span>
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-50 dark:bg-violet-500/15"><AtSign className="h-5 w-5 text-violet-600 dark:text-violet-300" /></span>
           <div className="min-w-0 flex-1">
             <h3 className="font-semibold">Bare mention luôn cần phản hồi</h3>
             <p className="mt-1 text-sm leading-relaxed text-muted-foreground">Tin chỉ có <code className="rounded bg-muted px-1.5 py-0.5">@Tên</code> sẽ lên lịch ngay, phù hợp trường hợp câu hỏi nằm ở tin trước.</p>
@@ -91,7 +91,7 @@ function Toggle({ checked, onChange, disabled, label }: { checked: boolean; onCh
     aria-label={label}
     disabled={disabled}
     onClick={() => onChange(!checked)}
-    className={`relative mt-1 h-7 w-12 shrink-0 rounded-full transition disabled:opacity-50 ${checked ? "bg-accent" : "bg-slate-300"}`}
+    className={`relative mt-1 h-7 w-12 shrink-0 rounded-full transition disabled:opacity-50 ${checked ? "bg-accent" : "bg-muted-foreground/40"}`}
   >
     <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition ${checked ? "left-6" : "left-1"}`} />
   </button>;

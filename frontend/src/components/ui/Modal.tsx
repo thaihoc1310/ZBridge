@@ -26,7 +26,7 @@ export function Modal({ open, onClose, title, description, children, className }
             role="dialog" aria-modal="true" aria-label={title}
             initial={{ opacity: 0, y: 24, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 16, scale: .98 }}
             transition={{ duration: .22 }}
-            className={cn("app-scrollbar max-h-[90vh] w-full max-w-xl overflow-auto rounded-2xl border border-white/40 bg-white p-6 shadow-2xl sm:p-8", className)}
+            className={cn("app-scrollbar max-h-[90vh] w-full max-w-xl overflow-auto rounded-2xl border border-border bg-card p-6 shadow-2xl sm:p-8", className)}
           >
             <div className="mb-6 flex items-start justify-between gap-6">
               <div>

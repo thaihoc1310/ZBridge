@@ -66,7 +66,7 @@ export function ChangePasswordModal({ open, onClose }: { open: boolean; onClose:
     >
       {done ? (
         <div className="text-center">
-          <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+          <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-success-bg text-success-fg">
             <CheckCircle2 className="h-10 w-10" />
           </div>
           <p className="mt-5 text-sm leading-relaxed text-muted-foreground">
@@ -116,7 +116,7 @@ export function ChangePasswordModal({ open, onClose }: { open: boolean; onClose:
             />
           </label>
           {error && (
-            <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+            <p className="rounded-xl border border-danger-border bg-danger-bg px-4 py-3 text-sm text-danger-fg" role="alert">
               {error}
             </p>
           )}

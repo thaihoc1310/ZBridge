@@ -88,7 +88,7 @@ export function ActiveMentionTasksPanel({ canCancel }: { canCancel: boolean }) {
         </select>
         <button
           type="button"
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border bg-white text-muted-foreground transition hover:bg-muted/40 hover:text-foreground"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-muted-foreground transition hover:bg-muted/40 hover:text-foreground"
           aria-label={direction === "asc" ? "Sắp xếp giảm dần" : "Sắp xếp tăng dần"}
           title={direction === "asc" ? "Đang tăng dần · bấm để giảm dần" : "Đang giảm dần · bấm để tăng dần"}
           onClick={() =>
@@ -103,7 +103,7 @@ export function ActiveMentionTasksPanel({ canCancel }: { canCancel: boolean }) {
         </button>
       </div>
       {error && (
-        <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <p className="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger-fg">
           {error}
         </p>
       )}
@@ -118,7 +118,7 @@ export function ActiveMentionTasksPanel({ canCancel }: { canCancel: boolean }) {
           {query.data.items.map((company) => {
             const open = expanded.has(company.customer_id);
             return (
-              <div key={company.customer_id} className="bg-white">
+              <div key={company.customer_id} className="bg-card">
                 <button
                   type="button"
                   className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/40"
@@ -131,7 +131,7 @@ export function ActiveMentionTasksPanel({ canCancel }: { canCancel: boolean }) {
                     })
                   }
                 >
-                  <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-accent">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent-soft text-accent">
                     <Users className="h-4 w-4" />
                   </span>
                   <span className="min-w-0 flex-1">
@@ -142,7 +142,7 @@ export function ActiveMentionTasksPanel({ canCancel }: { canCancel: boolean }) {
                       Gần nhất {formatDate(company.next_due_at)}
                     </span>
                   </span>
-                  <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                  <span className="rounded-full bg-warning-bg px-2.5 py-1 text-xs font-semibold text-warning-fg">
                     {company.task_count} task
                   </span>
                   <ChevronDown
@@ -154,17 +154,17 @@ export function ActiveMentionTasksPanel({ canCancel }: { canCancel: boolean }) {
                     {company.tasks.map((task) => (
                       <div
                         key={task.id}
-                        className="rounded-xl border border-border bg-white p-4"
+                        className="rounded-xl border border-border bg-card p-4"
                       >
                         <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-2">
-                              <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-accent">
+                              <span className="rounded-full bg-accent-soft px-2.5 py-1 text-xs font-semibold text-accent">
                                 {task.trigger === "MENTION"
                                   ? "Tag tên"
                                   : "Báo giá"}
                               </span>
-                              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+                              <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
                                 {statusLabels[task.status] ?? task.status}
                               </span>
                             </div>
@@ -183,7 +183,7 @@ export function ActiveMentionTasksPanel({ canCancel }: { canCancel: boolean }) {
                               </span>
                             </div>
                             {task.error_message && (
-                              <p className="mt-2 text-xs text-red-700">
+                              <p className="mt-2 text-xs text-danger-fg">
                                 {task.error_message}
                               </p>
                             )}
@@ -216,7 +216,7 @@ export function ActiveMentionTasksPanel({ canCancel }: { canCancel: boolean }) {
         description="Vòng tag sẽ ngừng ngay và không tự khởi động lại."
       >
         <div className="space-y-4">
-          <div className="flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          <div className="flex gap-3 rounded-xl border border-warning-border bg-warning-bg p-4 text-sm text-warning-fg">
             <AlertTriangle className="h-5 w-5 shrink-0" />
             <span>
               Đang chờ {stopping?.target_display_names.join(", ")}. Bạn chắc
@@ -252,7 +252,7 @@ function Summary({ label, value }: { label: string; value: number }) {
 function Empty({ text, danger = false }: { text: string; danger?: boolean }) {
   return (
     <div
-      className={`rounded-xl border p-8 text-center text-sm ${danger ? "border-red-200 bg-red-50 text-red-700" : "border-border text-muted-foreground"}`}
+      className={`rounded-xl border p-8 text-center text-sm ${danger ? "border-danger-border bg-danger-bg text-danger-fg" : "border-border text-muted-foreground"}`}
     >
       {text}
     </div>

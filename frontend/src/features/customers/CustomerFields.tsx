@@ -18,15 +18,15 @@ function useCanUpdateCustomer() {
 }
 
 function ReadOnlyHint() {
-  return <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">Vai trò của bạn không có quyền sửa thông tin khách hàng.</p>;
+  return <p className="mt-4 rounded-xl border border-warning-border bg-warning-bg px-4 py-3 text-sm text-warning-fg">Vai trò của bạn không có quyền sửa thông tin khách hàng.</p>;
 }
 
 export function DebtStatusOptions({ value, onChange, disabled = false }: { value: boolean; onChange: (nextValue: boolean) => void; disabled?: boolean }) {
   return <div role="radiogroup" aria-label="Trạng thái công nợ" className="flex items-center gap-2">
-    <button type="button" role="radio" aria-checked={!value} disabled={disabled || !value} onClick={() => onChange(false)} className={cn("whitespace-nowrap rounded-full border px-3 py-2 text-xs font-semibold transition disabled:cursor-default", !value ? "border-emerald-600 bg-emerald-600 text-white shadow-sm" : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-400 hover:bg-emerald-100")}>
+    <button type="button" role="radio" aria-checked={!value} disabled={disabled || !value} onClick={() => onChange(false)} className={cn("whitespace-nowrap rounded-full border px-3 py-2 text-xs font-semibold transition disabled:cursor-default", !value ? "border-emerald-600 bg-emerald-600 text-white shadow-sm" : "border-success-border bg-success-bg text-success-fg hover:border-success-fg/50")}>
       Đã thanh toán
     </button>
-    <button type="button" role="radio" aria-checked={value} disabled={disabled || value} onClick={() => onChange(true)} className={cn("whitespace-nowrap rounded-full border px-3 py-2 text-xs font-semibold transition disabled:cursor-default", value ? "border-amber-500 bg-amber-500 text-white shadow-sm" : "border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-400 hover:bg-amber-100")}>
+    <button type="button" role="radio" aria-checked={value} disabled={disabled || value} onClick={() => onChange(true)} className={cn("whitespace-nowrap rounded-full border px-3 py-2 text-xs font-semibold transition disabled:cursor-default", value ? "border-amber-500 bg-amber-500 text-white shadow-sm" : "border-warning-border bg-warning-bg text-warning-fg hover:border-warning-fg/50")}>
       Còn nợ
     </button>
   </div>;
@@ -47,7 +47,7 @@ function useCustomerUpdate(customer: Customer | null, onClose: () => void) {
 
 function ErrorMessage({ error }: { error: Error | null }) {
   if (!error) return null;
-  return <p className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error instanceof ApiError ? error.message : "Không thể lưu thay đổi."}</p>;
+  return <p className="mt-4 rounded-xl border border-danger-border bg-danger-bg px-4 py-3 text-sm text-danger-fg">{error instanceof ApiError ? error.message : "Không thể lưu thay đổi."}</p>;
 }
 
 export function NoteEditorModal({ customer, onClose }: { customer: Customer | null; onClose: () => void }) {
@@ -83,7 +83,7 @@ export function DebtFileEditorModal({ customer, onClose }: { customer: Customer 
 
   return <Modal open={Boolean(customer)} onClose={onClose} title="File công nợ" description="Dán link Google Sheet công nợ của khách hàng. Ảnh nhắc nợ lấy từ tab đầu tiên của file này.">
     <label className="block"><span className="mb-2 block text-sm font-semibold">Link Google Sheet</span><input autoFocus className="field" type="url" disabled={!canEdit || mutation.isPending} value={fileUrl} onChange={(event) => setFileUrl(event.target.value)} maxLength={2000} placeholder="https://docs.google.com/spreadsheets/d/..." /></label>
-    {!empty && !looksLikeSheet && <p className="mt-3 text-xs text-red-600">Phải là link Google Sheet, dạng https://docs.google.com/spreadsheets/d/...</p>}
+    {!empty && !looksLikeSheet && <p className="mt-3 text-xs text-danger-fg">Phải là link Google Sheet, dạng https://docs.google.com/spreadsheets/d/...</p>}
     {mutation.isPending && !empty && <p className="mt-3 text-xs text-muted-foreground">Đang kiểm tra file trên Google...</p>}
     <p className="mt-3 text-xs text-muted-foreground">Nhớ chia sẻ quyền xem file cho Service Account, nếu không hệ thống sẽ không đọc được.</p>
     {!canEdit && <ReadOnlyHint />}

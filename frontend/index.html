@@ -3,9 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0F172A" />
+    <meta name="theme-color" content="#fafafa" />
     <meta name="description" content="ZBridge — Zalo bot management platform" />
     <title>ZBridge</title>
+    <script>
+      (function () {
+        try {
+          if (localStorage.getItem("zbridge-theme") === "dark") {
+            document.documentElement.classList.add("dark");
+            document.documentElement.style.colorScheme = "dark";
+            document.querySelector('meta[name="theme-color"]')?.setAttribute("content", "#0b1220");
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

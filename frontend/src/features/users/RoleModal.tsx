@@ -134,7 +134,7 @@ export function RoleModal({ role, open, onClose }: Props) {
             </p>
           )}
           {catalog.isError && (
-            <p className="rounded-xl border border-red-200 bg-red-50 p-6 text-center text-sm text-red-700">
+            <p className="rounded-xl border border-danger-border bg-danger-bg p-6 text-center text-sm text-danger-fg">
               Không thể tải danh sách quyền.
             </p>
           )}
@@ -169,7 +169,7 @@ export function RoleModal({ role, open, onClose }: Props) {
                       >
                         <input
                           type="checkbox"
-                          className="h-4 w-4 shrink-0 accent-blue-600"
+                          className="h-4 w-4 shrink-0 accent-accent"
                           checked={chosen.has(permission.code)}
                           onChange={() => toggle(permission.code)}
                         />
@@ -187,7 +187,7 @@ export function RoleModal({ role, open, onClose }: Props) {
         </div>
 
         {error && (
-          <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+          <p className="rounded-xl border border-danger-border bg-danger-bg px-4 py-3 text-sm text-danger-fg" role="alert">
             {error}
           </p>
         )}

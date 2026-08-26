@@ -170,10 +170,10 @@ export function UserModal({ user, roles, open, isSelf, onClose }: Props) {
             aria-checked={isActive}
             disabled={isSelf}
             onClick={() => { setIsActive((value) => !value); setError(null); }}
-            className="flex min-h-11 w-full items-center justify-between rounded-xl border border-border bg-white px-4 disabled:cursor-not-allowed disabled:bg-muted/60"
+            className="flex min-h-11 w-full items-center justify-between rounded-xl border border-border bg-card px-4 disabled:cursor-not-allowed disabled:bg-muted/60"
           >
             <span className="text-sm">{isActive ? "Đang hoạt động" : "Đã vô hiệu hóa"}</span>
-            <span className={`relative h-6 w-11 rounded-full transition ${isActive ? "bg-accent" : "bg-slate-300"}`}>
+            <span className={`relative h-6 w-11 rounded-full transition ${isActive ? "bg-accent" : "bg-muted-foreground/40"}`}>
               <span className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow transition ${isActive ? "left-6" : "left-1"}`} />
             </span>
           </button>
@@ -181,7 +181,7 @@ export function UserModal({ user, roles, open, isSelf, onClose }: Props) {
         </div>
 
         {error && (
-          <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+          <p className="rounded-xl border border-danger-border bg-danger-bg px-4 py-3 text-sm text-danger-fg" role="alert">
             {error}
           </p>
         )}

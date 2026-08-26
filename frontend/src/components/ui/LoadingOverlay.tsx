@@ -11,7 +11,7 @@ export function LoadingOverlay({ show, label = "Đang xử lý..." }: { show: bo
             <LoaderCircle className="h-8 w-8 animate-spin text-blue-300" />
           </div>
           <p className="font-medium">{label}</p>
-          <p className="mt-1 text-sm text-slate-300">Vui lòng không đóng trang</p>
+          <p className="mt-1 text-sm text-white/70">Vui lòng không đóng trang</p>
         </motion.div>
       )}
     </AnimatePresence>

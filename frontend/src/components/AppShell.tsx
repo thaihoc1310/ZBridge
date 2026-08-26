@@ -21,6 +21,7 @@ import { cn } from "../lib/cn";
 import { initials } from "../lib/format";
 import { PERMISSIONS, type PermissionCode } from "../lib/permissions";
 import { usePermissions, useSession } from "../lib/session";
+import { ThemeToggle } from "./ThemeToggle";
 import { Button } from "./ui/Button";
 
 type NavItem = {
@@ -131,7 +132,7 @@ export function AppShell() {
                   cn(
                     "flex h-10 items-center gap-2 rounded-xl px-3.5 text-sm font-medium transition",
                     isActive
-                      ? "bg-blue-50 text-accent"
+                      ? "bg-accent-soft text-accent"
                       : "text-muted-foreground hover:bg-muted hover:text-foreground",
                   )
                 }
@@ -142,80 +143,83 @@ export function AppShell() {
             ))}
           </nav>
 
-          <div ref={accountRef} className="relative ml-auto hidden md:block">
-            <button
-              type="button"
-              aria-expanded={accountOpen}
-              aria-haspopup="menu"
-              onClick={() => setAccountOpen((value) => !value)}
-              className="flex h-11 items-center gap-2.5 rounded-xl border border-border bg-white pl-2 pr-3 text-left transition hover:border-accent/30 hover:bg-muted/50"
-            >
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-blue-100 to-indigo-100 text-[10px] font-bold text-accent">
-                {initials(displayName)}
-              </span>
-              <span className="min-w-0">
-                <span className="block max-w-36 truncate text-xs font-semibold leading-tight">
-                  {displayName}
-                </span>
-                <span className="block max-w-36 truncate text-[10px] leading-tight text-muted-foreground">
-                  {user.role.name}
-                </span>
-              </span>
-            </button>
-            {accountOpen && (
-              <div
-                role="menu"
-                className="absolute right-0 top-14 z-30 w-72 rounded-2xl border border-border bg-white p-2 shadow-2xl"
+          <div className="ml-auto flex items-center gap-2">
+            <ThemeToggle />
+            <div ref={accountRef} className="relative hidden md:block">
+              <button
+                type="button"
+                aria-expanded={accountOpen}
+                aria-haspopup="menu"
+                onClick={() => setAccountOpen((value) => !value)}
+                className="flex h-11 items-center gap-2.5 rounded-xl border border-border bg-card pl-2 pr-3 text-left transition hover:border-accent/30 hover:bg-muted/50"
               >
-                <div className="border-b border-border px-3 pb-3 pt-2">
-                  <p className="truncate text-sm font-semibold">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-accent-soft to-accent/20 text-[10px] font-bold text-accent">
+                  {initials(displayName)}
+                </span>
+                <span className="min-w-0">
+                  <span className="block max-w-36 truncate text-xs font-semibold leading-tight">
                     {displayName}
-                  </p>
-                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                    {user.email}
-                  </p>
-                  <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-1 text-[10px] font-semibold text-accent">
-                    <ShieldCheck className="h-3 w-3" />
+                  </span>
+                  <span className="block max-w-36 truncate text-[10px] leading-tight text-muted-foreground">
                     {user.role.name}
                   </span>
+                </span>
+              </button>
+              {accountOpen && (
+                <div
+                  role="menu"
+                  className="absolute right-0 top-14 z-30 w-72 rounded-2xl border border-border bg-card p-2 shadow-2xl"
+                >
+                  <div className="border-b border-border px-3 pb-3 pt-2">
+                    <p className="truncate text-sm font-semibold">
+                      {displayName}
+                    </p>
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                      {user.email}
+                    </p>
+                    <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-1 text-[10px] font-semibold text-accent">
+                      <ShieldCheck className="h-3 w-3" />
+                      {user.role.name}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="mt-1 flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-sm font-medium text-foreground transition hover:bg-muted"
+                    onClick={() => {
+                      setAccountOpen(false);
+                      setPasswordOpen(true);
+                    }}
+                  >
+                    <KeyRound className="h-4 w-4 text-accent" />
+                    Đổi mật khẩu
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-50"
+                    disabled={logout.isPending}
+                    onClick={() => logout.mutate()}
+                  >
+                    <LogOut className="h-4 w-4" />
+                    Đăng xuất
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="mt-1 flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-sm font-medium text-foreground transition hover:bg-muted"
-                  onClick={() => {
-                    setAccountOpen(false);
-                    setPasswordOpen(true);
-                  }}
-                >
-                  <KeyRound className="h-4 w-4 text-accent" />
-                  Đổi mật khẩu
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-50"
-                  disabled={logout.isPending}
-                  onClick={() => logout.mutate()}
-                >
-                  <LogOut className="h-4 w-4" />
-                  Đăng xuất
-                </button>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
 
-          <button
-            onClick={() => setOpen((value) => !value)}
-            className="ml-auto rounded-xl border border-border bg-white p-2.5 text-foreground md:hidden"
-            aria-label={open ? "Đóng menu" : "Mở menu"}
-          >
-            {open ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </button>
+            <button
+              onClick={() => setOpen((value) => !value)}
+              className="rounded-xl border border-border bg-card p-2.5 text-foreground md:hidden"
+              aria-label={open ? "Đóng menu" : "Mở menu"}
+            >
+              {open ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+            </button>
+          </div>
         </div>
 
         {open && (
-          <div className="border-t border-border bg-white p-3 shadow-xl md:hidden">
+          <div className="border-t border-border bg-card p-3 shadow-xl md:hidden">
             <div className="mb-2 rounded-xl bg-muted/60 px-3 py-2.5">
               <p className="truncate text-sm font-semibold">{displayName}</p>
               <p className="truncate text-xs text-muted-foreground">
@@ -233,7 +237,7 @@ export function AppShell() {
                     cn(
                       "flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium",
                       isActive
-                        ? "bg-blue-50 text-accent"
+                        ? "bg-accent-soft text-accent"
                         : "text-muted-foreground hover:bg-muted hover:text-foreground",
                     )
                   }

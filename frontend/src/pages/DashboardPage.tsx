@@ -40,13 +40,13 @@ export function DashboardPage() {
 
       <DashboardCharts data={data} />
 
-      <section className="dot-grid relative mt-6 overflow-hidden rounded-3xl bg-foreground p-7 text-white shadow-xl sm:p-9">
+      <section className="dot-grid relative mt-6 overflow-hidden rounded-3xl bg-inverse p-7 text-inverse-fg shadow-xl sm:p-9">
         <div className="absolute -right-20 -top-24 h-72 w-72 rounded-full bg-accent/25 blur-[100px]" />
         <div className="relative grid gap-8 lg:grid-cols-[1fr_1.2fr] lg:items-center">
-          <div><span className="inline-flex items-center gap-2 rounded-full border border-blue-400/30 bg-blue-400/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-blue-300"><span className="h-2 w-2 animate-pulse-soft rounded-full bg-blue-400" />System pulse</span><h2 className="mt-5 font-display text-3xl sm:text-4xl">Nền tảng đang <span className="text-blue-400">sẵn sàng.</span></h2><p className="mt-3 max-w-md text-sm leading-relaxed text-slate-300">Theo dõi vận hành và để ZBridge xử lý các việc lặp lại như tag tên, nhắc hẹn và thanh toán.</p></div>
+          <div><span className="inline-flex items-center gap-2 rounded-full border border-blue-400/30 bg-blue-400/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-blue-300"><span className="h-2 w-2 animate-pulse-soft rounded-full bg-blue-400" />System pulse</span><h2 className="mt-5 font-display text-3xl sm:text-4xl">Nền tảng đang <span className="text-blue-400">sẵn sàng.</span></h2><p className="mt-3 max-w-md text-sm leading-relaxed text-inverse-fg/70">Theo dõi vận hành và để ZBridge xử lý các việc lặp lại như tag tên, nhắc hẹn và thanh toán.</p></div>
           <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl border border-white/10 bg-white/[.07] p-5 backdrop-blur"><Clock3 className="h-5 w-5 text-blue-400" /><p className="mt-5 text-xs text-slate-400">Đồng bộ gần nhất</p><p className="mt-1 text-sm font-semibold">{formatDate(data?.last_sync_at)}</p></div>
-            <div className="rounded-2xl border border-white/10 bg-white/[.07] p-5 backdrop-blur"><CheckCircle2 className="h-5 w-5 text-emerald-400" /><p className="mt-5 text-xs text-slate-400">Gửi thành công gần nhất</p><p className="mt-1 text-sm font-semibold">{formatDate(data?.last_successful_message_at)}</p></div>
+            <div className="rounded-2xl border border-white/10 bg-white/[.07] p-5 backdrop-blur"><Clock3 className="h-5 w-5 text-blue-400" /><p className="mt-5 text-xs text-inverse-fg/55">Đồng bộ gần nhất</p><p className="mt-1 text-sm font-semibold">{formatDate(data?.last_sync_at)}</p></div>
+            <div className="rounded-2xl border border-white/10 bg-white/[.07] p-5 backdrop-blur"><CheckCircle2 className="h-5 w-5 text-emerald-400" /><p className="mt-5 text-xs text-inverse-fg/55">Gửi thành công gần nhất</p><p className="mt-1 text-sm font-semibold">{formatDate(data?.last_successful_message_at)}</p></div>
           </div>
         </div>
       </section>

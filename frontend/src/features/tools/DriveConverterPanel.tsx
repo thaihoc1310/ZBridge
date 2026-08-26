@@ -202,7 +202,7 @@ export function DriveConverterPanel() {
   if (!oauth.data.connected)
     return (
       <div className="flex min-h-72 flex-col items-center justify-center text-center">
-        <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-accent">
+        <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-accent-soft text-accent">
           <LogIn className="h-6 w-6" />
         </span>
         <h3 className="mt-4 font-display text-2xl">Kết nối Google Drive</h3>
@@ -229,12 +229,12 @@ export function DriveConverterPanel() {
   if (!jobId)
     return (
       <div className="space-y-4">
-        <div className="flex flex-col gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 rounded-xl border border-success-border bg-success-bg p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
-            <p className="text-xs font-medium text-emerald-700">
+            <p className="text-xs font-medium text-success-fg">
               Google đã kết nối
             </p>
-            <p className="mt-1 truncate text-sm font-semibold text-emerald-950">
+            <p className="mt-1 truncate text-sm font-semibold text-success-fg">
               {oauth.data.email}
             </p>
           </div>
@@ -283,19 +283,19 @@ export function DriveConverterPanel() {
               <button
                 key={folder.id}
                 type="button"
-                className="rounded-xl border border-border bg-white p-4 text-left transition hover:border-accent/40 hover:shadow-card"
+                className="rounded-xl border border-border bg-card p-4 text-left transition hover:border-accent/40 hover:shadow-card"
                 onClick={() => scan.mutate(folder.id)}
                 disabled={scan.isPending}
               >
                 <span className="flex items-center gap-3">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-warning-bg text-warning-fg">
                     <Folder className="h-5 w-5" />
                   </span>
                   <span className="min-w-0 flex-1">
                     <strong className="block truncate text-sm">
                       {folder.name}
                     </strong>
-                    <span className="mt-1 block text-xs text-emerald-700">
+                    <span className="mt-1 block text-xs text-success-fg">
                       Có quyền xem và tạo file
                     </span>
                   </span>
@@ -372,7 +372,7 @@ export function DriveConverterPanel() {
     return (
       <div className="space-y-5">
         <div className="py-3 text-center">
-          <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-600" />
+          <CheckCircle2 className="mx-auto h-12 w-12 text-success-fg" />
           <h3 className="mt-3 font-display text-2xl">Đã hoàn thành</h3>
           <p className="mt-2 text-sm text-muted-foreground">
             Thành công {data.converted_files} · lỗi {data.failed_files} · bỏ qua{" "}
@@ -387,10 +387,10 @@ export function DriveConverterPanel() {
               .map((item) => (
                 <div
                   key={item.id}
-                  className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm"
+                  className="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm"
                 >
                   <strong className="block">{item.source_name}</strong>
-                  <p className="mt-1 text-xs text-red-700">
+                  <p className="mt-1 text-xs text-danger-fg">
                     {item.error_message}
                   </p>
                   <a
@@ -449,10 +449,10 @@ export function DriveConverterPanel() {
           {selected.size ? "Bỏ chọn tất cả" : "Chọn tất cả"}
         </button>
       </div>
-      <label className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+      <label className="flex items-start gap-3 rounded-xl border border-warning-border bg-warning-bg p-4">
         <input
           type="checkbox"
-          className="mt-1 h-4 w-4 accent-blue-600"
+          className="mt-1 h-4 w-4 accent-accent"
           checked={deleteOriginals}
           onChange={(event) => {
             setDeleteOriginals(event.target.checked);
@@ -464,7 +464,7 @@ export function DriveConverterPanel() {
             <Trash2 className="h-4 w-4" />
             Chuyển XLSX cũ vào thùng rác
           </strong>
-          <span className="mt-1 block text-xs text-amber-800">
+          <span className="mt-1 block text-xs text-warning-fg">
             Chỉ thực hiện sau khi Google Sheet mới được tạo thành công. Có thể
             phục hồi từ Trash.
           </span>
@@ -481,12 +481,12 @@ export function DriveConverterPanel() {
           return (
             <div
               key={path}
-              className="overflow-hidden rounded-lg border border-border bg-white"
+              className="overflow-hidden rounded-lg border border-border bg-card"
             >
               <div className="flex items-center gap-2 p-3">
                 <input
                   type="checkbox"
-                  className="h-4 w-4 accent-blue-600"
+                  className="h-4 w-4 accent-accent"
                   checked={allSelected}
                   onChange={() =>
                     setSelected((current) => {
@@ -511,7 +511,7 @@ export function DriveConverterPanel() {
                     })
                   }
                 >
-                  <Folder className="h-4 w-4 text-amber-600" />
+                  <Folder className="h-4 w-4 text-warning-fg" />
                   <span className="truncate text-sm font-semibold">
                     {path === "/" ? data.folder_name : path}
                   </span>
@@ -532,7 +532,7 @@ export function DriveConverterPanel() {
                     >
                       <input
                         type="checkbox"
-                        className="h-4 w-4 accent-blue-600"
+                        className="h-4 w-4 accent-accent"
                         disabled={!selectable(item)}
                         checked={selected.has(item.id)}
                         onChange={() =>
@@ -544,7 +544,7 @@ export function DriveConverterPanel() {
                           })
                         }
                       />
-                      <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+                      <FileSpreadsheet className="h-4 w-4 text-success-fg" />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm">
                           {item.source_name}
@@ -612,7 +612,7 @@ function Empty({ text }: { text: string }) {
 }
 function ErrorBox({ text }: { text: string }) {
   return (
-    <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+    <div className="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger-fg">
       {text}
     </div>
   );

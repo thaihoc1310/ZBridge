@@ -85,13 +85,13 @@ export function BulkDebtReminderSection() {
   return (
     <div className="space-y-5">
       {error && (
-        <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <p className="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger-fg">
           {error}
         </p>
       )}
       {step === "config" && (
         <>
-          <div className="rounded-xl border border-blue-100 bg-blue-50/70 p-4 text-sm text-slate-700">
+          <div className="rounded-xl border border-info-border bg-info-bg p-4 text-sm text-foreground">
             <strong>Chỉ ghi đè lịch gửi.</strong> Nội dung nhắc cuối cùng và
             cấu hình riêng của từng khách hàng được giữ nguyên. Lịch tự hoạt
             động khi khách còn nợ và có Google Sheet; khi đã thanh toán thì tạm
@@ -118,8 +118,8 @@ export function BulkDebtReminderSection() {
               />
             </Field>
             <Field icon={Repeat2} label="Lặp lại sau">
-              <div className="mb-2 flex items-center justify-between rounded-lg border border-border bg-white px-3 py-2">
-                <span className="text-xs font-medium text-slate-600">
+              <div className="mb-2 flex items-center justify-between rounded-lg border border-border bg-card px-3 py-2">
+                <span className="text-xs font-medium text-muted-foreground">
                   {repeatEnabled ? "Đang bật" : "Đã tắt"}
                 </span>
                 <button
@@ -127,7 +127,7 @@ export function BulkDebtReminderSection() {
                   role="switch"
                   aria-checked={repeatEnabled}
                   aria-label="Bật hoặc tắt nhắc lặp hàng loạt"
-                  className={`relative h-6 w-11 rounded-full transition ${repeatEnabled ? "bg-blue-600" : "bg-slate-300"}`}
+                  className={`relative h-6 w-11 rounded-full transition ${repeatEnabled ? "bg-accent" : "bg-muted-foreground/40"}`}
                   onClick={() => {
                     setRepeatEnabled((current) => !current);
                     setError(null);
@@ -138,7 +138,7 @@ export function BulkDebtReminderSection() {
               </div>
               <div className="relative">
                 <input
-                  className="field pr-14 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                  className="field pr-14 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
                   type="number"
                   min={1}
                   max={31}
@@ -210,7 +210,7 @@ export function BulkDebtReminderSection() {
               >
                 <input
                   type="checkbox"
-                  className="mt-1 h-4 w-4 accent-blue-600"
+                  className="mt-1 h-4 w-4 accent-accent"
                   disabled={!row.is_available}
                   checked={selected.has(row.customer_id)}
                   onChange={() =>
@@ -232,7 +232,7 @@ export function BulkDebtReminderSection() {
                   <span className="mt-1 flex flex-wrap gap-2 text-[11px]">
                     <em
                       className={
-                        row.has_debt ? "text-amber-700" : "text-emerald-700"
+                        row.has_debt ? "text-warning-fg" : "text-success-fg"
                       }
                     >
                       {row.has_debt
@@ -242,10 +242,10 @@ export function BulkDebtReminderSection() {
                         : "Đã thanh toán · tạm ngừng"}
                     </em>
                     {!row.has_debt_file && (
-                      <em className="text-red-700">Chưa có Google Sheet</em>
+                      <em className="text-danger-fg">Chưa có Google Sheet</em>
                     )}
                     {!row.will_change && (
-                      <em className="text-slate-500">Không thay đổi</em>
+                      <em className="text-muted-foreground">Không thay đổi</em>
                     )}
                   </span>
                 </span>
@@ -253,7 +253,7 @@ export function BulkDebtReminderSection() {
             ))}
           </div>
           {selected.size === 0 && (
-            <p className="flex items-center gap-2 text-sm text-amber-700">
+            <p className="flex items-center gap-2 text-sm text-warning-fg">
               <AlertTriangle className="h-4 w-4" />
               Hãy chọn ít nhất một khách hàng.
             </p>
@@ -275,14 +275,14 @@ export function BulkDebtReminderSection() {
       )}
       {step === "done" && result && (
         <div className="py-6 text-center">
-          <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-600" />
+          <CheckCircle2 className="mx-auto h-12 w-12 text-success-fg" />
           <h3 className="mt-4 font-display text-2xl">Đã áp lịch nhắc</h3>
           <p className="mt-2 text-sm text-muted-foreground">
             Cập nhật {result.updated} · giữ nguyên {result.unchanged} · hủy{" "}
             {result.cancelled_runs} lượt lịch cũ
           </p>
           {result.skipped.length > 0 && (
-            <p className="mt-3 text-xs text-amber-700">
+            <p className="mt-3 text-xs text-warning-fg">
               Bỏ qua nhóm không khả dụng: {result.skipped.join(", ")}
             </p>
           )}

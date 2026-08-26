@@ -244,11 +244,11 @@ export function MentionSettingsPage() {
 }
 
 const TONES = {
-  emerald: "bg-emerald-50 text-emerald-600",
-  amber: "bg-amber-50 text-amber-600",
-  blue: "bg-blue-50 text-accent",
-  purple: "bg-violet-50 text-violet-600",
-  rose: "bg-rose-50 text-rose-600",
+  emerald: "bg-success-bg text-success-fg",
+  amber: "bg-warning-bg text-warning-fg",
+  blue: "bg-accent-soft text-accent",
+  purple: "bg-violet-50 dark:bg-violet-500/15 text-violet-600 dark:text-violet-300",
+  rose: "bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-300",
 } as const;
 
 function PanelCard({

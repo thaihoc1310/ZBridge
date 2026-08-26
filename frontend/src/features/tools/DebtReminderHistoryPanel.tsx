@@ -23,12 +23,12 @@ const labels: Record<string, string> = {
   CANCELLED: "Đã hủy",
 };
 const tones: Record<string, string> = {
-  PENDING: "bg-amber-50 text-amber-700",
-  PROCESSING: "bg-blue-50 text-accent",
-  SENT: "bg-emerald-50 text-emerald-700",
-  FAILED: "bg-red-50 text-red-700",
-  SKIPPED: "bg-slate-100 text-slate-600",
-  CANCELLED: "bg-slate-100 text-slate-600",
+  PENDING: "bg-warning-bg text-warning-fg",
+  PROCESSING: "bg-accent-soft text-accent",
+  SENT: "bg-success-bg text-success-fg",
+  FAILED: "bg-danger-bg text-danger-fg",
+  SKIPPED: "bg-muted text-muted-foreground",
+  CANCELLED: "bg-muted text-muted-foreground",
 };
 const stepIcons = { IMAGE: FileImage, LINK: Link2, MESSAGE: MessageSquareText };
 const stepNames = {
@@ -88,7 +88,7 @@ export function DebtReminderHistoryPanel() {
               setStatus(key === "ALL" ? "" : key);
               setPage(1);
             }}
-            className={`rounded-xl border p-3 text-left transition ${status === (key === "ALL" ? "" : key) ? "border-accent bg-blue-50" : "border-border bg-white hover:bg-muted/40"}`}
+            className={`rounded-xl border p-3 text-left transition ${status === (key === "ALL" ? "" : key) ? "border-accent bg-accent-soft" : "border-border bg-card hover:bg-muted/40"}`}
           >
             <span className="block text-xs text-muted-foreground">{label}</span>
             <strong className="mt-1 block text-xl">{counts[key] ?? 0}</strong>
@@ -129,7 +129,7 @@ export function DebtReminderHistoryPanel() {
         </select>
         <button
           type="button"
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border bg-white text-muted-foreground transition hover:bg-muted/40 hover:text-foreground"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-muted-foreground transition hover:bg-muted/40 hover:text-foreground"
           aria-label={direction === "desc" ? "Sắp xếp tăng dần" : "Sắp xếp giảm dần"}
           title={direction === "desc" ? "Mới nhất trước · bấm để cũ nhất trước" : "Cũ nhất trước · bấm để mới nhất trước"}
           onClick={() => {
@@ -155,7 +155,7 @@ export function DebtReminderHistoryPanel() {
           {query.data.items.map((run) => {
             const open = expanded.has(run.id);
             return (
-              <div key={run.id} className="bg-white">
+              <div key={run.id} className="bg-card">
                 <button
                   type="button"
                   className="flex w-full items-center gap-3 p-4 text-left hover:bg-muted/40"
@@ -196,7 +196,7 @@ export function DebtReminderHistoryPanel() {
                         return (
                           <div
                             key={step.type}
-                            className="rounded-xl border border-border bg-white p-3"
+                            className="rounded-xl border border-border bg-card p-3"
                           >
                             <div className="flex items-center gap-2">
                               <Icon className="h-4 w-4 text-accent" />
@@ -210,7 +210,7 @@ export function DebtReminderHistoryPanel() {
                               {labels[step.status]}
                             </span>
                             {step.error_message && (
-                              <p className="mt-2 text-xs text-red-700">
+                              <p className="mt-2 text-xs text-danger-fg">
                                 {step.error_message}
                               </p>
                             )}
@@ -235,7 +235,7 @@ export function DebtReminderHistoryPanel() {
                       )}
                     </div>
                     {run.error_message && (
-                      <p className="mt-3 rounded-lg bg-red-50 p-2 text-xs text-red-700">
+                      <p className="mt-3 rounded-lg bg-danger-bg p-2 text-xs text-danger-fg">
                         {run.error_code ? `${run.error_code}: ` : ""}
                         {run.error_message}
                       </p>
@@ -277,7 +277,7 @@ export function DebtReminderHistoryPanel() {
 function Empty({ text, danger = false }: { text: string; danger?: boolean }) {
   return (
     <div
-      className={`rounded-xl border p-8 text-center text-sm ${danger ? "border-red-200 bg-red-50 text-red-700" : "border-border text-muted-foreground"}`}
+      className={`rounded-xl border p-8 text-center text-sm ${danger ? "border-danger-border bg-danger-bg text-danger-fg" : "border-border text-muted-foreground"}`}
     >
       {text}
     </div>

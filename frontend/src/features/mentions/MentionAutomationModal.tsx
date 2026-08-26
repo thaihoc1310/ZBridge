@@ -129,8 +129,8 @@ export function MentionAutomationModal({
           Đang tải cấu hình...
         </div>
       ) : automation.isError ? (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-center">
-          <p className="text-sm text-red-700">Không thể tải cấu hình tag tên.</p>
+        <div className="rounded-xl border border-danger-border bg-danger-bg p-6 text-center">
+          <p className="text-sm text-danger-fg">Không thể tải cấu hình tag tên.</p>
           <Button
             variant="secondary"
             className="mt-4"
@@ -141,7 +141,7 @@ export function MentionAutomationModal({
         </div>
       ) : (
         <div className="space-y-6">
-          <div className="rounded-xl border border-blue-100 bg-blue-50/70 p-4">
+          <div className="rounded-xl border border-info-border bg-info-bg p-4">
             <button
               type="button"
               className="flex w-full items-center gap-3 text-left"
@@ -149,15 +149,15 @@ export function MentionAutomationModal({
               onClick={() => setExplanationOpen((current) => !current)}
             >
               <AtSign className="h-5 w-5 shrink-0 text-accent" />
-              <span className="flex-1 text-sm font-semibold text-slate-700">
+              <span className="flex-1 text-sm font-semibold text-foreground">
                 Giải thích cách hoạt động
               </span>
               <ChevronDown
-                className={`h-4 w-4 text-slate-500 transition ${explanationOpen ? "rotate-180" : ""}`}
+                className={`h-4 w-4 text-muted-foreground transition ${explanationOpen ? "rotate-180" : ""}`}
               />
             </button>
             {explanationOpen && (
-              <p className="mt-3 border-t border-blue-100 pt-3 text-sm leading-relaxed text-slate-700">
+              <p className="mt-3 border-t border-info-border pt-3 text-sm leading-relaxed text-foreground">
                 <strong>Tag lại khi có người tag:</strong> ai đó tag một thành viên đã
                 chọn thì bot đợi theo thời gian bên dưới rồi tag lại đúng người đó, lặp
                 lại cho tới khi chính người đó gửi bất kỳ tin nhắn nào hoặc thả tim/like
@@ -253,20 +253,20 @@ export function MentionAutomationModal({
           </div>
 
           {automation.data && automation.data.pending_followups > 0 && (
-            <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+            <p className="rounded-xl border border-warning-border bg-warning-bg px-4 py-3 text-xs text-warning-fg">
               Có {automation.data.pending_followups} vòng nhắc đang hoạt động. Chỉ những
               vòng nhắc dành cho người bị bỏ khỏi danh sách mới bị hủy; đổi khung giờ,
               thời gian chờ hay thêm người thì các vòng còn lại vẫn chạy tiếp.
             </p>
           )}
           {formError && (
-            <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <p className="rounded-xl border border-danger-border bg-danger-bg px-4 py-3 text-sm text-danger-fg">
               {formError}
             </p>
           )}
 
           {!canEdit && (
-            <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            <p className="rounded-xl border border-warning-border bg-warning-bg px-4 py-3 text-sm text-warning-fg">
               Vai trò của bạn chỉ được xem cấu hình tag tên tự động.
             </p>
           )}

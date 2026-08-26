@@ -108,7 +108,7 @@ function highlightedContent(text: string, mentions: MentionRange[]) {
     content.push(
       <span
         key={`${mention.user_id}-${mention.start}`}
-        className="rounded bg-blue-100 px-0.5 font-medium text-blue-700"
+        className="rounded bg-accent-soft px-0.5 font-medium text-accent"
       >
         {text.slice(mention.start, mention.start + mention.length)}
       </span>,
@@ -121,7 +121,7 @@ function highlightedContent(text: string, mentions: MentionRange[]) {
 
 function MemberAvatar({ member }: { member: GroupMember }) {
   return (
-    <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-blue-100 to-indigo-100 text-xs font-semibold text-accent">
+    <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-accent-soft to-accent/20 text-xs font-semibold text-accent">
       {member.avatar_url ? (
         <img
           src={member.avatar_url}
@@ -329,13 +329,13 @@ export function DebtReminderModal({
           Đang tải cấu hình...
         </div>
       ) : reminder.isError ? (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-center text-sm text-red-700">
+        <div className="rounded-xl border border-danger-border bg-danger-bg p-6 text-center text-sm text-danger-fg">
           Không thể tải cấu hình nhắc công nợ.
         </div>
       ) : (
         <div className="space-y-6">
           <div
-            className={`flex w-full items-center justify-between gap-4 rounded-xl border p-4 ${hasDebt && hasDebtFile ? "border-emerald-200 bg-emerald-50" : hasDebt ? "border-amber-200 bg-amber-50" : "border-slate-200 bg-slate-50"}`}
+            className={`flex w-full items-center justify-between gap-4 rounded-xl border p-4 ${hasDebt && hasDebtFile ? "border-success-border bg-success-bg" : hasDebt ? "border-warning-border bg-warning-bg" : "border-border bg-muted"}`}
           >
             <span>
               <span className="block text-sm font-semibold">Tự động nhắc hàng tháng</span>
@@ -343,7 +343,7 @@ export function DebtReminderModal({
                 Trạng thái tự động lấy theo công nợ và file Google Sheet của khách hàng.
               </span>
             </span>
-            <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${hasDebt && hasDebtFile ? "bg-emerald-600 text-white" : hasDebt ? "bg-amber-500 text-white" : "bg-slate-200 text-slate-600"}`}>
+            <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${hasDebt && hasDebtFile ? "bg-emerald-600 text-white" : hasDebt ? "bg-amber-500 text-white" : "bg-muted text-muted-foreground"}`}>
               {hasDebt && hasDebtFile
                 ? "Đang hoạt động · Còn nợ"
                 : hasDebt
@@ -352,7 +352,7 @@ export function DebtReminderModal({
             </span>
           </div>
 
-          <div className="rounded-xl border border-blue-100 bg-blue-50/70 p-4">
+          <div className="rounded-xl border border-info-border bg-info-bg p-4">
             <button
               type="button"
               className="flex w-full items-center gap-3 text-left"
@@ -360,15 +360,15 @@ export function DebtReminderModal({
               onClick={() => setExplanationOpen((current) => !current)}
             >
               <Repeat2 className="h-5 w-5 shrink-0 text-accent" />
-              <span className="flex-1 text-sm font-semibold text-slate-700">
+              <span className="flex-1 text-sm font-semibold text-foreground">
                 Giải thích cách hoạt động
               </span>
               <ChevronDown
-                className={`h-4 w-4 text-slate-500 transition ${explanationOpen ? "rotate-180" : ""}`}
+                className={`h-4 w-4 text-muted-foreground transition ${explanationOpen ? "rotate-180" : ""}`}
               />
             </button>
             {explanationOpen && (
-              <div className="mt-3 border-t border-blue-100 pt-3 text-sm leading-relaxed text-slate-700">
+              <div className="mt-3 border-t border-info-border pt-3 text-sm leading-relaxed text-foreground">
                 <p>
                   Vào ngày {dayOfMonth || "—"} hàng tháng lúc {sendTime || "—"}, nếu
                   khách hàng còn nợ thì bot sẽ gửi đủ theo thứ tự:
@@ -380,7 +380,7 @@ export function DebtReminderModal({
                     [MessageSquareText, "3. Nội dung nhắc"],
                   ].map(([Icon, label]) => {
                     const StepIcon = Icon as typeof FileImage;
-                    return <div key={String(label)} className="flex items-center gap-2 rounded-lg bg-white/80 px-3 py-2 text-xs font-medium text-slate-700"><StepIcon className="h-4 w-4 text-accent" />{String(label)}</div>;
+                    return <div key={String(label)} className="flex items-center gap-2 rounded-lg bg-card/80 px-3 py-2 text-xs font-medium text-foreground"><StepIcon className="h-4 w-4 text-accent" />{String(label)}</div>;
                   })}
                 </div>
                 <p className="mt-3">
@@ -400,7 +400,7 @@ export function DebtReminderModal({
           </div>
 
           {!hasDebtFile && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            <div className="rounded-xl border border-warning-border bg-warning-bg p-4 text-sm text-warning-fg">
               Khách hàng chưa có file công nợ. Hãy thêm link Google Sheet trước khi lưu.
             </div>
           )}
@@ -435,7 +435,7 @@ export function DebtReminderModal({
                   role="switch"
                   aria-checked={repeatEnabled}
                   aria-label="Bật hoặc tắt nhắc lặp"
-                  className={`relative h-6 w-11 rounded-full transition ${repeatEnabled ? "bg-blue-600" : "bg-slate-300"}`}
+                  className={`relative h-6 w-11 rounded-full transition ${repeatEnabled ? "bg-accent" : "bg-muted-foreground/40"}`}
                   onClick={() => {
                     setRepeatEnabled((current) => !current);
                     setFormError(null);
@@ -446,7 +446,7 @@ export function DebtReminderModal({
               </span>
               <div className="relative">
                 <input
-                  className="field pr-14 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                  className="field pr-14 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
                   type="number"
                   min={1}
                   max={31}
@@ -491,11 +491,11 @@ export function DebtReminderModal({
               </label>
               <span className="text-xs text-muted-foreground">Gõ @ để tag thành viên</span>
             </div>
-            <div className="relative">
+            <div className="relative rounded-xl bg-input">
               <textarea
                 ref={textareaRef}
                 id="debt-reminder-message"
-                className="field app-scrollbar relative z-10 min-h-32 resize-y bg-transparent py-3 leading-relaxed text-transparent caret-slate-900 selection:text-white"
+                className="field app-scrollbar relative z-10 min-h-32 resize-y bg-transparent py-3 leading-relaxed text-transparent caret-foreground selection:bg-accent selection:text-white"
                 maxLength={5000}
                 value={text}
                 onChange={(event) => {
@@ -528,14 +528,14 @@ export function DebtReminderModal({
                 {text.endsWith("\n") ? "\u00a0" : null}
               </div>
               {activeQuery && (
-                <div className="app-scrollbar absolute z-20 mt-2 max-h-56 w-full overflow-auto rounded-xl border border-border bg-white p-1.5 shadow-xl">
+                <div className="app-scrollbar absolute z-20 mt-2 max-h-56 w-full overflow-auto rounded-xl border border-border bg-card p-1.5 shadow-xl">
                   {members.isLoading && (
                     <div className="p-5 text-center text-sm text-muted-foreground">
                       Đang lấy thành viên...
                     </div>
                   )}
                   {members.isError && (
-                    <div className="p-5 text-center text-sm text-red-600">
+                    <div className="p-5 text-center text-sm text-danger-fg">
                       Không thể lấy danh sách thành viên.
                     </div>
                   )}
@@ -557,7 +557,7 @@ export function DebtReminderModal({
                         <span className="block truncate text-sm font-medium">{member.display_name}</span>
                         <span className="block truncate font-mono text-[10px] text-muted-foreground">{member.user_id}</span>
                       </span>
-                      <Check className="h-4 w-4 text-slate-300" />
+                      <Check className="h-4 w-4 text-muted-foreground" />
                     </button>
                   ))}
                 </div>
@@ -568,18 +568,18 @@ export function DebtReminderModal({
           {reminder.data?.last_run_status && (
             <div className="rounded-xl border border-border bg-muted/30 p-4 text-xs leading-relaxed">
               <p><strong>Lần chạy gần nhất:</strong> {runLabels[reminder.data.last_run_status] ?? reminder.data.last_run_status}{reminder.data.last_run_at ? ` · ${formatDate(reminder.data.last_run_at)}` : ""}</p>
-              {reminder.data.last_error && <p className="mt-2 text-red-700">{reminder.data.last_error}</p>}
+              {reminder.data.last_error && <p className="mt-2 text-danger-fg">{reminder.data.last_error}</p>}
             </div>
           )}
 
           {formError && (
-            <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            <div className="rounded-xl border border-danger-border bg-danger-bg p-4 text-sm text-danger-fg">
               {formError}
             </div>
           )}
 
           {!canEdit && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            <div className="rounded-xl border border-warning-border bg-warning-bg p-4 text-sm text-warning-fg">
               Vai trò của bạn chỉ được xem cấu hình nhắc công nợ.
             </div>
           )}

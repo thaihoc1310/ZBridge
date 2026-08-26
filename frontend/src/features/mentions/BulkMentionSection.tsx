@@ -128,7 +128,7 @@ export function BulkMentionSection({ canEdit }: { canEdit: boolean }) {
     <div>
 
       {error && (
-        <p className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <p className="mb-4 rounded-xl border border-danger-border bg-danger-bg px-4 py-3 text-sm text-danger-fg">
           {error}
         </p>
       )}
@@ -216,7 +216,7 @@ export function BulkMentionSection({ canEdit }: { canEdit: boolean }) {
       {step === "customers" && (
         <div>
           {preview.data?.gateway_error && (
-            <p className="mb-4 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            <p className="mb-4 flex items-start gap-2 rounded-xl border border-warning-border bg-warning-bg px-4 py-3 text-sm text-warning-fg">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               Không đọc được thành viên nhóm ({preview.data.gateway_error}). Khi bấm áp,
               hệ thống sẽ kiểm tra lại; nhóm nào Zalo vẫn không trả dữ liệu sẽ được bỏ qua.
@@ -252,7 +252,7 @@ export function BulkMentionSection({ canEdit }: { canEdit: boolean }) {
               >
                 <input
                   type="checkbox"
-                  className="h-4 w-4 shrink-0 accent-blue-600"
+                  className="h-4 w-4 shrink-0 accent-accent"
                   disabled={!row.is_available}
                   checked={selected.has(row.customer_id)}
                   onChange={(event) =>
@@ -277,7 +277,7 @@ export function BulkMentionSection({ canEdit }: { canEdit: boolean }) {
                 {row.missing_members.length > 0 && (
                   <span
                     title={`${row.missing_members.join(", ")} không phải thành viên nhóm Zalo này nên sẽ không được ghi vào danh sách tag của khách hàng này.`}
-                    className="flex max-w-56 shrink-0 items-start gap-1 rounded-lg bg-amber-50 px-2 py-1 text-[11px] font-medium leading-snug text-amber-700"
+                    className="flex max-w-56 shrink-0 items-start gap-1 rounded-lg bg-warning-bg px-2 py-1 text-[11px] font-medium leading-snug text-warning-fg"
                   >
                     <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                     <span>
@@ -308,13 +308,13 @@ export function BulkMentionSection({ canEdit }: { canEdit: boolean }) {
       )}
 
       {step === "done" && result && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5">
-          <p className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
+        <div className="rounded-xl border border-success-border bg-success-bg p-5">
+          <p className="flex items-center gap-2 text-sm font-semibold text-success-fg">
             <CheckCircle2 className="h-4 w-4" />
             Cập nhật {result.updated} khách hàng, tạo mới {result.created}
             {result.unchanged > 0 && `, giữ nguyên ${result.unchanged}`}.
           </p>
-          <ul className="mt-3 space-y-1 text-sm text-emerald-900">
+          <ul className="mt-3 space-y-1 text-sm text-success-fg">
             {result.cancelled_followups > 0 && (
               <li>Đã huỷ {result.cancelled_followups} vòng nhắc đang chạy.</li>
             )}

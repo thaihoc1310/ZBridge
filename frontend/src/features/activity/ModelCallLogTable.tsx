@@ -64,32 +64,32 @@ function highlightJson(source: string): ReactNode[] {
     const [token, stringLiteral, keyColon] = match;
     if (stringLiteral !== undefined) {
       nodes.push(
-        <span key={index++} className={keyColon !== undefined ? "text-sky-300" : "text-emerald-300"}>
+        <span key={index++} className={keyColon !== undefined ? "text-code-key" : "text-code-string"}>
           {stringLiteral}
         </span>,
       );
       if (keyColon) {
         nodes.push(
-          <span key={index++} className="text-slate-500">
+          <span key={index++} className="text-code-punct">
             {keyColon}
           </span>,
         );
       }
     } else if (token === "true" || token === "false") {
       nodes.push(
-        <span key={index++} className="text-violet-300">
+        <span key={index++} className="text-code-keyword">
           {token}
         </span>,
       );
     } else if (token === "null" || token === "{" || token === "}" || token === "[" || token === "]" || token === ",") {
       nodes.push(
-        <span key={index++} className="text-slate-500">
+        <span key={index++} className="text-code-punct">
           {token}
         </span>,
       );
     } else {
       nodes.push(
-        <span key={index++} className="text-amber-300">
+        <span key={index++} className="text-code-number">
           {token}
         </span>,
       );
@@ -124,7 +124,7 @@ function RequestPayloadCell({
           </span>
         </summary>
         {open && (
-          <pre className="app-scrollbar app-scrollbar-dark mt-3 box-border max-h-72 w-full min-w-0 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-all rounded-xl border border-white/10 bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-300">
+          <pre className="app-scrollbar mt-3 box-border max-h-72 w-full min-w-0 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-all rounded-xl border border-border bg-code-bg p-3 font-mono text-[11px] leading-relaxed text-code-fg">
             {source ? highlightJson(source) : "Không có JSON"}
           </pre>
         )}
@@ -136,7 +136,7 @@ function RequestPayloadCell({
 function FinalTagDecision({ decision, showTarget }: { decision: Decision; showTarget: boolean }) {
   if (typeof decision.skipped !== "boolean") return null;
   const label = decision.target_display_name || "Target";
-  return <span className={`inline-flex max-w-full items-center rounded-full px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide ${decision.skipped ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700"}`} title={showTarget ? label : undefined}>
+  return <span className={`inline-flex max-w-full items-center rounded-full px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide ${decision.skipped ? "bg-muted text-muted-foreground" : "bg-success-bg text-success-fg"}`} title={showTarget ? label : undefined}>
     <span className="truncate">{showTarget ? `${label} · ` : ""}{decision.skipped ? "Không giữ tag" : "Giữ tag"}</span>
   </span>;
 }
@@ -173,13 +173,13 @@ export function ModelCallLogTable({ data, loading, page, onPageChange }: Props) 
             const currentText = messages.find((message) => message.message_id === currentMessageId)?.text
               || messages[messages.length - 1]?.text
               || "Không có text";
-            return <tr key={entry.id} className="border-b border-border align-top last:border-0 hover:bg-blue-50/30">
+            return <tr key={entry.id} className="border-b border-border align-top last:border-0 hover:bg-accent-soft/50">
               <td className="px-5 py-4 text-xs text-muted-foreground">{formatDate(entry.created_at)}<span className="mt-1 block font-mono text-[10px]">{entry.latency_ms == null ? "—" : `${entry.latency_ms} ms`}</span></td>
               <td className="min-w-0 px-5 py-4">{entry.customer_id ? <Link to={`/customers/${entry.customer_id}`} className="break-words text-sm font-semibold hover:text-accent">{entry.customer_name}</Link> : <span className="break-words text-sm font-semibold">{entry.customer_name}</span>}<span className="mt-1 block text-[10px] uppercase tracking-wide text-muted-foreground">{entry.trigger === "PRICE_INQUIRY" ? "Hỏi báo giá" : "Tag tên"}</span></td>
               <td className="min-w-0 px-5 py-4"><p className="truncate text-xs font-semibold" title={entry.model}>{entry.model}</p><p className="mt-1 font-mono text-[10px] text-muted-foreground">{entry.provider}</p><p className="mt-2 text-[10px] text-muted-foreground">{entry.input_tokens ?? "—"} in · {entry.output_tokens ?? "—"} out</p></td>
               <RequestPayloadCell payload={entry.request_payload} preview={currentText} messageCount={messages.length} />
               <td className="min-w-0 px-5 py-4">
-                {entry.status === "FAILED" ? <div className="text-xs leading-relaxed text-red-700"><strong>{entry.error_type || "MODEL_ERROR"}</strong>{entry.error_message && <p className="mt-1 line-clamp-3 break-words">{entry.error_message}</p>}</div> : modelDecisions.length ? <details className="group min-w-0 w-full"><summary className="cursor-pointer list-none text-xs font-medium hover:text-accent [&::-webkit-details-marker]:hidden">{modelDecisions.map((decision) => decision.classification).join(", ")}<span className="mt-1 block text-[10px] text-muted-foreground group-open:hidden">Mở chi tiết response</span></summary><div className="mt-2 min-w-0 space-y-2">{modelDecisions.map((decision, index) => <div key={`${decision.target_user_id}-${index}`} className="rounded-lg bg-muted/70 p-2 text-[10px]"><strong className="break-words">{decision.target_display_name || `Target ${index + 1}`}</strong><p className="mt-1 break-words font-mono text-muted-foreground">{decision.classification} · {typeof decision.confidence === "number" ? `${Math.round(decision.confidence * 100)}%` : "—"} · {decision.reason_code}</p></div>)}</div></details> : <span className="text-xs text-muted-foreground">{entry.status === "PROCESSING" ? "Đang chờ model phản hồi..." : "Không có response"}</span>}
+                {entry.status === "FAILED" ? <div className="text-xs leading-relaxed text-danger-fg"><strong>{entry.error_type || "MODEL_ERROR"}</strong>{entry.error_message && <p className="mt-1 line-clamp-3 break-words">{entry.error_message}</p>}</div> : modelDecisions.length ? <details className="group min-w-0 w-full"><summary className="cursor-pointer list-none text-xs font-medium hover:text-accent [&::-webkit-details-marker]:hidden">{modelDecisions.map((decision) => decision.classification).join(", ")}<span className="mt-1 block text-[10px] text-muted-foreground group-open:hidden">Mở chi tiết response</span></summary><div className="mt-2 min-w-0 space-y-2">{modelDecisions.map((decision, index) => <div key={`${decision.target_user_id}-${index}`} className="rounded-lg bg-muted/70 p-2 text-[10px]"><strong className="break-words">{decision.target_display_name || `Target ${index + 1}`}</strong><p className="mt-1 break-words font-mono text-muted-foreground">{decision.classification} · {typeof decision.confidence === "number" ? `${Math.round(decision.confidence * 100)}%` : "—"} · {decision.reason_code}</p></div>)}</div></details> : <span className="text-xs text-muted-foreground">{entry.status === "PROCESSING" ? "Đang chờ model phản hồi..." : "Không có response"}</span>}
               </td>
               <td className="px-5 py-4"><StatusBadge status={entry.status} /><FinalTagDecisions entry={entry} decisions={modelDecisions} /></td>
             </tr>;

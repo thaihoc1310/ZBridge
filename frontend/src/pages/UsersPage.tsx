@@ -59,7 +59,7 @@ export function UsersPage() {
       action={can(PERMISSIONS.userCreate) ? <Button disabled={roleOptions.length === 0} onClick={() => { setActionError(null); setUserModal({ user: null }); }}><UserPlus className="h-4 w-4" />Thêm người dùng</Button> : undefined}
     />
 
-    {actionError && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700" role="alert">{actionError}</div>}
+    {actionError && <div className="mb-5 rounded-xl border border-danger-border bg-danger-bg p-4 text-sm text-danger-fg" role="alert">{actionError}</div>}
 
     <section className="card mb-6">
       <div className="border-b border-border p-4">
@@ -79,26 +79,26 @@ export function UsersPage() {
           </thead>
           <tbody>
             {users.isLoading && <tr><td colSpan={5} className="px-6 py-14 text-center text-sm text-muted-foreground"><RefreshCw className="mx-auto mb-3 h-5 w-5 animate-spin text-accent" />Đang tải danh sách người dùng...</td></tr>}
-            {users.isError && <tr><td colSpan={5} className="px-6 py-14 text-center text-sm text-red-600">Không thể tải danh sách người dùng.</td></tr>}
+            {users.isError && <tr><td colSpan={5} className="px-6 py-14 text-center text-sm text-danger-fg">Không thể tải danh sách người dùng.</td></tr>}
             {users.data?.map((user) => {
               const isSelf = user.id === session.id;
-              return <tr key={user.id} className="border-b border-border transition-colors last:border-0 hover:bg-blue-50/40">
+              return <tr key={user.id} className="border-b border-border transition-colors last:border-0 hover:bg-accent-soft/50">
                 <td className="px-6 py-4">
                   <div className="flex min-w-0 items-center gap-3">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-100 to-indigo-100 text-xs font-bold text-accent">{initials(user.full_name || user.email)}</span>
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-accent-soft to-accent/20 text-xs font-bold text-accent">{initials(user.full_name || user.email)}</span>
                     <span className="min-w-0">
-                      <span className="block truncate font-semibold">{user.full_name || "—"}{isSelf && <span className="ml-2 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-accent">Bạn</span>}</span>
+                      <span className="block truncate font-semibold">{user.full_name || "—"}{isSelf && <span className="ml-2 rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-semibold text-accent">Bạn</span>}</span>
                       <span className="block truncate text-xs text-muted-foreground">{user.email}</span>
                     </span>
                   </div>
                 </td>
                 <td className="px-5 py-4">
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-foreground">
                     <ShieldCheck className="h-3 w-3 text-accent" />{user.role.name}
                   </span>
                 </td>
                 <td className="px-5 py-4">
-                  <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${user.is_active ? "bg-emerald-50 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${user.is_active ? "bg-success-bg text-success-fg" : "bg-muted text-muted-foreground"}`}>
                     {user.is_active ? "Đang hoạt động" : "Đã vô hiệu hóa"}
                   </span>
                 </td>
@@ -106,7 +106,7 @@ export function UsersPage() {
                 <td className="px-5 py-4">
                   <div className="flex items-center gap-1">
                     {can(PERMISSIONS.userUpdate) && <button type="button" title="Sửa người dùng" aria-label={`Sửa ${user.email}`} className="rounded-lg p-2 text-muted-foreground transition hover:bg-muted hover:text-accent" onClick={() => { setActionError(null); setUserModal({ user }); }}><Pencil className="h-4 w-4" /></button>}
-                    {can(PERMISSIONS.userDelete) && <button type="button" title={isSelf ? "Không thể tự xóa" : "Xóa người dùng"} aria-label={`Xóa ${user.email}`} disabled={isSelf} className="rounded-lg p-2 text-muted-foreground transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-30" onClick={() => { setActionError(null); setPendingDelete(user); }}><Trash2 className="h-4 w-4" /></button>}
+                    {can(PERMISSIONS.userDelete) && <button type="button" title={isSelf ? "Không thể tự xóa" : "Xóa người dùng"} aria-label={`Xóa ${user.email}`} disabled={isSelf} className="rounded-lg p-2 text-muted-foreground transition hover:bg-danger-bg hover:text-danger-fg disabled:cursor-not-allowed disabled:opacity-30" onClick={() => { setActionError(null); setPendingDelete(user); }}><Trash2 className="h-4 w-4" /></button>}
                   </div>
                 </td>
               </tr>;
@@ -134,8 +134,8 @@ export function UsersPage() {
               <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground">{role.code}</p>
             </div>
             {can(PERMISSIONS.roleManage) && !role.is_system && <div className="flex shrink-0 items-center gap-1">
-              <button type="button" title="Sửa vai trò" aria-label={`Sửa vai trò ${role.name}`} className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-white hover:text-accent" onClick={() => { setActionError(null); setRoleModal({ role }); }}><Pencil className="h-3.5 w-3.5" /></button>
-              <button type="button" title="Xóa vai trò" aria-label={`Xóa vai trò ${role.name}`} className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-red-50 hover:text-red-600" onClick={() => { setActionError(null); setPendingRoleDelete(role); }}><Trash2 className="h-3.5 w-3.5" /></button>
+              <button type="button" title="Sửa vai trò" aria-label={`Sửa vai trò ${role.name}`} className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-card hover:text-accent" onClick={() => { setActionError(null); setRoleModal({ role }); }}><Pencil className="h-3.5 w-3.5" /></button>
+              <button type="button" title="Xóa vai trò" aria-label={`Xóa vai trò ${role.name}`} className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-danger-bg hover:text-danger-fg" onClick={() => { setActionError(null); setPendingRoleDelete(role); }}><Trash2 className="h-3.5 w-3.5" /></button>
             </div>}
           </div>
           <p className="mt-3 flex-1 text-xs leading-relaxed text-muted-foreground">{role.description || "Không có mô tả."}</p>

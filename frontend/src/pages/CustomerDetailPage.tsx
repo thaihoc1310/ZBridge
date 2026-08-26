@@ -45,7 +45,7 @@ export function CustomerDetailPage() {
 
   return <div className="mx-auto max-w-7xl">
     <Link to="/customers" className="mb-5 inline-flex items-center gap-2 text-sm font-medium text-muted-foreground transition hover:text-accent"><ArrowLeft className="h-4 w-4" />Danh sách khách hàng</Link>
-    <header className="mb-7 flex items-center gap-4"><span className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-blue-100 to-indigo-100 font-display text-xl text-accent">{item.avatar_url ? <img src={item.avatar_url} alt="" className="h-full w-full object-cover" /> : initials(item.name)}</span><div><div className="mb-2"><StatusBadge status={item.is_available ? "available" : "unavailable"} /></div><h1 className="font-display text-3xl sm:text-4xl">{item.name}</h1></div></header>
+    <header className="mb-7 flex items-center gap-4"><span className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-accent-soft to-accent/20 font-display text-xl text-accent">{item.avatar_url ? <img src={item.avatar_url} alt="" className="h-full w-full object-cover" /> : initials(item.name)}</span><div><div className="mb-2"><StatusBadge status={item.is_available ? "available" : "unavailable"} /></div><h1 className="font-display text-3xl sm:text-4xl">{item.name}</h1></div></header>
 
     <div className="space-y-6">
       <section className="card p-6 sm:p-8">
@@ -60,7 +60,7 @@ export function CustomerDetailPage() {
           <div className="rounded-xl border border-border bg-muted/30 p-4"><p className="flex items-center gap-2 text-xs text-muted-foreground"><Clock3 className="h-4 w-4 text-accent" />Ngày trả nợ gần nhất</p><p className="mt-3 text-sm font-semibold">{item.last_debt_paid_at ? formatDate(item.last_debt_paid_at) : <span className="font-normal text-muted-foreground">Chưa có</span>}</p></div>
         </div>
         <div className="group/field relative mt-5 border-t border-border pt-5">
-          <div className="flex items-center gap-1.5"><p className="text-xs text-muted-foreground">Ghi chú</p>{canUpdate && <button type="button" onClick={() => setNoteOpen(true)} title="Sửa ghi chú" aria-label="Sửa ghi chú" className="rounded-md p-1 text-slate-300 opacity-0 transition hover:bg-muted hover:text-accent group-hover/field:opacity-100 focus:opacity-100"><Pencil className="h-3 w-3" /></button>}</div>
+          <div className="flex items-center gap-1.5"><p className="text-xs text-muted-foreground">Ghi chú</p>{canUpdate && <button type="button" onClick={() => setNoteOpen(true)} title="Sửa ghi chú" aria-label="Sửa ghi chú" className="rounded-md p-1 text-muted-foreground opacity-0 transition hover:bg-muted hover:text-accent group-hover/field:opacity-100 focus:opacity-100"><Pencil className="h-3 w-3" /></button>}</div>
           <p className={`mt-2 whitespace-pre-wrap break-words text-sm leading-7 ${item.note ? "text-foreground" : "italic text-muted-foreground/70"}`}>{item.note || (canUpdate ? "+ Thêm ghi chú cho khách hàng" : "Chưa có ghi chú")}</p>
         </div>
       </section>
@@ -83,7 +83,7 @@ export function CustomerDetailPage() {
           <Detail icon={Clock3} label="Đồng bộ gần nhất"><span className="text-sm font-semibold">{formatDate(item.last_synced_at)}</span></Detail>
           <Detail icon={CalendarDays} label="Ngày phát hiện"><span className="text-sm font-semibold">{formatDate(item.created_at)}</span></Detail>
         </dl>
-        {!item.is_available && <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs leading-relaxed text-amber-800">Bot hiện không còn ở trong nhóm Zalo này. Thông tin khách hàng vẫn được giữ nguyên.</div>}
+        {!item.is_available && <div className="mt-6 rounded-xl border border-warning-border bg-warning-bg p-4 text-xs leading-relaxed text-warning-fg">Bot hiện không còn ở trong nhóm Zalo này. Thông tin khách hàng vẫn được giữ nguyên.</div>}
       </section>
     </div>
 
@@ -108,15 +108,15 @@ function SectionTitle({ title, description }: { title: string; description: stri
 }
 
 function EditButton({ label, onClick }: { label: string; onClick: () => void }) {
-  return <button type="button" onClick={onClick} title={label} aria-label={label} className="absolute right-2 top-2 rounded-lg p-2 text-slate-300 opacity-0 transition hover:bg-white hover:text-accent hover:shadow-sm group-hover/field:opacity-100 focus:opacity-100"><Pencil className="h-3.5 w-3.5" /></button>;
+  return <button type="button" onClick={onClick} title={label} aria-label={label} className="absolute right-2 top-2 rounded-lg p-2 text-muted-foreground opacity-0 transition hover:bg-card hover:text-accent hover:shadow-sm group-hover/field:opacity-100 focus:opacity-100"><Pencil className="h-3.5 w-3.5" /></button>;
 }
 
 function CustomerAction({ icon: Icon, title, description, onClick, disabled, primary = false }: { icon: LucideIcon; title: string; description: string; onClick: () => void; disabled?: boolean; primary?: boolean }) {
-  return <button disabled={disabled} onClick={onClick} className={`group flex min-h-20 w-full items-center gap-4 rounded-xl border p-4 text-left transition-all disabled:cursor-not-allowed disabled:opacity-50 ${primary ? "border-blue-100 bg-blue-50/60 hover:border-accent/30 hover:bg-blue-50" : "border-border bg-white hover:border-accent/30 hover:bg-muted/50"}`}><span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${primary ? "bg-gradient-to-br from-accent to-accent-secondary text-white shadow-sm" : "bg-muted text-foreground"}`}><Icon className="h-5 w-5" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-semibold">{title}</span><span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{description}</span></span><ArrowUpRight className="h-4 w-4 shrink-0 text-slate-300 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-accent" /></button>;
+  return <button disabled={disabled} onClick={onClick} className={`group flex min-h-20 w-full items-center gap-4 rounded-xl border p-4 text-left transition-all disabled:cursor-not-allowed disabled:opacity-50 ${primary ? "border-info-border bg-info-bg hover:border-accent/30 hover:bg-accent-soft" : "border-border bg-card hover:border-accent/30 hover:bg-muted/50"}`}><span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${primary ? "bg-gradient-to-br from-accent to-accent-secondary text-white shadow-sm" : "bg-muted text-foreground"}`}><Icon className="h-5 w-5" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-semibold">{title}</span><span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{description}</span></span><ArrowUpRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-accent" /></button>;
 }
 
 function Detail({ icon: Icon, label, children }: { icon: LucideIcon; label: string; children: React.ReactNode }) {
-  return <div className="flex gap-3"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-accent"><Icon className="h-4 w-4" /></span><div className="min-w-0"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 min-w-0">{children}</dd></div></div>;
+  return <div className="flex gap-3"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent"><Icon className="h-4 w-4" /></span><div className="min-w-0"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 min-w-0">{children}</dd></div></div>;
 }
 
 function ResultModal({ result, onClose }: { result: DeliveryLog | ApiError | null; onClose: () => void }) {
@@ -124,8 +124,8 @@ function ResultModal({ result, onClose }: { result: DeliveryLog | ApiError | nul
   const errorCode = result instanceof ApiError ? result.code : result?.error_code;
   const errorMessage = result instanceof ApiError ? result.message : result?.error_message;
   return <Modal open={Boolean(result)} onClose={onClose} className="max-w-md" title={success ? "Đã gửi thành công" : "Không thể gửi tin nhắn"} description={success ? "Zalo đã xác nhận lượt gửi thành công." : "Lỗi đã được ghi vào nhật ký vận hành để kiểm tra."}>
-    <div className={`mx-auto flex h-20 w-20 items-center justify-center rounded-full ${success ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-600"}`}>{success ? <CheckCircle2 className="h-10 w-10" /> : <XCircle className="h-10 w-10" />}</div>
-    {!success && <div className="mt-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"><p className="font-mono text-xs font-semibold">{errorCode ?? "SEND_FAILED"}</p><p className="mt-2 leading-relaxed">{errorMessage ?? "Zalo không thể gửi tin nhắn."}</p></div>}
+    <div className={`mx-auto flex h-20 w-20 items-center justify-center rounded-full ${success ? "bg-success-bg text-success-fg" : "bg-danger-bg text-danger-fg"}`}>{success ? <CheckCircle2 className="h-10 w-10" /> : <XCircle className="h-10 w-10" />}</div>
+    {!success && <div className="mt-6 rounded-xl border border-danger-border bg-danger-bg p-4 text-sm text-danger-fg"><p className="font-mono text-xs font-semibold">{errorCode ?? "SEND_FAILED"}</p><p className="mt-2 leading-relaxed">{errorMessage ?? "Zalo không thể gửi tin nhắn."}</p></div>}
     <Button className="mt-7 w-full" variant={success ? "primary" : "secondary"} onClick={onClose}>Đóng</Button>
   </Modal>;
 }

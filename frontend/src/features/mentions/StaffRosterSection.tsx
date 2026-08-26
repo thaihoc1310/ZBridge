@@ -88,7 +88,7 @@ export function StaffRosterSection({ canEdit }: { canEdit: boolean }) {
       </div>
 
       {error && (
-        <p className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <p className="mt-4 rounded-xl border border-danger-border bg-danger-bg px-4 py-3 text-sm text-danger-fg">
           {error}
         </p>
       )}
@@ -96,7 +96,7 @@ export function StaffRosterSection({ canEdit }: { canEdit: boolean }) {
       {picking && (
         <div className="mt-5 rounded-xl border border-border bg-muted/30 p-4">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
               className="field pl-10"
               value={search}
@@ -111,7 +111,7 @@ export function StaffRosterSection({ canEdit }: { canEdit: boolean }) {
             </p>
           )}
           {candidates.isError && (
-            <p className="mt-4 text-sm text-red-600">
+            <p className="mt-4 text-sm text-danger-fg">
               {candidates.error instanceof ApiError
                 ? candidates.error.message
                 : "Không lấy được danh sách thành viên. Kiểm tra kết nối bot."}
@@ -128,14 +128,14 @@ export function StaffRosterSection({ canEdit }: { canEdit: boolean }) {
                   <button
                     key={member.user_id}
                     type="button"
-                    className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-white"
+                    className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-card"
                     onClick={() => add(member)}
                   >
                     <StaffAvatar name={member.display_name} url={member.avatar_url} />
                     <span className="min-w-0 flex-1 truncate text-sm font-medium">
                       {member.display_name}
                     </span>
-                    <Plus className="h-4 w-4 text-slate-400" />
+                    <Plus className="h-4 w-4 text-muted-foreground" />
                   </button>
                 ))
               )}
@@ -171,7 +171,7 @@ export function StaffRosterSection({ canEdit }: { canEdit: boolean }) {
                 type="button"
                 aria-label={`Xoá ${member.display_name}`}
                 disabled={save.isPending}
-                className="rounded-lg p-2 text-muted-foreground transition hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                className="rounded-lg p-2 text-muted-foreground transition hover:bg-danger-bg hover:text-danger-fg disabled:opacity-40"
                 onClick={() => remove(member.user_id)}
               >
                 <Trash2 className="h-4 w-4" />
@@ -186,7 +186,7 @@ export function StaffRosterSection({ canEdit }: { canEdit: boolean }) {
 
 function StaffAvatar({ name, url }: { name: string; url: string | null }) {
   return (
-    <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-emerald-100 to-teal-100 text-xs font-semibold text-emerald-700">
+    <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-emerald-100 to-teal-100 text-xs font-semibold text-success-fg">
       {url ? (
         <img src={url} alt="" className="h-full w-full object-cover" />
       ) : name ? (

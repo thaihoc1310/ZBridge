@@ -55,7 +55,7 @@ function FeatureSection({
   return (
     <div className="p-4">
       <div className="flex items-start gap-3">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-50">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-soft">
           <Icon className="h-4 w-4 text-accent" />
         </span>
         <div className="min-w-0 flex-1">
@@ -69,7 +69,7 @@ function FeatureSection({
           aria-label={title}
           disabled={disabled}
           onClick={onToggle}
-          className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition disabled:opacity-50 ${enabled ? "bg-accent" : "bg-slate-300"}`}
+          className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition disabled:opacity-50 ${enabled ? "bg-accent" : "bg-muted-foreground/40"}`}
         >
           <span
             className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow transition ${enabled ? "left-6" : "left-1"}`}
@@ -145,20 +145,20 @@ function TargetPicker({
             </div>
             <div ref={pickerRef} className="relative">
               <div
-                className="flex min-h-10 flex-wrap items-center gap-2 rounded-xl border border-border bg-white p-1.5 transition focus-within:border-accent focus-within:ring-2 focus-within:ring-blue-100"
+                className="flex min-h-10 flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-1.5 transition focus-within:border-accent focus-within:ring-2 focus-within:ring-accent-soft"
                 onClick={() => !disabled && setPickerOpen(true)}
               >
                 {selected.map((target) => (
                   <span
                     key={target.user_id}
-                    className="inline-flex max-w-full items-center gap-2 rounded-lg bg-blue-50 py-1.5 pl-2 pr-1 text-xs font-medium text-blue-800"
+                    className="inline-flex max-w-full items-center gap-2 rounded-lg bg-accent-soft py-1.5 pl-2 pr-1 text-xs font-medium text-info-fg"
                   >
                     <Avatar member={target} small />
                     <span className="max-w-40 truncate">{target.display_name}</span>
                     <button
                       type="button"
                       disabled={disabled}
-                      className="rounded-md p-1 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      className="rounded-md p-1 hover:bg-accent/15 disabled:cursor-not-allowed disabled:opacity-40"
                       aria-label={`Bỏ chọn ${target.display_name}`}
                       onClick={(event) => {
                         event.stopPropagation();
@@ -172,9 +172,9 @@ function TargetPicker({
                   </span>
                 ))}
                 <div className="relative min-w-44 flex-1">
-                  <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <input
-                    className="h-8 w-full bg-transparent pl-8 pr-7 text-sm outline-none placeholder:text-slate-400 disabled:cursor-not-allowed"
+                    className="h-8 w-full bg-transparent pl-8 pr-7 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
                     value={search}
                     disabled={disabled}
                     onFocus={() => setPickerOpen(true)}
@@ -184,19 +184,19 @@ function TargetPicker({
                     }}
                     placeholder={selected.length ? "Chọn thêm..." : "Tìm và chọn thành viên..."}
                   />
-                  <ChevronDown className="absolute right-1 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <ChevronDown className="absolute right-1 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 </div>
               </div>
 
               {pickerOpen && (
-                <div className="app-scrollbar absolute z-20 mt-2 max-h-64 w-full overflow-auto rounded-xl border border-border bg-white p-1.5 shadow-xl">
+                <div className="app-scrollbar absolute z-20 mt-2 max-h-64 w-full overflow-auto rounded-xl border border-border bg-card p-1.5 shadow-xl">
                   {loading && (
                     <div className="p-6 text-center text-sm text-muted-foreground">
                       Đang lấy danh sách thành viên từ Zalo...
                     </div>
                   )}
                   {errorMessage && (
-                    <div className="p-5 text-center text-sm text-red-600">
+                    <div className="p-5 text-center text-sm text-danger-fg">
                       {errorMessage}
                     </div>
                   )}
@@ -223,7 +223,7 @@ function TargetPicker({
                           {member.user_id}
                         </span>
                       </span>
-                      <Check className="h-4 w-4 text-slate-300" />
+                      <Check className="h-4 w-4 text-muted-foreground" />
                     </button>
                   ))}
                 </div>
@@ -237,7 +237,7 @@ function TargetPicker({
 function Avatar({ member, small = false }: { member: GroupMember; small?: boolean }) {
   return (
     <span
-      className={`flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-blue-100 to-indigo-100 font-semibold text-accent ${small ? "h-5 w-5 text-[8px]" : "h-9 w-9 text-xs"}`}
+      className={`flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-accent-soft to-accent/20 font-semibold text-accent ${small ? "h-5 w-5 text-[8px]" : "h-9 w-9 text-xs"}`}
     >
       {member.avatar_url ? (
         <img src={member.avatar_url} alt="" className="h-full w-full object-cover" />
@@ -395,7 +395,7 @@ export function TimeWindowsField({
             />
             <button
               type="button"
-              className="flex h-10 w-10 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-30"
+              className="flex h-10 w-10 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-danger-bg hover:text-danger-fg disabled:cursor-not-allowed disabled:opacity-30"
               aria-label={`Xóa khung giờ ${index + 1}`}
               disabled={disabled || windows.length === 1}
               onClick={() => {
@@ -479,7 +479,7 @@ export function DelayField({
               key={preset.label}
               type="button"
               disabled={disabled}
-              className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition disabled:opacity-50 ${active ? "border-blue-200 bg-blue-50 text-accent" : "border-border bg-white text-muted-foreground hover:bg-muted"}`}
+              className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition disabled:opacity-50 ${active ? "border-info-border bg-accent-soft text-accent" : "border-border bg-card text-muted-foreground hover:bg-muted"}`}
               onClick={() => {
                 onChange(preset.value, preset.unit);
                 onDirty();
