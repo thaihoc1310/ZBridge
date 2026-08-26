@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
@@ -155,10 +156,10 @@ class CustomerUpdate(BaseModel):
     def validate_last_debt_paid_at(cls, value: datetime | None) -> datetime | None:
         if value is None:
             return None
+        vietnam = ZoneInfo("Asia/Ho_Chi_Minh")
         if value.tzinfo is None:
-            value = value.replace(tzinfo=UTC)
-        else:
-            value = value.astimezone(UTC)
+            value = value.replace(tzinfo=vietnam)
+        value = value.astimezone(UTC)
         if value > datetime.now(UTC) + timedelta(hours=24):
             raise ValueError("Ngày trả nợ không được ở tương lai.")
         return value

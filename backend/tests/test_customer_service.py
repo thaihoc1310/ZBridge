@@ -241,3 +241,8 @@ async def test_last_debt_paid_at_can_be_set_and_cleared() -> None:
 def test_last_debt_paid_at_rejects_far_future() -> None:
     with pytest.raises(ValidationError):
         CustomerUpdate(last_debt_paid_at=datetime.now(UTC) + timedelta(days=3))
+
+
+def test_naive_last_debt_paid_at_is_vietnam_time() -> None:
+    parsed = CustomerUpdate(last_debt_paid_at=datetime(2026, 1, 15, 10, 30))
+    assert parsed.last_debt_paid_at == datetime(2026, 1, 15, 3, 30, tzinfo=UTC)

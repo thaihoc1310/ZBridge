@@ -111,7 +111,7 @@ export function LastPaidEditorModal({ customer, onClose }: { customer: Customer 
       description={customer ? `Cập nhật thời điểm thanh toán gần nhất của ${customer.name}.` : undefined}
     >
       <label className="block">
-        <span className="mb-2 block text-sm font-semibold">Thời điểm</span>
+        <span className="mb-2 block text-sm font-semibold">Thời điểm (giờ Việt Nam)</span>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <input
             autoFocus
@@ -135,7 +135,14 @@ export function LastPaidEditorModal({ customer, onClose }: { customer: Customer 
         </div>
       </label>
       <p className="mt-3 text-sm text-muted-foreground">
-        {previewIso ? <span className="font-medium text-foreground">{formatDate(previewIso)}</span> : "Để trống rồi lưu nếu muốn xóa ngày."}
+        {previewIso ? (
+          <>
+            Sẽ lưu là <span className="font-medium text-foreground">{formatDate(previewIso)}</span>
+            <span className="text-muted-foreground"> · UTC+7</span>
+          </>
+        ) : (
+          "Để trống rồi lưu nếu muốn xóa ngày."
+        )}
       </p>
       {!canEdit && <ReadOnlyHint />}
       <ErrorMessage error={mutation.error} />
