@@ -159,7 +159,7 @@ export function ModelCallLogTable({ data, loading, page, onPageChange }: Props) 
             <th className="w-[9.5rem] px-5 py-4 font-medium">Thời gian</th>
             <th className="w-[10rem] px-5 py-4 font-medium">Khách hàng</th>
             <th className="w-[9.5rem] px-5 py-4 font-medium">Model</th>
-            <th className="px-5 py-4 font-medium">Text / context gửi đi</th>
+            <th className="w-[28rem] px-5 py-4 font-medium">Text / context gửi đi</th>
             <th className="w-[13rem] px-5 py-4 font-medium">Response</th>
             <th className="w-[8.5rem] px-5 py-4 font-medium">Kết quả</th>
           </tr>

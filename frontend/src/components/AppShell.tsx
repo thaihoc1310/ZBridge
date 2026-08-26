@@ -143,7 +143,7 @@ export function AppShell() {
             ))}
           </nav>
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-3">
             <ThemeToggle />
             <div ref={accountRef} className="relative hidden md:block">
               <button

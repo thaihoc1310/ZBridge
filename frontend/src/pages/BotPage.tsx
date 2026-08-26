@@ -49,11 +49,28 @@ export function BotPage() {
         </div>
         {bot?.last_error && <div className="mt-5 rounded-xl border border-danger-border bg-danger-bg p-4 text-sm text-danger-fg"><strong>Lỗi gần nhất:</strong> {bot.last_error}</div>}
       </section>
-      <aside className="dot-grid relative overflow-hidden rounded-3xl bg-inverse p-7 text-inverse-fg shadow-xl sm:p-9">
-        <div className="absolute -right-16 -top-16 h-52 w-52 rounded-full bg-accent/25 blur-[85px]" />
-        <Bot className="relative h-9 w-9 text-blue-400" /><h3 className="relative mt-8 font-display text-3xl">Session an toàn, vận hành liền mạch.</h3><p className="relative mt-4 text-sm leading-relaxed text-inverse-fg/70">Credential Zalo được mã hóa trong persistent volume và không bao giờ được gửi về trình duyệt.</p>
-        <div className="relative mt-8 space-y-3 text-sm"><p className="flex items-center gap-3"><ShieldCheck className="h-4 w-4 text-emerald-400" />AES-256-GCM encrypted at rest</p><p className="flex items-center gap-3"><UserRound className="h-4 w-4 text-blue-400" />Một account trong Phase 1</p></div>
-        {canDisconnect && <Button variant="ghost" className="relative mt-10 w-full border border-white/10 text-inverse-fg/70 hover:bg-card/10 hover:text-inverse-fg" disabled={!bot?.session_active} onClick={() => { if (confirm("Đăng xuất bot sẽ xóa session đã lưu. Tiếp tục?")) action.mutate("disconnect"); }}><LogOut className="h-4 w-4" />Đăng xuất bot</Button>}
+      <aside className="relative overflow-hidden rounded-2xl border border-border bg-card p-6 shadow-card sm:p-7">
+        <div className="absolute -right-16 -top-16 h-52 w-52 rounded-full bg-accent/10 blur-[85px]" />
+        <Bot className="relative h-8 w-8 text-accent" />
+        <h3 className="relative mt-6 font-display text-2xl">Session an toàn, vận hành liền mạch.</h3>
+        <p className="relative mt-3 text-sm leading-relaxed text-muted-foreground">Credential Zalo được mã hóa trong persistent volume và không bao giờ được gửi về trình duyệt.</p>
+        <div className="relative mt-6 space-y-3 text-sm">
+          <p className="flex items-center gap-3"><ShieldCheck className="h-4 w-4 text-success-fg" />AES-256-GCM encrypted at rest</p>
+          <p className="flex items-center gap-3"><UserRound className="h-4 w-4 text-accent" />Một account trong Phase 1</p>
+        </div>
+        {canDisconnect && (
+          <Button
+            variant="ghost"
+            className="relative mt-8 w-full border border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+            disabled={!bot?.session_active}
+            onClick={() => {
+              if (confirm("Đăng xuất bot sẽ xóa session đã lưu. Tiếp tục?")) action.mutate("disconnect");
+            }}
+          >
+            <LogOut className="h-4 w-4" />
+            Đăng xuất bot
+          </Button>
+        )}
       </aside>
     </div>
     <Modal open={qrOpen} onClose={() => setQrOpen(false)} title="Quét mã QR bằng Zalo" description="Mở Zalo trên điện thoại → biểu tượng QR → quét mã để xác thực bot.">

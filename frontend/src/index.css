@@ -49,41 +49,41 @@
 
 .dark {
   color-scheme: dark;
-  --background: 11 18 32;
-  --foreground: 232 238 248;
-  --muted: 26 36 54;
-  --muted-foreground: 148 163 184;
+  --background: 0 0 0;
+  --foreground: 244 244 245;
+  --muted: 24 24 24;
+  --muted-foreground: 161 161 170;
   --accent: 59 130 246;
   --accent-secondary: 96 165 250;
-  --accent-soft: 22 48 86;
-  --border: 42 58 82;
-  --card: 18 26 43;
-  --input: 22 32 51;
-  --popover: 22 32 51;
-  --inverse: 7 13 24;
-  --inverse-fg: 232 238 248;
-  --danger-bg: 62 24 32;
+  --accent-soft: 23 23 23;
+  --border: 38 38 38;
+  --card: 17 17 17;
+  --input: 20 20 20;
+  --popover: 17 17 17;
+  --inverse: 0 0 0;
+  --inverse-fg: 244 244 245;
+  --danger-bg: 40 16 16;
   --danger-fg: 252 165 165;
-  --danger-border: 127 45 55;
-  --success-bg: 16 48 42;
+  --danger-border: 88 32 32;
+  --success-bg: 12 36 28;
   --success-fg: 110 231 183;
-  --success-border: 22 92 74;
-  --warning-bg: 58 42 16;
+  --success-border: 20 64 48;
+  --warning-bg: 42 28 8;
   --warning-fg: 252 211 77;
-  --warning-border: 120 80 20;
-  --info-bg: 18 42 74;
+  --warning-border: 88 56 16;
+  --info-bg: 16 28 48;
   --info-fg: 147 197 253;
-  --info-border: 37 78 130;
-  --code-bg: 15 23 42;
-  --code-fg: 203 213 225;
+  --info-border: 32 56 96;
+  --code-bg: 12 12 12;
+  --code-fg: 212 212 216;
   --code-key: 125 211 252;
   --code-string: 110 231 183;
   --code-number: 252 211 77;
   --code-keyword: 196 181 253;
-  --code-punct: 100 116 139;
-  --shadow-card: 0 8px 28px rgba(0, 0, 0, 0.35);
-  --shadow-card-hover: 0 20px 40px rgba(0, 0, 0, 0.45);
-  --scrollbar: 71 85 105;
+  --code-punct: 113 113 122;
+  --shadow-card: 0 8px 28px rgba(0, 0, 0, 0.55);
+  --shadow-card-hover: 0 20px 40px rgba(0, 0, 0, 0.7);
+  --scrollbar: 64 64 64;
 }
 
 * { box-sizing: border-box; }

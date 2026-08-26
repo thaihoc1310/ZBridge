@@ -11,7 +11,7 @@ export type Theme = "light" | "dark";
 
 const STORAGE_KEY = "zbridge-theme";
 const LIGHT_THEME_COLOR = "#fafafa";
-const DARK_THEME_COLOR = "#0b1220";
+const DARK_THEME_COLOR = "#000000";
 
 function readStoredTheme(): Theme {
   try {
