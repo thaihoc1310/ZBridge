@@ -95,9 +95,10 @@ export function BulkDebtReminderSection() {
             <strong>Chỉ ghi đè lịch gửi.</strong> Nội dung nhắc cuối cùng và
             cấu hình riêng của từng khách hàng được giữ nguyên. Lịch tự hoạt
             động khi khách còn nợ và có Google Sheet; khi đã thanh toán thì tạm
-            ngừng nhưng không mất cấu hình. Lịch rơi vào mùng 1 hoặc ngày rằm
-            âm lịch sẽ tự lùi sang ngày hôm sau; dịp Tết tạm dừng từ 28 tháng
-            Chạp đến hết mùng 1 tháng Hai, bắt đầu gửi lại từ mùng 2 tháng Hai;
+            ngừng nhưng không mất cấu hình. Lịch rơi vào mùng 1 đến hết mùng 8
+            hoặc ngày rằm âm lịch sẽ tự lùi sang ngày hợp lệ tiếp theo; dịp Tết
+            tạm dừng từ 28 tháng Chạp đến hết tháng Giêng, kết hợp quy tắc trên
+            bot bắt đầu gửi lại từ mùng 9 tháng Hai;
             ngày Giỗ Tổ Hùng Vương (10/03 âm lịch) và các ngày 01/01, 30/04,
             01/05, 02/09 dương lịch cũng không gửi.
           </div>

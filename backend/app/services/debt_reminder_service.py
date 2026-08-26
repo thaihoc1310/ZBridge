@@ -29,18 +29,22 @@ def _as_utc(value: datetime) -> datetime:
 def is_debt_reminder_blackout(value: date) -> bool:
     """Return whether a Vietnam-local date is excluded from debt reminders.
 
-    Fixed solar holidays are excluded. In the lunar calendar, besides every
-    mùng 1, ngày rằm and Giỗ Tổ Hùng Vương (10/03), the Tết break runs
-    continuously from 28 tháng Chạp through mùng 1 tháng Hai (inclusive).
-    Reminders resume on mùng 2 tháng Hai.
+    Fixed solar holidays are excluded. In the lunar calendar, the first eight
+    days of every month, ngày rằm and Giỗ Tổ Hùng Vương (10/03) are excluded.
+    The longer Tết break runs continuously from 28 tháng Chạp through the end
+    of tháng Giêng; combined with the monthly rule, reminders resume on mùng 9
+    tháng Hai.
     """
     if (value.month, value.day) in SOLAR_DEBT_REMINDER_BLACKOUTS:
         return True
     lunar = solar_to_lunar(value)
-    in_tet_break = (lunar.month == 12 and lunar.day >= 28) or lunar.month == 1 or (
-        lunar.month == 2 and lunar.day == 1
+    in_tet_break = (lunar.month == 12 and lunar.day >= 28) or lunar.month == 1
+    return (
+        in_tet_break
+        or 1 <= lunar.day <= 8
+        or lunar.day == 15
+        or (lunar.month, lunar.day) == (3, 10)
     )
-    return in_tet_break or lunar.day in {1, 15} or (lunar.month, lunar.day) == (3, 10)
 
 
 def defer_debt_reminder(value: datetime) -> datetime:
