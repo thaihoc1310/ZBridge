@@ -74,6 +74,15 @@ button, input, textarea, select { font: inherit; }
   .app-scrollbar::-webkit-scrollbar-corner {
     background: transparent;
   }
+  .app-scrollbar-dark {
+    scrollbar-color: #475569 transparent;
+  }
+  .app-scrollbar-dark::-webkit-scrollbar-thumb {
+    background-color: #475569;
+  }
+  .app-scrollbar-dark::-webkit-scrollbar-thumb:hover {
+    background-color: #64748b;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
