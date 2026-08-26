@@ -9,7 +9,8 @@
 # stopped working is worse than no backup at all.
 #
 # Usage:  ./deploy/backup.sh [destination-dir]
-# Cron:   0 */6 * * * cd /opt/zbridge && ./deploy/backup.sh >> /var/log/zbridge-backup.log 2>&1
+# Cron (host-timezone independent; `%` must stay escaped in crontab):
+#   * * * * * vn_time="$(TZ=Asia/Ho_Chi_Minh date +\%H:\%M)"; case "$vn_time" in 09:00|11:00|14:00|16:00|18:00) cd /opt/zbridge && ./deploy/backup.sh >> /var/log/zbridge-backup.log 2>&1 ;; esac
 set -euo pipefail
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"

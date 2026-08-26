@@ -297,12 +297,15 @@ crontab -e
 ```
 
 ```cron
-0 */6 * * * cd /opt/zbridge && ./deploy/backup.sh >> /var/log/zbridge-backup.log 2>&1
+* * * * * vn_time="$(TZ=Asia/Ho_Chi_Minh date +\%H:\%M)"; case "$vn_time" in 09:00|11:00|14:00|16:00|18:00) cd /opt/zbridge && ./deploy/backup.sh >> /var/log/zbridge-backup.log 2>&1 ;; esac
 ```
 
-Sáu tiếng một lần là đủ: dữ liệu do người nhập tay nên thay đổi chậm, mỗi dump chỉ
-cỡ vài MB, và `pg_dump` dùng snapshot MVCC nên không lock, không downtime. Mất tối
-đa 6 tiếng nghĩa là xấu nhất một khách vừa trả tiền bị đánh dấu còn nợ — sửa tay được.
+Trong giờ làm việc, backup chạy vào 09:00, 11:00, 14:00, 16:00 và 18:00
+(giờ Việt Nam). Cron kiểm tra `Asia/Ho_Chi_Minh` trực tiếp nên lịch không phụ thuộc
+timezone của máy chủ; ngoài các mốc này chỉ chạy phép kiểm tra thời gian và không
+khởi động Docker hay tạo backup. Dấu `%` trong định dạng `date` phải được giữ escape
+thành `\%`, nếu không cron sẽ cắt command tại đó.
+Mỗi dump chỉ cỡ vài MB, và `pg_dump` dùng snapshot MVCC nên không lock, không downtime.
 
 Script từ chối giữ dump nhỏ bất thường, và **backup lỗi thì bắn cảnh báo CRITICAL
 về Telegram**. Kiểm tra định kỳ:
