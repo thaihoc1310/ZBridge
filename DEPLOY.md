@@ -241,7 +241,7 @@ nên OpenAI không lưu lại.
 
 Tính năng thứ hai trong cùng modal **Tag tên tự động** của từng khách hàng, mặc
 định **tắt**. Khi bật, tin nhắn của người **không** nằm trong danh sách tag mà
-chứa token `giá`, hoặc cụm `bao nhiêu tiền` / `bnh tiền`, sẽ được gửi cho AI hỏi
+chứa token `giá`, `bgia`, `baogia`, hoặc cụm `bao gia`, sẽ được gửi cho AI hỏi
 xem có phải hỏi giá thật không. Chỉ tag khi AI trả `NEED_RESPONSE` với confidence
 ≥ `LLM_PRICE_CONFIDENCE` (mặc định 0.65). Người được tag lấy từ danh sách riêng,
 còn khung giờ và thời gian chờ dùng chung với tag nhắc việc.

@@ -164,7 +164,7 @@ export function BulkMentionSection({ canEdit }: { canEdit: boolean }) {
               <FeatureSection
                 icon={Tag}
                 title="Tag khi khách hỏi giá"
-                hint="Khách nhắn có từ “giá” hoặc “bao nhiêu tiền” thì AI đọc xem có phải hỏi giá thật không, đúng mới tag. AI lỗi thì bỏ qua, không tag."
+                hint="Khách nhắn có “giá”, “bgia”, “baogia” hoặc “bao gia” thì AI đọc xem có phải hỏi giá thật không, đúng mới tag. AI lỗi thì bỏ qua, không tag."
                 enabled={priceEnabled}
                 onToggle={() => { setPriceEnabled((on) => !on); setError(null); }}
                 disabled={!canEdit}

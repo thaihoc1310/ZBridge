@@ -167,7 +167,7 @@ export function MentionAutomationModal({
                 <br />
                 <br />
                 <strong>Tag khi khách hỏi giá:</strong> khách — người không nằm trong
-                danh sách tag — nhắn câu có từ “giá” hoặc “bao nhiêu tiền” thì AI đọc
+                danh sách tag — nhắn câu có “giá”, “bgia”, “baogia” hoặc “bao gia” thì AI đọc
                 xem có phải đang hỏi giá thật không. “Đánh giá”, “giá trị”, “giá đỡ”…
                 sẽ bị loại. Chỉ khi AI đủ chắc mới tag người phụ trách báo giá. Ngược
                 lại với trên: AI lỗi thì <strong>không tag ai</strong>, vì không có ai
@@ -209,7 +209,7 @@ export function MentionAutomationModal({
             <FeatureSection
               icon={Tag}
               title="Tag khi khách hỏi giá"
-              hint="Khách nhắn có từ “giá” hoặc “bao nhiêu tiền” thì AI đọc xem có phải hỏi giá thật không, đúng mới tag. AI lỗi thì bỏ qua, không tag."
+              hint="Khách nhắn có “giá”, “bgia”, “baogia” hoặc “bao gia” thì AI đọc xem có phải hỏi giá thật không, đúng mới tag. AI lỗi thì bỏ qua, không tag."
               enabled={priceInquiryEnabled}
               onToggle={() => { setPriceInquiryEnabled((on) => !on); setFormError(null); }}
               disabled={!canEdit}

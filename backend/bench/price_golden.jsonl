@@ -1,7 +1,7 @@
 {"id": "ask-quote", "expect": "TAG", "text": "Báo giá cho anh cái này với", "note": "Yêu cầu báo giá trực tiếp."}
-{"id": "ask-howmuch", "expect": "TAG", "text": "Cái này bao nhiêu tiền v anh", "note": "Hỏi giá, không có từ giá."}
-{"id": "ask-bnh", "expect": "TAG", "text": "bnh tiền v shop", "note": "Viết tắt."}
-{"id": "ask-vague", "expect": "TAG", "text": "giá như nào thế e", "note": "Hỏi giá kiểu nói chuyện."}
+{"id": "ask-bgia", "expect": "TAG", "text": "bgia cái này giúp anh", "note": "Viết tắt bgia."}
+{"id": "ask-baogia", "expect": "TAG", "text": "baogia giúp mình mã này", "note": "Viết liền không dấu."}
+{"id": "ask-bao-gia", "expect": "TAG", "text": "bao gia mã này giúp a", "note": "Viết tách không dấu."}
 {"id": "ask-chase", "expect": "TAG", "text": "Bên em gửi báo giá cho anh chưa nhỉ, anh chờ từ hôm qua", "note": "Giục báo giá đã hứa."}
 {"id": "ask-compare", "expect": "TAG", "text": "loại 20 lít giá bao nhiêu so với loại 10 lít v em", "note": "Hỏi giá so sánh."}
 {"id": "ask-ship", "expect": "TAG", "text": "ship về Đà Nẵng thì giá thế nào em", "note": "Hỏi giá vận chuyển."}

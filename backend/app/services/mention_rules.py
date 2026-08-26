@@ -67,10 +67,10 @@ def content_without_mentions(
 
 #: A bare "giá" is deliberately loose — it also catches "đánh giá", "giá trị",
 #: "giá đỗ" — because the classifier is what separates a real quote request from
-#: an incidental word. Tone marks survive normalisation, so "già" and "giả" do
-#: not match.
-PRICE_KEYWORD_TOKENS = ("giá",)
-PRICE_KEYWORD_PHRASES = ("bao nhiêu tiền", "bnh tiền")
+#: an incidental word. The other forms mirror shorthand customers actually use.
+#: Tone marks survive normalisation, so "già" and "giả" do not match.
+PRICE_KEYWORD_TOKENS = ("giá", "bgia", "baogia")
+PRICE_KEYWORD_PHRASES = ("bao gia",)
 
 
 def text_mentions_price(content: str, mention_texts: Iterable[str] = ()) -> bool:
@@ -86,7 +86,8 @@ def text_mentions_price(content: str, mention_texts: Iterable[str] = ()) -> bool
     normalized = normalize_phrase(content)
     if not normalized:
         return False
-    if any(phrase in normalized for phrase in PRICE_KEYWORD_PHRASES):
+    padded = f" {normalized} "
+    if any(f" {phrase} " in padded for phrase in PRICE_KEYWORD_PHRASES):
         return True
     return bool(set(normalized.split()) & set(PRICE_KEYWORD_TOKENS))
 

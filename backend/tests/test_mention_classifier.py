@@ -34,6 +34,7 @@ from app.services.mention_classifier import (
     MentionReasonCode,
     _ModelResult,
 )
+from app.services.mention_rules import text_mentions_price
 
 
 async def _database():
@@ -686,6 +687,25 @@ async def test_price_keyword_from_a_customer_queues_the_sales_list() -> None:
     await engine.dispose()
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        "giá cái này thế nào em",
+        "bgia giúp anh mã này",
+        "baogia giúp anh mã này",
+        "bao gia giúp anh mã này",
+        "BÁO GIÁ cho anh cái này",
+    ],
+)
+def test_price_gate_accepts_only_configured_keyword_forms(content: str) -> None:
+    assert text_mentions_price(content)
+
+
+@pytest.mark.parametrize("content", ["cái này bao nhiêu tiền", "bnh tiền v shop"])
+def test_price_gate_rejects_removed_money_phrases(content: str) -> None:
+    assert not text_mentions_price(content)
+
+
 async def test_price_trigger_ignores_staff_and_messages_without_the_keyword() -> None:
     engine, sessions = await _price_database()
     async with sessions() as db:
@@ -745,7 +765,7 @@ async def test_price_inquiry_tags_only_on_a_confident_yes(monkeypatch) -> None:
         monkeypatch.setattr(mention_classifier, "classify_payload", classify)
         async with sessions() as db:
             response = await schedule_from_incoming_event(
-                db, _plain_event(f"ask-{key}", "cái này bao nhiêu tiền v anh")
+                db, _plain_event(f"ask-{key}", "bgia cái này giúp anh")
             )
         claimed = await mention_classifier.claim_pending_classifications()
         await mention_classifier.process_classification(*claimed[0])
