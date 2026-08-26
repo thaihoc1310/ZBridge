@@ -41,8 +41,8 @@ CLASSIFICATION_RETRY_DELAY = timedelta(minutes=5)
 #: while still never handing a client to a loop it was not created on. The
 #: provider is fixed at process start, so one cached client per loop is enough.
 _clients: dict[asyncio.AbstractEventLoop, AsyncOpenAI] = {}
-PROMPT_VERSION = "mention-response-v5"
-PRICE_PROMPT_VERSION = "price-inquiry-v6"
+PROMPT_VERSION = "mention-response-v6"
+PRICE_PROMPT_VERSION = "price-inquiry-v7"
 LOCAL_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 MAX_CLASSIFICATIONS_PER_TICK = 20
 MAX_DUE_RECHECKS_PER_TICK = 10
@@ -58,7 +58,12 @@ SHARED_HANDOFF_RULES = """- A later participant supersedes an original target wh
   same work also supersedes the earlier request to the original target. Do not return
   NEED_RESPONSE for the original target unless the conversation explicitly requires both
   participants to act or clearly refers to separate tasks. Account for casual wording and
-  minor typos when deciding whether the work is the same."""
+  minor typos when deciding whether the work is the same.
+- A heart or like shows that participant has seen or acknowledged that message.
+- If the same participant then sends an image, file or textual response, or the requester
+  continues the discussion with them, that is evidence they have taken over or handled it.
+- A reaction that happened before the message identified by current_message_id cannot
+  acknowledge the new task."""
 
 
 CLASSIFIER_PROMPT = f"""You classify, separately for each mentioned target, whether that
@@ -198,9 +203,7 @@ async def release_overdue_classifications() -> int:
                 await db.scalars(
                     select(MentionFollowup).where(
                         MentionFollowup.status == MentionFollowupStatus.CLASSIFYING,
-                        func.coalesce(
-                            MentionFollowup.claimed_at, MentionFollowup.created_at
-                        )
+                        func.coalesce(MentionFollowup.claimed_at, MentionFollowup.created_at)
                         < now - deadline,
                     )
                 )
@@ -209,9 +212,7 @@ async def release_overdue_classifications() -> int:
         if not overdue:
             return 0
         retrying = [
-            followup
-            for followup in overdue
-            if followup.trigger == MentionFollowupTrigger.MENTION
+            followup for followup in overdue if followup.trigger == MentionFollowupTrigger.MENTION
         ]
         dropped = [
             followup
@@ -220,9 +221,7 @@ async def release_overdue_classifications() -> int:
         ]
         for followup in retrying:
             followup.status = MentionFollowupStatus.PENDING
-            followup.due_at = max(
-                _aware(followup.due_at), now + CLASSIFICATION_RETRY_DELAY
-            )
+            followup.due_at = max(_aware(followup.due_at), now + CLASSIFICATION_RETRY_DELAY)
             followup.evaluated_due_at = None
             followup.claimed_at = None
             followup.attempt_count = 0
@@ -303,9 +302,7 @@ async def claim_pending_classifications() -> list[tuple[uuid.UUID, datetime]]:
                 .where(
                     MentionFollowup.status == MentionFollowupStatus.PENDING,
                     MentionFollowup.due_at <= now,
-                    MentionFollowup.evaluated_due_at.is_distinct_from(
-                        MentionFollowup.due_at
-                    ),
+                    MentionFollowup.evaluated_due_at.is_distinct_from(MentionFollowup.due_at),
                 )
                 .values(evaluated_due_at=MentionFollowup.due_at)
             )
@@ -334,17 +331,11 @@ async def claim_pending_classifications() -> list[tuple[uuid.UUID, datetime]]:
         return [(job.id, now) for job in jobs]
 
 
-async def _prepare_job(
-    followup_id: uuid.UUID, claimed_at: datetime
-) -> _ClassificationJob | None:
+async def _prepare_job(followup_id: uuid.UUID, claimed_at: datetime) -> _ClassificationJob | None:
     async with SessionLocal() as db:
         followup = await db.scalar(
             select(MentionFollowup)
-            .options(
-                selectinload(MentionFollowup.automation).selectinload(
-                    MentionAutomation.group
-                )
-            )
+            .options(selectinload(MentionFollowup.automation).selectinload(MentionAutomation.group))
             .where(MentionFollowup.id == followup_id)
         )
         if (
@@ -407,26 +398,23 @@ async def _prepare_job(
         messages = [source, *recent_messages]
         messages.sort(key=lambda item: (_aware(item.sent_at), _aware(item.created_at)))
         target_labels = {
-            user_id: f"T{index + 1}"
-            for index, user_id in enumerate(followup.target_user_ids)
+            user_id: f"T{index + 1}" for index, user_id in enumerate(followup.target_user_ids)
         }
-        participant_labels: dict[str, str] = {}
+        participant_labels = _participant_labels(messages, target_labels)
+        user_labels = {**participant_labels, **target_labels}
         conversation = []
         for message in messages:
             sender_key = message.sender_id or "unknown"
-            sender_label = target_labels.get(sender_key)
-            if sender_label is None:
-                if sender_key not in participant_labels:
-                    participant_labels[sender_key] = f"P{len(participant_labels) + 1}"
-                sender_label = participant_labels[sender_key]
-            conversation.append(
-                {
-                    "message_id": message.message_id,
-                    "sent_at": _aware(message.sent_at).isoformat(),
-                    "sender": sender_label,
-                    "text": _semantic_text(message, target_labels),
-                }
-            )
+            conversation_message = {
+                "message_id": message.message_id,
+                "sent_at": _aware(message.sent_at).isoformat(),
+                "sender": user_labels[sender_key],
+                "text": _semantic_text(message, user_labels),
+            }
+            reactions = _semantic_reactions(message, user_labels)
+            if reactions:
+                conversation_message["reactions"] = reactions
+            conversation.append(conversation_message)
         is_price = followup.trigger == MentionFollowupTrigger.PRICE_INQUIRY
         customer_id = await db.scalar(
             select(Customer.id).where(Customer.zalo_group_id == automation.zalo_group_id)
@@ -452,9 +440,31 @@ async def _prepare_job(
         )
 
 
-def _semantic_text(
-    message: MentionContextMessage, target_labels: dict[str, str]
-) -> str:
+def _participant_labels(
+    messages: list[MentionContextMessage], target_labels: dict[str, str]
+) -> dict[str, str]:
+    """Give every non-target sender or mention one stable anonymous identity.
+
+    Build the map before serializing the conversation so a person first seen in
+    a mention receives the same P label when they speak in a later message.
+    """
+    labels: dict[str, str] = {}
+
+    def assign(user_id: str) -> None:
+        if not user_id or user_id in target_labels or user_id in labels:
+            return
+        labels[user_id] = f"P{len(labels) + 1}"
+
+    for message in messages:
+        assign(message.sender_id or "unknown")
+        for mention in message.mentions or []:
+            assign(str(mention.get("user_id") or ""))
+        for reaction in message.reactions or []:
+            assign(str(reaction.get("reactor_id") or ""))
+    return labels
+
+
+def _semantic_text(message: MentionContextMessage, user_labels: dict[str, str]) -> str:
     content = message.content
     mentions = list(message.mentions or [])
     replacements: list[tuple[str, str]] = []
@@ -463,13 +473,37 @@ def _semantic_text(
         if not mention_text:
             continue
         user_id = str(mention.get("user_id") or "")
-        label = target_labels.get(user_id, "OTHER")
+        label = user_labels.get(user_id, "OTHER")
         replacements.append((mention_text, f"<MENTION:{label}>"))
     for mention_text, replacement in sorted(
         replacements, key=lambda item: len(item[0]), reverse=True
     ):
         content = content.replace(mention_text, replacement, 1)
     return content
+
+
+def _semantic_reactions(
+    message: MentionContextMessage, user_labels: dict[str, str]
+) -> list[dict[str, str]]:
+    """Expose only the anonymous identity, kind and event time to the model."""
+    result: list[dict[str, str]] = []
+    for reaction in sorted(
+        message.reactions or [],
+        key=lambda item: str(item.get("reacted_at") or ""),
+    ):
+        reactor_id = str(reaction.get("reactor_id") or "")
+        kind = str(reaction.get("reaction") or "")
+        reacted_at = str(reaction.get("reacted_at") or "")
+        if not reactor_id or kind not in {"heart", "like"} or not reacted_at:
+            continue
+        result.append(
+            {
+                "sender": user_labels.get(reactor_id, "OTHER"),
+                "reaction": kind,
+                "reacted_at": reacted_at,
+            }
+        )
+    return result
 
 
 @dataclass(frozen=True)
@@ -600,9 +634,7 @@ async def _finish_model_call(
     output_tokens: int | None = None,
     latency_ms: int | None = None,
 ) -> None:
-    row = await db.scalar(
-        select(ModelCallLog).where(ModelCallLog.id == row_id).with_for_update()
-    )
+    row = await db.scalar(select(ModelCallLog).where(ModelCallLog.id == row_id).with_for_update())
     if row is None:
         return
     row.status = status
@@ -632,10 +664,7 @@ async def process_classification(followup_id: uuid.UUID, claimed_at: datetime) -
         )
         async with SessionLocal() as db:
             followup = await _reload_claim(db, job)
-            will_retry = (
-                followup is not None
-                and followup.trigger == MentionFollowupTrigger.MENTION
-            )
+            will_retry = followup is not None and followup.trigger == MentionFollowupTrigger.MENTION
             await _finish_model_call(
                 db,
                 model_call_id,
@@ -643,7 +672,9 @@ async def process_classification(followup_id: uuid.UUID, claimed_at: datetime) -
                 outcome=(
                     "RETRY_CLASSIFICATION"
                     if will_retry
-                    else "SAFE_FALLBACK_SKIP" if followup is not None else "CLAIM_LOST"
+                    else "SAFE_FALLBACK_SKIP"
+                    if followup is not None
+                    else "CLAIM_LOST"
                 ),
                 error_type=type(exc).__name__,
                 error_message=str(exc)[:4000],
@@ -787,9 +818,7 @@ async def process_classification(followup_id: uuid.UUID, claimed_at: datetime) -
         )
 
 
-def _should_skip(
-    trigger: MentionFollowupTrigger, decision: MentionDecision | None
-) -> bool:
+def _should_skip(trigger: MentionFollowupTrigger, decision: MentionDecision | None) -> bool:
     """Decide whether this target drops out of the follow-up.
 
     Both triggers fail closed. A reminder survives only on an explicit,
@@ -869,9 +898,7 @@ async def _newer_trigger_message(
             ):
                 return message
         else:
-            mentioned = {
-                str(mention.get("user_id") or "") for mention in (message.mentions or [])
-            }
+            mentioned = {str(mention.get("user_id") or "") for mention in (message.mentions or [])}
             if mentioned & targets and message.sender_id not in targets:
                 return message
     return None
@@ -879,9 +906,7 @@ async def _newer_trigger_message(
 
 async def _reload_claim(db, job: _ClassificationJob) -> MentionFollowup | None:
     followup = await db.scalar(
-        select(MentionFollowup)
-        .where(MentionFollowup.id == job.followup_id)
-        .with_for_update()
+        select(MentionFollowup).where(MentionFollowup.id == job.followup_id).with_for_update()
     )
     if (
         followup is None
@@ -903,9 +928,7 @@ async def _resolve_without_model(
     now = datetime.now(UTC)
     if followup.trigger == MentionFollowupTrigger.MENTION:
         followup.status = MentionFollowupStatus.PENDING
-        followup.due_at = max(
-            _aware(followup.due_at), now + CLASSIFICATION_RETRY_DELAY
-        )
+        followup.due_at = max(_aware(followup.due_at), now + CLASSIFICATION_RETRY_DELAY)
         followup.evaluated_due_at = None
         followup.processed_at = None
     else:

@@ -53,6 +53,64 @@ ACTIVE_FOLLOWUP_STATUSES = (
 ACKNOWLEDGING_REACTIONS = {"heart", "like"}
 
 
+async def _attach_reaction_to_context(
+    db: AsyncSession,
+    automation_id: uuid.UUID,
+    event: IncomingGroupReaction,
+    *,
+    occurred_at: datetime,
+) -> bool:
+    """Attach one reaction to its extant message, once.
+
+    zca-js may identify a reacted message by gMsgID on desktop but only cMsgID
+    on mobile. Normal messages retain every alias, so matching either is enough.
+    Keeping the reaction inside the message also gives both the exact same
+    retention lifecycle.
+    """
+    if not event.event_id or not event.target_message_ids:
+        return False
+
+    context_messages = list(
+        (
+            await db.scalars(
+                select(MentionContextMessage)
+                .where(MentionContextMessage.automation_id == automation_id)
+                .order_by(MentionContextMessage.sent_at.desc())
+                .with_for_update()
+            )
+        ).all()
+    )
+    for message in context_messages:
+        if any(
+            str(reaction.get("event_id") or "") == event.event_id
+            for reaction in (message.reactions or [])
+        ):
+            return False
+
+    target_ids = set(event.target_message_ids)
+    target_message = next(
+        (
+            message
+            for message in context_messages
+            if target_ids.intersection({message.message_id, *(message.message_aliases or [])})
+        ),
+        None,
+    )
+    if target_message is None:
+        return False
+
+    target_message.reactions = [
+        *(target_message.reactions or []),
+        {
+            "event_id": event.event_id,
+            "reactor_id": event.reactor_id,
+            "reaction": event.reaction,
+            "reacted_at": occurred_at.isoformat(),
+        },
+    ]
+    return True
+
+
 def _acknowledge_target(
     followups: list[MentionFollowup],
     target_user_id: str,
@@ -65,9 +123,7 @@ def _acknowledge_target(
     """Remove one person from every active loop currently waiting for them."""
     acknowledged = 0
     for followup in followups:
-        started_at = started_at_by_source.get(
-            followup.source_message_id, followup.created_at
-        )
+        started_at = started_at_by_source.get(followup.source_message_id, followup.created_at)
         if started_at.tzinfo is None:
             started_at = started_at.replace(tzinfo=UTC)
         if started_at > occurred_at:
@@ -169,6 +225,7 @@ async def acknowledge_from_reaction(
             ZaloGroup.is_available.is_(True),
             MentionAutomation.enabled.is_(True),
         )
+        .with_for_update()
     )
     if automation is None:
         return IncomingEventResponse(scheduled=False)
@@ -189,6 +246,13 @@ async def acknowledge_from_reaction(
     occurred_at = event.reacted_at or now
     if occurred_at.tzinfo is None:
         occurred_at = occurred_at.replace(tzinfo=UTC)
+    context_changed = await _attach_reaction_to_context(
+        db,
+        automation.id,
+        event,
+        occurred_at=occurred_at,
+    )
+    started_at_by_source = await _started_at_by_source(db, followups)
     acknowledged = _acknowledge_target(
         followups,
         event.reactor_id,
@@ -198,8 +262,19 @@ async def acknowledge_from_reaction(
             automation.active_windows,
         ),
         occurred_at=occurred_at,
-        started_at_by_source=await _started_at_by_source(db, followups),
+        started_at_by_source=started_at_by_source,
     )
+    if context_changed:
+        # A delayed/replayed old reaction belongs in history, but must not
+        # invalidate a loop whose source message did not exist at that time.
+        relevant_followups = []
+        for followup in followups:
+            started_at = started_at_by_source.get(followup.source_message_id, followup.created_at)
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=UTC)
+            if started_at <= occurred_at:
+                relevant_followups.append(followup)
+        _invalidate_for_new_context(relevant_followups)
     await db.commit()
     if acknowledged:
         logger.info(
@@ -208,6 +283,13 @@ async def acknowledge_from_reaction(
             event.group_id,
             event.reactor_id,
             acknowledged,
+            event.reaction,
+        )
+    if context_changed:
+        logger.info(
+            "MENTION_REACTION_CONTEXT_ATTACHED group_id=%s reactor_id=%s reaction=%s",
+            event.group_id,
+            event.reactor_id,
             event.reaction,
         )
     return IncomingEventResponse(
@@ -422,6 +504,7 @@ async def schedule_from_incoming_event(
             MentionContextMessage(
                 automation_id=automation.id,
                 message_id=event.message_id,
+                message_aliases=list(dict.fromkeys([event.message_id, *event.message_aliases])),
                 sender_id=event.sender_id,
                 sender_display_name=event.sender_display_name,
                 content=event.content,
@@ -663,8 +746,7 @@ def _price_inquiry_targets(
     return [
         target
         for target in automation.targets
-        if target.kind == MentionTargetKind.PRICE
-        and target.zalo_user_id not in active_target_ids
+        if target.kind == MentionTargetKind.PRICE and target.zalo_user_id not in active_target_ids
     ]
 
 

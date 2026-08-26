@@ -62,6 +62,8 @@ export type IncomingGroupMessageEvent = {
   event_type: "message";
   group_id: string;
   message_id: string;
+  /** Every non-zero zca-js identifier for matching later reaction events. */
+  message_aliases: string[];
   sender_id: string;
   sender_display_name: string | null;
   sent_at: string | null;
@@ -71,6 +73,10 @@ export type IncomingGroupMessageEvent = {
 
 export type IncomingGroupReactionEvent = {
   event_type: "reaction";
+  /** ID of the reaction event itself, used to make context ingestion idempotent. */
+  event_id: string | null;
+  /** gMsgID/cMsgID values of the message that received the reaction. */
+  target_message_ids: string[];
   group_id: string;
   reactor_id: string;
   reactor_display_name: string | null;

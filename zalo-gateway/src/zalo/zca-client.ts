@@ -52,6 +52,22 @@ function zaloTimestampToIso(value: string | number | null | undefined): string |
   return date && !Number.isNaN(date.getTime()) ? date.toISOString() : null;
 }
 
+export function usableZaloIds(
+  values: Array<string | number | null | undefined>,
+): string[] {
+  return [...new Set(
+    values
+      .map((value) => String(value ?? ""))
+      .filter((value) => value !== "" && value !== "0"),
+  )];
+}
+
+function firstUsableZaloId(
+  values: Array<string | number | null | undefined>,
+): string | null {
+  return usableZaloIds(values)[0] ?? null;
+}
+
 export function incomingReactionEvent(
   reaction: Reaction,
 ): IncomingGroupReactionEvent | null {
@@ -65,6 +81,15 @@ export function incomingReactionEvent(
   if (!kind || !reaction.threadId || !reaction.data.uidFrom) return null;
   return {
     event_type: "reaction",
+    // Outer IDs identify the reaction event; rMsg IDs identify its message.
+    event_id: firstUsableZaloId([
+      reaction.data.msgId,
+      reaction.data.cliMsgId,
+      reaction.data.actionId,
+    ]),
+    target_message_ids: usableZaloIds(
+      reaction.data.content.rMsg.flatMap((item) => [item.gMsgID, item.cMsgID]),
+    ),
     group_id: reaction.threadId,
     reactor_id: normalizeZaloMemberId(reaction.data.uidFrom),
     reactor_display_name: reaction.data.dName || null,
@@ -726,20 +751,20 @@ export class ZcaJsClient implements ZaloClient {
   private handleMessage(message: Message): void {
     if (message.isSelf || message.type !== ThreadType.Group) return;
     const mentions = message.data.mentions ?? [];
-    const messageId = [
+    const messageAliases = usableZaloIds([
       message.data.msgId,
       message.data.cliMsgId,
       message.data.realMsgId,
       message.data.actionId,
-    ]
-      .map((value) => String(value ?? ""))
-      .find((value) => value !== "" && value !== "0");
+    ]);
+    const messageId = messageAliases[0] ?? null;
     if (!messageId) return;
     const content = incomingMessageContent(message.data);
     const event: IncomingGroupMessageEvent = {
       event_type: "message",
       group_id: message.threadId,
       message_id: messageId,
+      message_aliases: messageAliases,
       sender_id: this.normalizeMemberId(message.data.uidFrom),
       sender_display_name: message.data.dName || null,
       sent_at: zaloTimestampToIso(message.data.ts),

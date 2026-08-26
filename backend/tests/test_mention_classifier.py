@@ -33,6 +33,8 @@ from app.services.mention_classifier import (
     MentionDecision,
     MentionReasonCode,
     _ModelResult,
+    _participant_labels,
+    _semantic_text,
 )
 from app.services.mention_rules import text_mentions_price
 
@@ -100,9 +102,7 @@ def _mention_event(message_id: str, content: str) -> IncomingGroupMessage:
 async def test_rules_skip_ack_but_keep_bare_mention_with_context() -> None:
     engine, sessions = await _database()
     async with sessions() as db:
-        skipped = await schedule_from_incoming_event(
-            db, _mention_event("ack", "cảm ơn @Abcd")
-        )
+        skipped = await schedule_from_incoming_event(db, _mention_event("ack", "cảm ơn @Abcd"))
         skipped_followup = await db.get(MentionFollowup, skipped.followup_id)
         assert skipped.scheduled is False
         assert skipped_followup.status == MentionFollowupStatus.SKIPPED
@@ -118,9 +118,7 @@ async def test_rules_skip_ack_but_keep_bare_mention_with_context() -> None:
                 content="Anh kiểm tra số liệu giúp em được không?",
             ),
         )
-        bare = await schedule_from_incoming_event(
-            db, _mention_event("bare", "@Abcd")
-        )
+        bare = await schedule_from_incoming_event(db, _mention_event("bare", "@Abcd"))
         bare_followup = await db.get(MentionFollowup, bare.followup_id)
         context = list(
             (
@@ -245,7 +243,34 @@ async def test_payload_reads_later_messages_and_identifies_target_senders(
                 sender_id="another-user",
                 sender_display_name="Lan",
                 sent_at=now - timedelta(minutes=1),
-                content="mình xử lý xong đơn này rồi anh nhé",
+                content="@Hoa cc vào mail giúp mình nhé",
+                mentions=[
+                    IncomingMention(
+                        user_id="later-user",
+                        position=0,
+                        length=4,
+                        text="@Hoa",
+                    )
+                ],
+            ),
+        )
+        await schedule_from_incoming_event(
+            db,
+            IncomingGroupMessage(
+                group_id="classifier-group",
+                message_id="mentioned-person-speaks",
+                sender_id="later-user",
+                sender_display_name="Hoa",
+                sent_at=now,
+                content="@Minh mình xử lý xong rồi nhé",
+                mentions=[
+                    IncomingMention(
+                        user_id="sender-user",
+                        position=0,
+                        length=5,
+                        text="@Minh",
+                    )
+                ],
             ),
         )
 
@@ -257,15 +282,151 @@ async def test_payload_reads_later_messages_and_identifies_target_senders(
         "target-earlier",
         "source-with-question",
         "answered-later",
+        "mentioned-person-speaks",
     ]
     assert conversation[0]["sender"] == "T1"
-    assert conversation[1]["sender"].startswith("P")
-    assert conversation[2]["sender"].startswith("P")
-    assert conversation[1]["sender"] != conversation[2]["sender"]
+    assert conversation[1]["sender"] == "P1"
+    assert conversation[2]["sender"] == "P2"
+    assert conversation[3]["sender"] == "P3"
+    assert conversation[1]["text"].startswith("<MENTION:T1>")
+    # Hoa is first seen as a mention, then speaks later: both references must use P3.
+    assert conversation[2]["text"].startswith("<MENTION:P3>")
+    assert conversation[3]["text"].startswith("<MENTION:P1>")
     async with sessions() as db:
         followup = await db.get(MentionFollowup, source.followup_id)
         assert followup.status == MentionFollowupStatus.SKIPPED
     await engine.dispose()
+
+
+async def test_payload_links_an_outsider_reaction_to_the_message_then_their_image(
+    monkeypatch,
+) -> None:
+    engine, sessions = await _database()
+    monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
+    captured: list[dict[str, object]] = []
+
+    async def classify(payload, *, model=None, prompt=None):
+        captured.append(payload)
+        return _ModelResult(
+            decisions=[
+                MentionDecision(
+                    target_id="T1",
+                    classification=MentionClassification.FYI,
+                    confidence=0.99,
+                    reason_code=MentionReasonCode.PRIOR_CONTEXT,
+                )
+            ],
+            input_tokens=1,
+            output_tokens=1,
+            latency_ms=1,
+        )
+
+    monkeypatch.setattr(mention_classifier, "classify_payload", classify)
+    now = datetime.now(UTC)
+    async with sessions() as db:
+        source = await schedule_from_incoming_event(
+            db,
+            IncomingGroupMessage(
+                group_id="classifier-group",
+                message_id="reaction-source-global",
+                message_aliases=["reaction-source-global", "reaction-source-client"],
+                sender_id="sender-user",
+                sender_display_name="Minh",
+                sent_at=now - timedelta(minutes=3),
+                content="@Helper @Abcd xử lý giúp anh",
+                mentions=[
+                    IncomingMention(
+                        user_id="helper-user",
+                        position=0,
+                        length=7,
+                        text="@Helper",
+                    ),
+                    IncomingMention(
+                        user_id="target-user",
+                        position=8,
+                        length=5,
+                        text="@Abcd",
+                    ),
+                ],
+            ),
+        )
+        attached = await acknowledge_from_reaction(
+            db,
+            IncomingGroupReaction(
+                event_type="reaction",
+                event_id="helper-heart-event",
+                target_message_ids=["0", "reaction-source-client"],
+                group_id="classifier-group",
+                reactor_id="helper-user",
+                reactor_display_name="Helper",
+                reacted_at=now - timedelta(minutes=2),
+                reaction="heart",
+            ),
+        )
+        await schedule_from_incoming_event(
+            db,
+            IncomingGroupMessage(
+                group_id="classifier-group",
+                message_id="helper-image",
+                sender_id="helper-user",
+                sender_display_name="Helper",
+                sent_at=now - timedelta(minutes=1),
+                content="[image]",
+            ),
+        )
+        assert attached.acknowledged_followups == 0
+
+    claimed = await mention_classifier.claim_pending_classifications()
+    await mention_classifier.process_classification(*claimed[0])
+
+    conversation = captured[0]["conversation"]
+    assert [message["message_id"] for message in conversation] == [
+        "reaction-source-global",
+        "helper-image",
+    ]
+    assert conversation[0]["sender"] == "P1"
+    assert conversation[0]["text"].startswith("<MENTION:P2> <MENTION:T1>")
+    assert conversation[0]["reactions"] == [
+        {
+            "sender": "P2",
+            "reaction": "heart",
+            "reacted_at": (now - timedelta(minutes=2)).isoformat(),
+        }
+    ]
+    assert conversation[1]["sender"] == "P2"
+    assert conversation[1]["text"] == "[image]"
+    async with sessions() as db:
+        followup = await db.get(MentionFollowup, source.followup_id)
+        assert followup.status == MentionFollowupStatus.SKIPPED
+    await engine.dispose()
+
+
+def test_participant_mentions_use_stable_labels_and_only_invalid_ids_use_other() -> None:
+    now = datetime.now(UTC)
+    mentioner = MentionContextMessage(
+        message_id="mentioner",
+        sender_id="sender-user",
+        content="@Hoa xử lý giúp, @Unknown xem cùng nhé",
+        mentions=[
+            {"user_id": "later-user", "text": "@Hoa"},
+            {"user_id": "", "text": "@Unknown"},
+        ],
+        sent_at=now,
+    )
+    mentioned_person = MentionContextMessage(
+        message_id="mentioned-person",
+        sender_id="later-user",
+        content="mình đang xử lý",
+        mentions=[],
+        sent_at=now + timedelta(seconds=1),
+    )
+
+    labels = _participant_labels([mentioner, mentioned_person], {})
+
+    assert labels == {"sender-user": "P1", "later-user": "P2"}
+    assert _semantic_text(mentioner, labels) == (
+        "<MENTION:P2> xử lý giúp, <MENTION:OTHER> xem cùng nhé"
+    )
 
 
 async def test_due_loop_is_rechecked_and_a_later_answer_stops_it(monkeypatch) -> None:
@@ -277,9 +438,7 @@ async def test_due_loop_is_rechecked_and_a_later_answer_stops_it(monkeypatch) ->
     async def classify(payload, *, model=None, prompt=None):
         calls.append(payload)
         label = (
-            MentionClassification.NEED_RESPONSE
-            if len(calls) == 1
-            else MentionClassification.FYI
+            MentionClassification.NEED_RESPONSE if len(calls) == 1 else MentionClassification.FYI
         )
         return _ModelResult(
             decisions=[
@@ -417,8 +576,7 @@ async def test_overdue_classification_is_released_and_alerts(monkeypatch) -> Non
     assert [code for code, _ in alerts] == ["MENTION_CLASSIFICATION_STUCK"]
     async with sessions() as db:
         rows = {
-            row.source_message_id: row
-            for row in (await db.scalars(select(MentionFollowup))).all()
+            row.source_message_id: row for row in (await db.scalars(select(MentionFollowup))).all()
         }
         assert rows["stuck-long-ago"].status == MentionFollowupStatus.PENDING
         assert rows["stuck-long-ago"].target_user_ids == ["target-user"]
@@ -593,9 +751,7 @@ async def _price_database(*, price_enabled: bool = True):
 
 async def test_reaction_while_ai_is_in_flight_cannot_resurrect_loop(monkeypatch) -> None:
     for trigger in ("mention", "price"):
-        engine, sessions = (
-            await _database() if trigger == "mention" else await _price_database()
-        )
+        engine, sessions = await _database() if trigger == "mention" else await _price_database()
         monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
         model_started = asyncio.Event()
         model_can_finish = asyncio.Event()
@@ -791,9 +947,7 @@ async def test_price_inquiry_stays_silent_when_the_model_fails(monkeypatch) -> N
     monkeypatch.setattr(mention_classifier, "classify_payload", explode)
     monkeypatch.setattr(mention_classifier, "report_async", swallow)
     async with sessions() as db:
-        response = await schedule_from_incoming_event(
-            db, _plain_event("ask", "báo giá giúp anh")
-        )
+        response = await schedule_from_incoming_event(db, _plain_event("ask", "báo giá giúp anh"))
     claimed = await mention_classifier.claim_pending_classifications()
     await mention_classifier.process_classification(*claimed[0])
     async with sessions() as db:
@@ -843,8 +997,7 @@ async def test_overdue_mention_retries_but_price_is_dropped(
     assert await mention_classifier.release_overdue_classifications() == 2
     async with sessions() as db:
         rows = {
-            row.source_message_id: row
-            for row in (await db.scalars(select(MentionFollowup))).all()
+            row.source_message_id: row for row in (await db.scalars(select(MentionFollowup))).all()
         }
         assert rows["old-mention"].status == MentionFollowupStatus.PENDING
         assert rows["old-mention"].target_user_ids == ["target-user"]
@@ -927,9 +1080,7 @@ async def test_a_name_containing_gia_does_not_trigger_the_price_classifier() -> 
                 sender_id="sender-user",
                 content="@Giá Nguyễn cho anh hỏi cái này với",
                 mentions=[
-                    IncomingMention(
-                        user_id="nguoi-la", position=0, length=11, text="@Giá Nguyễn"
-                    )
+                    IncomingMention(user_id="nguoi-la", position=0, length=11, text="@Giá Nguyễn")
                 ],
             ),
         )
@@ -954,9 +1105,7 @@ async def test_tagging_again_keeps_the_first_reminder_running() -> None:
         first = await schedule_from_incoming_event(
             db, _mention_event("m1", "@Abcd a cắt cho em nhé")
         )
-        again = await schedule_from_incoming_event(
-            db, _mention_event("m2", "@Abcd t2 em lấy nhé")
-        )
+        again = await schedule_from_incoming_event(db, _mention_event("m2", "@Abcd t2 em lấy nhé"))
         assert again.followup_id is None
 
         followups = (await db.scalars(select(MentionFollowup))).all()
@@ -1099,9 +1248,7 @@ async def test_a_run_of_acknowledgements_stops_spending_model_calls(monkeypatch)
 
     monkeypatch.setattr(mention_classifier, "classify_payload", classify)
     async with sessions() as db:
-        first = await schedule_from_incoming_event(
-            db, _mention_event("m1", "@Abcd rõ rồi nha em")
-        )
+        first = await schedule_from_incoming_event(db, _mention_event("m1", "@Abcd rõ rồi nha em"))
         for index in range(6):
             await schedule_from_incoming_event(
                 db, _mention_event(f"m{index + 2}", f"@Abcd vâng em {index}")

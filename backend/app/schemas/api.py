@@ -599,11 +599,25 @@ class IncomingMention(BaseModel):
     text: str | None = Field(default=None, max_length=255)
 
 
+def _normalize_zalo_event_ids(values: list[str]) -> list[str]:
+    """Keep event delivery permissive so malformed aliases cannot lose an ACK."""
+    normalized: list[str] = []
+    for raw_value in values:
+        value = raw_value.strip()
+        if not value or value == "0" or len(value) > 128 or value in normalized:
+            continue
+        normalized.append(value)
+        if len(normalized) == 16:
+            break
+    return normalized
+
+
 class IncomingGroupMessage(BaseModel):
     # Default keeps requests from an older gateway compatible during rollout.
     event_type: Literal["message"] = "message"
     group_id: str = Field(min_length=1, max_length=128)
     message_id: str = Field(min_length=1, max_length=128)
+    message_aliases: list[str] = Field(default_factory=list)
     sender_id: str | None = Field(default=None, max_length=128)
     sender_display_name: str | None = Field(default=None, max_length=255)
     sent_at: datetime | None = None
@@ -612,14 +626,28 @@ class IncomingGroupMessage(BaseModel):
     # acknowledgement it carries, leaving the follow-up loop running forever.
     mentions: list[IncomingMention] = Field(default_factory=list, max_length=1000)
 
+    @field_validator("message_aliases")
+    @classmethod
+    def normalize_message_aliases(cls, values: list[str]) -> list[str]:
+        return _normalize_zalo_event_ids(values)
+
 
 class IncomingGroupReaction(BaseModel):
     event_type: Literal["reaction"]
+    # Optional while an older gateway is still running during a rolling deploy.
+    # New gateways always send this so reaction context can be deduplicated.
+    event_id: str | None = Field(default=None, max_length=128)
+    target_message_ids: list[str] = Field(default_factory=list)
     group_id: str = Field(min_length=1, max_length=128)
     reactor_id: str = Field(min_length=1, max_length=128)
     reactor_display_name: str | None = Field(default=None, max_length=255)
     reacted_at: datetime | None = None
     reaction: str = Field(min_length=1, max_length=32)
+
+    @field_validator("target_message_ids")
+    @classmethod
+    def normalize_target_message_ids(cls, values: list[str]) -> list[str]:
+        return _normalize_zalo_event_ids(values)
 
 
 class GatewayAlert(BaseModel):

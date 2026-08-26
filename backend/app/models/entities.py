@@ -342,10 +342,20 @@ class MentionContextMessage(Base):
         Uuid, ForeignKey("mention_automations.id", ondelete="CASCADE"), nullable=False, index=True
     )
     message_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    #: All non-zero msgId/cliMsgId aliases supplied by zca-js. A reaction may
+    #: identify the same message by either value depending on the Zalo client.
+    message_aliases: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]", nullable=False
+    )
     sender_id: Mapped[str | None] = mapped_column(String(128))
     sender_display_name: Mapped[str | None] = mapped_column(String(255))
     content: Mapped[str] = mapped_column(Text, default="", nullable=False)
     mentions: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list, nullable=False)
+    #: Heart/like events are embedded in their message so retention removes
+    #: both together and the classifier never receives an orphan reaction.
+    reactions: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON, default=list, server_default="[]", nullable=False
+    )
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -426,9 +436,7 @@ class MentionFollowup(Base):
         nullable=False,
     )
     attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    send_count: Mapped[int] = mapped_column(
-        Integer, default=0, server_default="0", nullable=False
-    )
+    send_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_message_id: Mapped[str | None] = mapped_column(String(128))
@@ -514,9 +522,7 @@ class DebtReminderAutomation(TimestampMixin, Base):
     )
     message_parts: Mapped[list[dict[str, str]]] = mapped_column(
         JSON,
-        default=lambda: [
-            {"type": "text", "text": "Vui lòng thanh toán công nợ giúp mình nhé."}
-        ],
+        default=lambda: [{"type": "text", "text": "Vui lòng thanh toán công nợ giúp mình nhé."}],
         nullable=False,
     )
     next_run_at: Mapped[datetime | None] = mapped_column(

@@ -161,12 +161,28 @@ async def test_context_keeps_the_source_of_an_active_loop() -> None:
                     automation_id=automation.id,
                     message_id="active-source",
                     content="@A xử lý giúp",
+                    reactions=[
+                        {
+                            "event_id": "active-reaction",
+                            "reactor_id": "a",
+                            "reaction": "heart",
+                            "reacted_at": old.isoformat(),
+                        }
+                    ],
                     sent_at=old,
                 ),
                 MentionContextMessage(
                     automation_id=automation.id,
                     message_id="unreferenced-old",
                     content="tin cũ",
+                    reactions=[
+                        {
+                            "event_id": "expired-reaction",
+                            "reactor_id": "b",
+                            "reaction": "like",
+                            "reacted_at": old.isoformat(),
+                        }
+                    ],
                     sent_at=old,
                 ),
                 MentionFollowup(
@@ -182,8 +198,9 @@ async def test_context_keeps_the_source_of_an_active_loop() -> None:
         await db.commit()
 
         assert await delete_expired_mention_context(db, now=now) == 1
-        remaining = list(await db.scalars(select(MentionContextMessage.message_id)))
-        assert remaining == ["active-source"]
+        remaining = list(await db.scalars(select(MentionContextMessage)))
+        assert [message.message_id for message in remaining] == ["active-source"]
+        assert remaining[0].reactions[0]["event_id"] == "active-reaction"
 
     await engine.dispose()
 

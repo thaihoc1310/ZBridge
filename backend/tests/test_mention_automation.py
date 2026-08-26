@@ -257,33 +257,57 @@ async def test_heart_and_like_stop_only_the_reactors_active_reminders() -> None:
         )
         db.add(automation)
         await db.flush()
+        now = datetime.now(UTC)
+        reacted_message = MentionContextMessage(
+            automation_id=automation.id,
+            message_id="source-both-reaction",
+            message_aliases=["source-both-reaction", "source-both-client"],
+            sender_id="requester",
+            content="@A @B xem giúp anh",
+            mentions=[],
+            sent_at=now - timedelta(minutes=1),
+        )
+        db.add(
+            MentionContextMessage(
+                automation_id=automation.id,
+                message_id="source-a-reaction",
+                message_aliases=["source-a-reaction", "source-a-client"],
+                sender_id="requester",
+                content="@A kiểm tra giúp anh",
+                mentions=[],
+                sent_at=now - timedelta(minutes=1),
+            )
+        )
         both = MentionFollowup(
             automation_id=automation.id,
             source_message_id="source-both-reaction",
             target_user_ids=["target-a", "target-b"],
             target_display_names=["Thành viên A", "Thành viên B"],
-            due_at=datetime.now(UTC),
+            due_at=now,
             status=MentionFollowupStatus.PROCESSING,
-            claimed_at=datetime.now(UTC),
+            claimed_at=now,
         )
         only_a = MentionFollowup(
             automation_id=automation.id,
             source_message_id="source-a-reaction",
             target_user_ids=["target-a"],
             target_display_names=["Thành viên A"],
-            due_at=datetime.now(UTC),
+            due_at=now,
             status=MentionFollowupStatus.PROCESSING,
-            claimed_at=datetime.now(UTC),
+            claimed_at=now,
         )
-        db.add_all([both, only_a])
+        db.add_all([reacted_message, both, only_a])
         await db.commit()
 
         heart = await acknowledge_from_reaction(
             db,
             IncomingGroupReaction(
                 event_type="reaction",
+                event_id="reaction-a-heart",
                 group_id="group-reaction-ack",
                 reactor_id="target-a",
+                reactor_display_name="Thành viên A",
+                target_message_ids=["0", "source-both-client"],
                 reaction="heart",
             ),
         )
@@ -302,8 +326,10 @@ async def test_heart_and_like_stop_only_the_reactors_active_reminders() -> None:
             db,
             IncomingGroupReaction(
                 event_type="reaction",
+                event_id="reaction-a-heart",
                 group_id="group-reaction-ack",
                 reactor_id="target-a",
+                target_message_ids=["source-both-reaction"],
                 reaction="heart",
             ),
         )
@@ -311,8 +337,10 @@ async def test_heart_and_like_stop_only_the_reactors_active_reminders() -> None:
             db,
             IncomingGroupReaction(
                 event_type="reaction",
+                event_id="ignored-haha",
                 group_id="group-reaction-ack",
                 reactor_id="target-b",
+                target_message_ids=["source-both-reaction"],
                 reaction="haha",
             ),
         )
@@ -320,8 +348,10 @@ async def test_heart_and_like_stop_only_the_reactors_active_reminders() -> None:
             db,
             IncomingGroupReaction(
                 event_type="reaction",
+                event_id="reaction-outsider-like",
                 group_id="group-reaction-ack",
                 reactor_id="not-a-target",
+                target_message_ids=["source-both-reaction"],
                 reaction="like",
             ),
         )
@@ -333,14 +363,24 @@ async def test_heart_and_like_stop_only_the_reactors_active_reminders() -> None:
             db,
             IncomingGroupReaction(
                 event_type="reaction",
+                event_id="reaction-b-like",
                 group_id="group-reaction-ack",
                 reactor_id="target-b",
+                target_message_ids=["source-both-reaction"],
                 reaction="like",
             ),
         )
         await db.refresh(both)
         assert like.acknowledged_followups == 1
         assert both.status == MentionFollowupStatus.CANCELLED
+        await db.refresh(reacted_message)
+        assert [item["event_id"] for item in reacted_message.reactions] == [
+            "reaction-a-heart",
+            "reaction-outsider-like",
+            "reaction-b-like",
+        ]
+        assert reacted_message.reactions[0]["reactor_id"] == "target-a"
+        assert reacted_message.reactions[0]["reaction"] == "heart"
 
     await engine.dispose()
 
@@ -422,6 +462,8 @@ async def test_reaction_uses_source_event_time_not_db_insert_time() -> None:
             db,
             IncomingGroupReaction(
                 event_type="reaction",
+                event_id="stale-missing-target",
+                target_message_ids=["not-in-context"],
                 group_id="group-delayed-reaction",
                 reactor_id="target-a",
                 reacted_at=stale_reaction_time,
@@ -432,6 +474,8 @@ async def test_reaction_uses_source_event_time_not_db_insert_time() -> None:
             db,
             IncomingGroupReaction(
                 event_type="reaction",
+                event_id="quick-missing-target",
+                target_message_ids=["not-in-context"],
                 group_id="group-delayed-reaction",
                 reactor_id="target-b",
                 # It happened after the source message but before the row's
@@ -448,6 +492,9 @@ async def test_reaction_uses_source_event_time_not_db_insert_time() -> None:
         assert quick.acknowledged_followups == 1
         assert quick_followup.status == MentionFollowupStatus.CANCELLED
         assert quick_followup.claimed_at is None
+        context = list(await db.scalars(select(MentionContextMessage)))
+        assert len(context) == 2
+        assert all(message.reactions == [] for message in context)
 
     await engine.dispose()
 
