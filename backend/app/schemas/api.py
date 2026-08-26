@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Literal
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -160,7 +160,7 @@ class CustomerUpdate(BaseModel):
         if value.tzinfo is None:
             value = value.replace(tzinfo=vietnam)
         value = value.astimezone(UTC)
-        if value > datetime.now(UTC) + timedelta(hours=24):
+        if value > datetime.now(UTC):
             raise ValueError("Ngày trả nợ không được ở tương lai.")
         return value
 

@@ -238,9 +238,9 @@ async def test_last_debt_paid_at_can_be_set_and_cleared() -> None:
     await engine.dispose()
 
 
-def test_last_debt_paid_at_rejects_far_future() -> None:
+def test_last_debt_paid_at_rejects_any_future() -> None:
     with pytest.raises(ValidationError):
-        CustomerUpdate(last_debt_paid_at=datetime.now(UTC) + timedelta(days=3))
+        CustomerUpdate(last_debt_paid_at=datetime.now(UTC) + timedelta(minutes=1))
 
 
 def test_naive_last_debt_paid_at_is_vietnam_time() -> None:

@@ -101,6 +101,7 @@ export function LastPaidEditorModal({ customer, onClose }: { customer: Customer 
   const initial = toDatetimeLocalValue(customer?.last_debt_paid_at);
   const changed = value !== initial;
   const previewIso = fromDatetimeLocalValue(value);
+  const isFuture = Boolean(previewIso && new Date(previewIso).getTime() > Date.now());
 
   return (
     <Modal
@@ -118,6 +119,8 @@ export function LastPaidEditorModal({ customer, onClose }: { customer: Customer 
             className="field min-h-11 flex-1"
             type="datetime-local"
             step={60}
+            max={nowDatetimeLocalValue()}
+            aria-invalid={isFuture}
             disabled={!canEdit || mutation.isPending}
             value={value}
             onChange={(event) => setValue(event.target.value)}
@@ -144,13 +147,18 @@ export function LastPaidEditorModal({ customer, onClose }: { customer: Customer 
           "Để trống rồi lưu nếu muốn xóa ngày."
         )}
       </p>
+      {isFuture && (
+        <p className="mt-3 text-sm text-danger-fg" role="alert">
+          Thời điểm trả nợ không được ở tương lai.
+        </p>
+      )}
       {!canEdit && <ReadOnlyHint />}
       <ErrorMessage error={mutation.error} />
       <div className="mt-6 flex justify-end gap-3">
         <Button variant="ghost" onClick={onClose}>Hủy</Button>
         <Button
           loading={mutation.isPending}
-          disabled={!changed || !canEdit}
+          disabled={!changed || !canEdit || isFuture}
           onClick={() => mutation.mutate({ last_debt_paid_at: fromDatetimeLocalValue(value) })}
         >
           <Save className="h-4 w-4" />
