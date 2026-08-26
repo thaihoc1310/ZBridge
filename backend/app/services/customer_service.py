@@ -123,6 +123,9 @@ async def update_customer(
             customer.last_debt_paid_at = now
         customer.has_debt = data.has_debt
 
+    if "last_debt_paid_at" in fields:
+        customer.last_debt_paid_at = data.last_debt_paid_at
+
     if "note" in fields:
         customer.note = data.note.strip() if data.note and data.note.strip() else None
 

@@ -1,6 +1,7 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -189,3 +190,54 @@ async def test_saving_a_debt_file_rejects_a_link_google_cannot_read(monkeypatch)
         cleared = await update_customer(db, group.id, CustomerUpdate(debt_file_url=""))
         assert cleared.debt_file_url is None
     await engine.dispose()
+
+
+async def test_last_debt_paid_at_can_be_set_and_cleared() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with session_factory() as db:
+        account = ZaloAccount()
+        db.add(account)
+        await db.flush()
+        group = ZaloGroup(
+            zalo_account_id=account.id,
+            zalo_group_id="paid-at-group",
+            name="Khách thanh toán",
+            member_count=2,
+            is_available=True,
+            last_synced_at=datetime.now(UTC),
+        )
+        db.add(group)
+        await db.flush()
+        db.add(Customer(id=group.id, zalo_group_id=group.id, has_debt=True))
+        await db.commit()
+
+        paid_at = datetime(2026, 1, 15, 10, 30, tzinfo=UTC)
+        updated = await update_customer(
+            db, group.id, CustomerUpdate(last_debt_paid_at=paid_at)
+        )
+        stored = updated.last_debt_paid_at
+        assert stored is not None
+        assert stored.replace(tzinfo=UTC) == paid_at
+
+        customer = await db.scalar(select(Customer).where(Customer.id == group.id))
+        assert customer is not None
+        assert customer.has_debt is True
+
+        cleared = await update_customer(
+            db, group.id, CustomerUpdate(last_debt_paid_at=None)
+        )
+        assert cleared.last_debt_paid_at is None
+        customer = await db.scalar(select(Customer).where(Customer.id == group.id))
+        assert customer is not None
+        assert customer.has_debt is True
+
+    await engine.dispose()
+
+
+def test_last_debt_paid_at_rejects_far_future() -> None:
+    with pytest.raises(ValidationError):
+        CustomerUpdate(last_debt_paid_at=datetime.now(UTC) + timedelta(days=3))

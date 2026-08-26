@@ -8,7 +8,7 @@ import { Button } from "../components/ui/Button";
 import { LoadingOverlay } from "../components/ui/LoadingOverlay";
 import { Modal } from "../components/ui/Modal";
 import { StatusBadge } from "../components/ui/StatusBadge";
-import { DebtConfirmModal, DebtStatusOptions, DebtFileEditorModal, NoteEditorModal, type DebtConfirmation } from "../features/customers/CustomerFields";
+import { DebtConfirmModal, DebtStatusOptions, DebtFileEditorModal, LastPaidEditorModal, NoteEditorModal, type DebtConfirmation } from "../features/customers/CustomerFields";
 import { DebtReminderModal } from "../features/debt-reminders/DebtReminderModal";
 import { MentionAutomationModal } from "../features/mentions/MentionAutomationModal";
 import { formatDate, initials } from "../lib/format";
@@ -24,6 +24,7 @@ export function CustomerDetailPage() {
   const [debtReminderOpen, setDebtReminderOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   const [debtFileOpen, setDebtFileOpen] = useState(false);
+  const [lastPaidOpen, setLastPaidOpen] = useState(false);
   const [debtConfirmation, setDebtConfirmation] = useState<DebtConfirmation | null>(null);
   const [content, setContent] = useState("");
   const [result, setResult] = useState<DeliveryLog | ApiError | null>(null);
@@ -57,7 +58,11 @@ export function CustomerDetailPage() {
             {canUpdate && <EditButton label="Sửa file công nợ" onClick={() => setDebtFileOpen(true)} />}
           </div>
           <div className="rounded-xl border border-border bg-muted/30 p-4"><p className="mb-3 flex items-center gap-2 text-xs text-muted-foreground"><WalletCards className="h-4 w-4 text-accent" />Công nợ</p><DebtStatusOptions value={item.has_debt} disabled={!canUpdate} onChange={(nextValue) => setDebtConfirmation({ customer: item, nextValue })} /></div>
-          <div className="rounded-xl border border-border bg-muted/30 p-4"><p className="flex items-center gap-2 text-xs text-muted-foreground"><Clock3 className="h-4 w-4 text-accent" />Ngày trả nợ gần nhất</p><p className="mt-3 text-sm font-semibold">{item.last_debt_paid_at ? formatDate(item.last_debt_paid_at) : <span className="font-normal text-muted-foreground">Chưa có</span>}</p></div>
+          <div className="group/field relative rounded-xl border border-border bg-muted/30 p-4">
+            <p className="flex items-center gap-2 text-xs text-muted-foreground"><Clock3 className="h-4 w-4 text-accent" />Ngày trả nợ gần nhất</p>
+            {item.last_debt_paid_at ? <p className="mt-3 text-sm font-semibold">{formatDate(item.last_debt_paid_at)}</p> : canUpdate ? <button type="button" className="mt-3 text-sm italic text-muted-foreground/70 hover:text-accent" onClick={() => setLastPaidOpen(true)}>+ Thêm ngày trả nợ</button> : <p className="mt-3 text-sm font-normal text-muted-foreground">Chưa có</p>}
+            {canUpdate && <EditButton label="Sửa ngày trả nợ" onClick={() => setLastPaidOpen(true)} />}
+          </div>
         </div>
         <div className="group/field relative mt-5 border-t border-border pt-5">
           <div className="flex items-center gap-1.5"><p className="text-xs text-muted-foreground">Ghi chú</p>{canUpdate && <button type="button" onClick={() => setNoteOpen(true)} title="Sửa ghi chú" aria-label="Sửa ghi chú" className="rounded-md p-1 text-muted-foreground opacity-0 transition hover:bg-muted hover:text-accent group-hover/field:opacity-100 focus:opacity-100"><Pencil className="h-3 w-3" /></button>}</div>
@@ -98,6 +103,7 @@ export function CustomerDetailPage() {
     <DebtReminderModal open={debtReminderOpen} onClose={() => setDebtReminderOpen(false)} customerId={id} customerName={item.name} hasDebtFile={Boolean(item.debt_file_url)} hasDebt={item.has_debt} />
     <NoteEditorModal customer={noteOpen ? item : null} onClose={() => setNoteOpen(false)} />
     <DebtFileEditorModal customer={debtFileOpen ? item : null} onClose={() => setDebtFileOpen(false)} />
+    <LastPaidEditorModal customer={lastPaidOpen ? item : null} onClose={() => setLastPaidOpen(false)} />
     <DebtConfirmModal confirmation={debtConfirmation} onClose={() => setDebtConfirmation(null)} />
     <LoadingOverlay show={sendMessage.isPending} label="Đang gửi tin nhắn tới Zalo..." />
   </div>;

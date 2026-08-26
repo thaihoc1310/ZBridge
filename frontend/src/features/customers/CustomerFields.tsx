@@ -1,9 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save } from "lucide-react";
+import { Clock3, Save } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../../api/client";
 import type { Customer } from "../../api/types";
 import { cn } from "../../lib/cn";
+import { formatDate, fromDatetimeLocalValue, nowDatetimeLocalValue, toDatetimeLocalValue } from "../../lib/format";
 import { PERMISSIONS } from "../../lib/permissions";
 import { usePermissions } from "../../lib/session";
 import { Button } from "../../components/ui/Button";
@@ -90,6 +91,67 @@ export function DebtFileEditorModal({ customer, onClose }: { customer: Customer 
     <ErrorMessage error={mutation.error} />
     <div className="mt-6 flex justify-end gap-3"><Button variant="ghost" onClick={onClose}>Đóng</Button><Button loading={mutation.isPending} disabled={!changed || !canEdit || (!empty && !looksLikeSheet)} onClick={() => mutation.mutate({ debt_file_url: fileUrl.trim() })}><Save className="h-4 w-4" />{empty ? "Xoá link" : "Kiểm tra và lưu"}</Button></div>
   </Modal>;
+}
+
+export function LastPaidEditorModal({ customer, onClose }: { customer: Customer | null; onClose: () => void }) {
+  const [value, setValue] = useState("");
+  const mutation = useCustomerUpdate(customer, onClose);
+  const canEdit = useCanUpdateCustomer();
+  useEffect(() => setValue(toDatetimeLocalValue(customer?.last_debt_paid_at)), [customer]);
+  const initial = toDatetimeLocalValue(customer?.last_debt_paid_at);
+  const changed = value !== initial;
+  const previewIso = fromDatetimeLocalValue(value);
+
+  return (
+    <Modal
+      open={Boolean(customer)}
+      onClose={onClose}
+      className="max-w-md"
+      title="Trả nợ gần nhất"
+      description={customer ? `Cập nhật thời điểm thanh toán gần nhất của ${customer.name}.` : undefined}
+    >
+      <label className="block">
+        <span className="mb-2 block text-sm font-semibold">Thời điểm</span>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <input
+            autoFocus
+            className="field min-h-11 flex-1"
+            type="datetime-local"
+            step={60}
+            disabled={!canEdit || mutation.isPending}
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+          />
+          <Button
+            type="button"
+            variant="secondary"
+            className="shrink-0"
+            disabled={!canEdit || mutation.isPending}
+            onClick={() => setValue(nowDatetimeLocalValue())}
+          >
+            <Clock3 className="h-4 w-4" />
+            Bây giờ
+          </Button>
+        </div>
+      </label>
+      <p className="mt-3 text-sm text-muted-foreground">
+        {previewIso ? <span className="font-medium text-foreground">{formatDate(previewIso)}</span> : "Để trống rồi lưu nếu muốn xóa ngày."}
+      </p>
+      {!canEdit && <ReadOnlyHint />}
+      <ErrorMessage error={mutation.error} />
+      <div className="mt-6 flex justify-end gap-3">
+        <Button variant="ghost" onClick={onClose}>Hủy</Button>
+        <Button
+          loading={mutation.isPending}
+          disabled={!changed || !canEdit}
+          onClick={() => mutation.mutate({ last_debt_paid_at: fromDatetimeLocalValue(value) })}
+        >
+          <Save className="h-4 w-4" />
+          Lưu
+        </Button>
+      </div>
+    </Modal>
+  );
 }
 
 export function DebtConfirmModal({ confirmation, onClose }: { confirmation: DebtConfirmation | null; onClose: () => void }) {

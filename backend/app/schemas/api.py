@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -136,6 +136,7 @@ class CustomerUpdate(BaseModel):
     has_debt: bool | None = None
     note: str | None = Field(default=None, max_length=10000)
     debt_file_url: str | None = Field(default=None, max_length=2000)
+    last_debt_paid_at: datetime | None = None
 
     @field_validator("debt_file_url")
     @classmethod
@@ -147,6 +148,19 @@ class CustomerUpdate(BaseModel):
         parsed = urlparse(value)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("Đường dẫn phải bắt đầu bằng http:// hoặc https://.")
+        return value
+
+    @field_validator("last_debt_paid_at")
+    @classmethod
+    def validate_last_debt_paid_at(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        else:
+            value = value.astimezone(UTC)
+        if value > datetime.now(UTC) + timedelta(hours=24):
+            raise ValueError("Ngày trả nợ không được ở tương lai.")
         return value
 
 

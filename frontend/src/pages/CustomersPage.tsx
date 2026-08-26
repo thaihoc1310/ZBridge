@@ -6,7 +6,7 @@ import { api, ApiError, queryString } from "../api/client";
 import type { Customer, CustomerList, SyncResult } from "../api/types";
 import { PageHeader } from "../components/PageHeader";
 import { Button } from "../components/ui/Button";
-import { DebtConfirmModal, DebtStatusOptions, DebtFileEditorModal, NoteEditorModal, type DebtConfirmation } from "../features/customers/CustomerFields";
+import { DebtConfirmModal, DebtStatusOptions, DebtFileEditorModal, LastPaidEditorModal, NoteEditorModal, type DebtConfirmation } from "../features/customers/CustomerFields";
 import { formatDate, initials } from "../lib/format";
 import { PERMISSIONS } from "../lib/permissions";
 import { usePermissions } from "../lib/session";
@@ -60,6 +60,7 @@ export function CustomersPage() {
   const [filterOpen, setFilterOpen] = useState(false);
   const [noteCustomer, setNoteCustomer] = useState<Customer | null>(null);
   const [debtFileCustomer, setDebtFileCustomer] = useState<Customer | null>(null);
+  const [lastPaidCustomer, setLastPaidCustomer] = useState<Customer | null>(null);
   const [debtConfirmation, setDebtConfirmation] = useState<DebtConfirmation | null>(null);
   const [columnWidths, setColumnWidths] = useState(initialColumnWidths);
   const didAutoSync = useRef(false);
@@ -199,7 +200,7 @@ export function CustomersPage() {
               <td className="px-6 py-4"><Link to={`/customers/${customer.id}`} className="flex min-w-0 items-center gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-accent-soft to-accent/20 text-xs font-bold text-accent">{customer.avatar_url ? <img src={customer.avatar_url} alt="" className="h-full w-full object-cover" /> : initials(customer.name)}</span><span className="truncate font-semibold text-foreground transition group-hover:text-accent">{customer.name}</span></Link></td>
               <td className="px-5 py-4">{customer.debt_file_url ? <a href={customer.debt_file_url} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1.5 text-sm font-medium text-accent underline decoration-accent/45 underline-offset-4 transition hover:decoration-accent"><span className="truncate">Mở file công nợ</span><ExternalLink className="h-3.5 w-3.5 shrink-0" /></a> : canUpdate ? <button className="text-sm italic text-muted-foreground/70 transition hover:text-accent" onClick={() => setDebtFileCustomer(customer)}>+ Thêm file công nợ</button> : <span className="text-sm text-muted-foreground/70">—</span>}</td>
               <td className="px-5 py-4"><DebtStatusOptions value={customer.has_debt} disabled={!canUpdate} onChange={(nextValue) => setDebtConfirmation({ customer, nextValue })} /></td>
-              <td className="whitespace-nowrap px-5 py-4 text-sm text-muted-foreground">{customer.last_debt_paid_at ? formatDate(customer.last_debt_paid_at) : <span className="sr-only">Chưa có ngày trả nợ</span>}</td>
+              <td className="whitespace-nowrap px-5 py-4">{canUpdate ? <button type="button" className={`max-w-full text-left text-sm transition hover:text-accent ${customer.last_debt_paid_at ? "text-foreground" : "italic text-muted-foreground/70"}`} onClick={() => setLastPaidCustomer(customer)}>{customer.last_debt_paid_at ? formatDate(customer.last_debt_paid_at) : "+ Thêm ngày trả nợ"}</button> : <span className="text-sm text-muted-foreground">{customer.last_debt_paid_at ? formatDate(customer.last_debt_paid_at) : "—"}</span>}</td>
               <td className="px-5 py-4"><button className={`block max-w-full text-left text-sm transition hover:text-accent ${customer.note ? "text-foreground" : "italic text-muted-foreground/70"}`} onClick={() => setNoteCustomer(customer)}>{customer.note ? customer.note.length > 48 ? "Xem chi tiết" : <span className="block truncate">{customer.note}</span> : "+ Thêm ghi chú"}</button></td>
               <td className="pr-5"><Link to={`/customers/${customer.id}`} aria-label={`Mở ${customer.name}`}><ChevronRight className="h-5 w-5 text-muted-foreground transition group-hover:translate-x-1 group-hover:text-accent" /></Link></td>
             </tr>)}
@@ -212,6 +213,7 @@ export function CustomersPage() {
 
     <NoteEditorModal customer={noteCustomer} onClose={() => setNoteCustomer(null)} />
     <DebtFileEditorModal customer={debtFileCustomer} onClose={() => setDebtFileCustomer(null)} />
+    <LastPaidEditorModal customer={lastPaidCustomer} onClose={() => setLastPaidCustomer(null)} />
     <DebtConfirmModal confirmation={debtConfirmation} onClose={() => setDebtConfirmation(null)} />
   </div>;
 }
