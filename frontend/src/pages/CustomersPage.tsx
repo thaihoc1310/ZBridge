@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, ExternalLink, Filter, RefreshCw, Search, SlidersHorizontal, UsersRound, X } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError, queryString } from "../api/client";
 import type { Customer, CustomerList, SyncResult } from "../api/types";
 import { PageHeader } from "../components/PageHeader";
@@ -49,13 +49,25 @@ function initialColumnWidths(): Record<CustomerColumn, number> {
   }
 }
 
+const DEBT_PARAMS = new Set(["owed", "clear"]);
+const AVAILABILITY_PARAMS = new Set(["available", "unavailable", "all"]);
+
 export function CustomersPage() {
+  // Seeded from the URL so the dashboard health strip can link straight at the
+  // rows it is warning about. Read once: after that the filter UI owns them.
+  const [searchParams] = useSearchParams();
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [debt, setDebt] = useState("");
+  const [debt, setDebt] = useState(() => {
+    const value = searchParams.get("debt") ?? "";
+    return DEBT_PARAMS.has(value) ? value : "";
+  });
   // Groups the bot lost access to are hidden by default; they are still
   // reachable through the filter so nobody has to wonder where they went.
-  const [availability, setAvailability] = useState("available");
+  const [availability, setAvailability] = useState(() => {
+    const value = searchParams.get("availability") ?? "";
+    return AVAILABILITY_PARAMS.has(value) ? value : "available";
+  });
   const [page, setPage] = useState(1);
   const [filterOpen, setFilterOpen] = useState(false);
   const [noteCustomer, setNoteCustomer] = useState<Customer | null>(null);

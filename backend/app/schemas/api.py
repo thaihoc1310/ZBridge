@@ -231,6 +231,19 @@ class DashboardHourlyMessages(BaseModel):
     count: int = Field(ge=0)
 
 
+class DashboardDailyMessages(BaseModel):
+    #: Vietnam-local calendar day, oldest first.
+    date: str
+    sent: int = Field(ge=0)
+    failed: int = Field(ge=0)
+
+
+class DashboardUpcomingReminder(BaseModel):
+    customer_id: uuid.UUID
+    customer_name: str
+    next_run_at: datetime
+
+
 class DashboardResponse(BaseModel):
     bot_status: BotStatus
     customer_count: int
@@ -241,6 +254,38 @@ class DashboardResponse(BaseModel):
     failed_today: int
     last_sync_at: datetime | None
     last_successful_message_at: datetime | None
+
+    # --- Context for today's numbers -------------------------------------
+    messages_yesterday: int = 0
+    #: Seven Vietnam-local days ending today, matching delivery-log retention.
+    daily_messages: list[DashboardDailyMessages] = Field(default_factory=list)
+    #: Successful sends today by feature: debt, mention, manual.
+    messages_by_type_today: dict[str, int] = Field(default_factory=dict)
+
+    # --- Things that quietly stopped working -----------------------------
+    groups_unavailable: int = 0
+    #: Owes money but has no Sheet, so its schedule is paused without saying so.
+    debt_missing_file: int = 0
+    ai_classifier_enabled: bool = True
+    #: None means the gateway could not be reached, which is not the same as a
+    #: gateway reporting an unhealthy event channel.
+    events_healthy: bool | None = None
+
+    # --- What the bot is about to do -------------------------------------
+    reminders_due_today: list[DashboardUpcomingReminder] = Field(default_factory=list)
+    #: Full count; reminders_due_today is capped for display.
+    reminders_due_today_count: int = 0
+    active_mention_followups: int = 0
+
+    # --- Did the automation achieve anything -----------------------------
+    #: This Vietnam-local month, by status: sent, skipped, failed. CANCELLED is
+    #: left out on purpose — a config edit cancels runs and would read as noise.
+    debt_runs_month: dict[str, int] = Field(default_factory=dict)
+    ai_calls_today: int = 0
+    #: Verdicts that stopped a tag from being sent — what the classifier is for.
+    ai_blocked_today: int = 0
+    ai_avg_latency_ms: int | None = None
+    ai_tokens_today: dict[str, int] = Field(default_factory=dict)
 
 
 class HealthResponse(BaseModel):

@@ -142,6 +142,17 @@ export type ModelCallLogList = {
   limit: number;
   pages: number;
 };
+export type DashboardDailyMessages = {
+  /** Vietnam-local calendar day, oldest first. */
+  date: string;
+  sent: number;
+  failed: number;
+};
+export type DashboardUpcomingReminder = {
+  customer_id: string;
+  customer_name: string;
+  next_run_at: string;
+};
 export type Dashboard = {
   bot_status: BotStatus;
   customer_count: number;
@@ -152,6 +163,27 @@ export type Dashboard = {
   failed_today: number;
   last_sync_at: string | null;
   last_successful_message_at: string | null;
+  messages_yesterday: number;
+  daily_messages: DashboardDailyMessages[];
+  /** Successful sends today, keyed debt / mention / manual. */
+  messages_by_type_today: Record<string, number>;
+  groups_unavailable: number;
+  /** Owes money with no Sheet, so its schedule is paused without saying so. */
+  debt_missing_file: number;
+  ai_classifier_enabled: boolean;
+  /** null means the gateway could not be reached — not the same as unhealthy. */
+  events_healthy: boolean | null;
+  reminders_due_today: DashboardUpcomingReminder[];
+  /** Full count; reminders_due_today is capped for display. */
+  reminders_due_today_count: number;
+  active_mention_followups: number;
+  /** This Vietnam-local month, keyed sent / skipped / failed. */
+  debt_runs_month: Record<string, number>;
+  ai_calls_today: number;
+  /** Verdicts that stopped a tag going out — what the classifier is for. */
+  ai_blocked_today: number;
+  ai_avg_latency_ms: number | null;
+  ai_tokens_today: Record<string, number>;
 };
 
 export type GroupMember = {
