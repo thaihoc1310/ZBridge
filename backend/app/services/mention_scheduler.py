@@ -2,6 +2,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +28,12 @@ MAX_ATTEMPTS = 3
 STALE_CLAIM_AFTER = timedelta(minutes=10)
 RETRY_DELAY = timedelta(minutes=5)
 EVENTS_DOWN_DELAY = timedelta(minutes=5)
+#: A few events waiting to reach the backend is normal in an active group. Come
+#: straight back for them instead of treating it as a broken event channel.
+EVENTS_BEHIND_DELAY = timedelta(seconds=30)
+#: Past this, the backlog is not a blip: escalate to the outage path so somebody
+#: is told rather than the loop quietly circling every 30 seconds.
+EVENTS_BEHIND_ESCALATE_AFTER = timedelta(minutes=2)
 
 
 @dataclass(frozen=True)
@@ -76,6 +83,13 @@ async def claim_due_followups() -> list[uuid.UUID]:
             job.status = MentionFollowupStatus.PROCESSING
             job.claimed_at = now
             job.attempt_count += 1
+            # send_attempt_count is deliberately NOT spent here. A claim is only
+            # an intent to send, and several paths drop it before the gateway is
+            # ever called — a new message or a reaction invalidating the claim,
+            # or the send falling outside the active window. Charging the retry
+            # budget at claim time leaked an attempt down every one of those, so
+            # a busy group could exhaust the budget without a single failed send.
+            # Only _record_failure, which has seen the gateway refuse, spends it.
         await db.commit()
         return [job.id for job in jobs]
 
@@ -139,7 +153,12 @@ async def _prepare_job(followup_id: uuid.UUID) -> _FollowupJob | None:
             customer_name=group.name,
             delay_minutes=automation.delay_minutes,
             active_windows=list(automation.active_windows),
-            idempotency_key=f"mention:{followup.id}:{followup.due_at.isoformat()}",
+            # Keyed on the tag owed, NOT on due_at: every retry path rewrites
+            # due_at, so keying on it handed the gateway a fresh key each time
+            # and defeated the very dedup that protects an ambiguous timeout.
+            # send_count only moves once a send is confirmed, so all attempts at
+            # the same tag collapse onto one receipt.
+            idempotency_key=f"mention:{followup.id}:{followup.send_count}",
             targets=[
                 {"user_id": user_id, "display_name": display_name}
                 for user_id, display_name in zip(
@@ -152,17 +171,42 @@ async def _prepare_job(followup_id: uuid.UUID) -> _FollowupJob | None:
 
 
 async def _reload_claim(db: AsyncSession, job: _FollowupJob) -> MentionFollowup | None:
-    """Re-read the row and confirm nobody took the claim over while we were sending."""
-    followup = await db.get(MentionFollowup, job.followup_id)
+    """Re-read the row under a lock and confirm the claim is still ours.
+
+    The lock is what makes check-then-act atomic. An unlocked read let two
+    workers holding the same claim both pass the check and then both write: a
+    success and a timeout could interleave into `status=PENDING` with
+    `sent_message_id` set *and* `error_message=timeout`, so a delivered tag was
+    recorded as failed and queued to send again.
+
+    It is only held for the short result-recording transaction. The gateway call
+    already finished before any caller gets here, so nothing blocks incoming
+    Zalo acknowledgements while an HTTP request is in flight.
+    """
+    followup = await db.scalar(
+        select(MentionFollowup)
+        .where(MentionFollowup.id == job.followup_id)
+        .with_for_update()
+    )
     if followup is None:
         return None
     if (
         followup.status != MentionFollowupStatus.PROCESSING
-        or followup.claimed_at != job.claimed_at
+        # Normalised, like the classifier and the debt scheduler already do.
+        # A raw comparison silently loses the claim whenever the two sides differ
+        # in tz-awareness, which is a property of the driver rather than of the
+        # data — and losing a claim here means the send result is never recorded.
+        or _as_utc(followup.claimed_at) != _as_utc(job.claimed_at)
     ):
         logger.warning("MENTION_FOLLOWUP_CLAIM_LOST followup_id=%s", job.followup_id)
         return None
     return followup
+
+
+def _as_utc(value: datetime | None) -> datetime:
+    if value is None:
+        return datetime.min.replace(tzinfo=UTC)
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 async def _log_delivery(
@@ -195,22 +239,57 @@ def _alert_context(job: _FollowupJob) -> dict[str, str]:
     return context
 
 
-async def _gateway_ready() -> tuple[bool, str]:
-    """Mention follow-ups are only safe to send while replies/reactions are observable."""
+class _Readiness(StrEnum):
+    READY = "READY"
+    #: The event channel itself is broken, or has been stuck long enough to be
+    #: an outage. Back off for minutes and tell somebody.
+    BLOCKED = "BLOCKED"
+    #: Working, just not caught up yet. Come back in seconds, and stay quiet.
+    BEHIND = "BEHIND"
+
+
+async def _gateway_readiness() -> tuple[_Readiness, str]:
+    """Mention follow-ups are only safe to send while replies/reactions are observable.
+
+    Three outcomes, not two. A momentary backlog used to be indistinguishable
+    from a lost event channel, so an event mid-flight cost every due follow-up a
+    five-minute delay plus a warning that named the wrong cause.
+    """
     try:
         state = await zalo_gateway.get_status()
     except GatewayError as exc:
-        return False, exc.message
+        return _Readiness.BLOCKED, exc.message
     if state.get("status") != BotStatus.CONNECTED.value:
-        return False, "Bot Zalo chưa kết nối nên chưa thể tag lại."
+        return _Readiness.BLOCKED, "Bot Zalo chưa kết nối nên chưa thể tag lại."
     if not state.get("events_healthy", True):
-        return False, (
+        return _Readiness.BLOCKED, (
             "Gateway đang mất kênh sự kiện Zalo nên không nhận biết được khách đã phản hồi."
         )
-    return True, ""
+    # Absent on an older gateway, which folded the backlog into events_healthy.
+    if state.get("events_caught_up", True):
+        return _Readiness.READY, ""
+    backlog = int(state.get("event_backlog") or 0)
+    age_ms = state.get("event_backlog_age_ms")
+    age = timedelta(milliseconds=float(age_ms)) if age_ms is not None else timedelta()
+    if age >= EVENTS_BEHIND_ESCALATE_AFTER:
+        return _Readiness.BLOCKED, (
+            f"Gateway còn {backlog} sự kiện Zalo chưa chuyển được về backend sau"
+            f" {int(age.total_seconds())} giây, nên chưa biết khách đã phản hồi chưa."
+        )
+    return _Readiness.BEHIND, (
+        f"Đang chờ {backlog} sự kiện Zalo mới nhận được xử lý trước khi tag lại."
+    )
 
 
-async def _postpone(job: _FollowupJob, reason: str, delay: timedelta) -> None:
+async def _postpone(
+    job: _FollowupJob, reason: str, delay: timedelta, *, alert: bool
+) -> None:
+    """Release the claim and come back later.
+
+    `alert` is off for the merely-behind case: an operator cannot act on a
+    backlog that clears itself in seconds, and saying "tagging is paused" about
+    it trains people to ignore the message that matters.
+    """
     async with SessionLocal() as db:
         followup = await _reload_claim(db, job)
         if followup is None:
@@ -219,8 +298,12 @@ async def _postpone(job: _FollowupJob, reason: str, delay: timedelta) -> None:
         followup.due_at = next_allowed_at(datetime.now(UTC) + delay, job.active_windows)
         followup.claimed_at = None
         followup.attempt_count = 0
+        # Postponing is a decision not to send, so the retry budget is untouched:
+        # nothing charged it at claim time.
         followup.error_message = reason
         await db.commit()
+    if not alert:
+        return
     await report_async(
         "MENTION_FOLLOWUP_POSTPONED",
         f"Tag tên tự động đang tạm dừng: {reason}",
@@ -246,6 +329,9 @@ async def _record_success(job: _FollowupJob, message_id: str | None) -> None:
         followup.due_at = next_due_at
         followup.claimed_at = None
         followup.attempt_count = 0
+        # A confirmed send is the only thing that refills the retry budget, so
+        # MAX_ATTEMPTS means "consecutive failed sends" and stays reachable.
+        followup.send_attempt_count = 0
         followup.send_count += 1
         followup.sent_message_id = message_id
         followup.processed_at = None
@@ -272,7 +358,11 @@ async def _record_failure(job: _FollowupJob, code: str, message: str) -> None:
         )
         followup.error_message = message
         followup.claimed_at = None
-        if followup.attempt_count < MAX_ATTEMPTS:
+        # The one place the retry budget is spent: the gateway was called and it
+        # refused. _reload_claim above guarantees this claim is still ours, so a
+        # duplicate worker cannot charge the same failure twice.
+        followup.send_attempt_count += 1
+        if followup.send_attempt_count < MAX_ATTEMPTS:
             followup.status = MentionFollowupStatus.PENDING
             followup.due_at = next_allowed_at(
                 datetime.now(UTC) + RETRY_DELAY, job.active_windows
@@ -281,11 +371,12 @@ async def _record_failure(job: _FollowupJob, code: str, message: str) -> None:
             followup.status = MentionFollowupStatus.FAILED
             followup.processed_at = datetime.now(UTC)
         exhausted = followup.status == MentionFollowupStatus.FAILED
+        attempts = followup.send_attempt_count
         await db.commit()
         logger.warning(
             "MENTION_FOLLOWUP_FAILED followup_id=%s attempt=%d code=%s",
             followup.id,
-            followup.attempt_count,
+            attempts,
             code,
         )
     await report_async(
@@ -306,12 +397,20 @@ async def process_followup(followup_id: uuid.UUID) -> None:
     if job is None:
         return
 
-    ready, reason = await _gateway_ready()
-    if not ready:
+    readiness, reason = await _gateway_readiness()
+    if readiness is _Readiness.BLOCKED:
         logger.warning(
             "MENTION_FOLLOWUP_POSTPONED followup_id=%s reason=%s", job.followup_id, reason
         )
-        await _postpone(job, reason, EVENTS_DOWN_DELAY)
+        await _postpone(job, reason, EVENTS_DOWN_DELAY, alert=True)
+        return
+    if readiness is _Readiness.BEHIND:
+        logger.info(
+            "MENTION_FOLLOWUP_WAITING_FOR_EVENTS followup_id=%s reason=%s",
+            job.followup_id,
+            reason,
+        )
+        await _postpone(job, reason, EVENTS_BEHIND_DELAY, alert=False)
         return
 
     try:

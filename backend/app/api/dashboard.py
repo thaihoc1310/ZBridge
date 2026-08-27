@@ -49,6 +49,7 @@ async def dashboard(
             .select_from(BotDeliveryLog)
             .where(
                 BotDeliveryLog.created_at >= today,
+                BotDeliveryLog.created_at < tomorrow,
                 BotDeliveryLog.status == DeliveryStatus.FAILED,
             )
         )
@@ -60,6 +61,9 @@ async def dashboard(
             BotDeliveryLog.status == DeliveryStatus.SENT
         )
     )
+    # Bucketed in Python on purpose. Grouping by local hour in SQL needs
+    # dialect-specific timezone functions that the SQLite test suite cannot run,
+    # and the scan is bounded by one day of SENT rows under a 7-day retention.
     sent_timestamps = (
         await db.scalars(
             select(BotDeliveryLog.created_at).where(

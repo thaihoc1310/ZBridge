@@ -1,6 +1,7 @@
 """Company-wide roster of taggable people, and the bulk editor built on it."""
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import and_, delete, func, or_, select
@@ -150,6 +151,80 @@ async def _selectable_customers(db: AsyncSession) -> list[tuple[Customer, ZaloGr
     return [(customer, group) for customer, group in rows]
 
 
+@dataclass(frozen=True)
+class _GroupPlan:
+    """What a bulk apply would write to one group, or why it would not.
+
+    Shared by preview and apply so the two cannot disagree. They used to decide
+    separately, and preview reported `will_change` for groups apply then skipped
+    — an unavailable group, or one Zalo left out of the members batch.
+    """
+
+    kept: dict[MentionTargetKind, list]
+    mention_on: bool
+    price_on: bool
+    missing: set[str]
+    #: None means this group would be written.
+    skip_reason: str | None
+
+
+def _plan_group(
+    data: BulkMentionUpdate,
+    group: ZaloGroup,
+    members: set[str] | None,
+) -> _GroupPlan:
+    def skipped(reason: str, missing: set[str] | None = None) -> _GroupPlan:
+        return _GroupPlan(
+            kept={MentionTargetKind.MENTION: [], MentionTargetKind.PRICE: []},
+            mention_on=False,
+            price_on=False,
+            missing=missing or set(),
+            skip_reason=reason,
+        )
+
+    if not group.is_available:
+        return skipped("GROUP_UNAVAILABLE")
+    # Nobody to place means nothing to verify: switching tagging off has to work
+    # while the bot is disconnected, which is exactly when somebody wants to.
+    membership_required = bool(data.targets or data.price_targets)
+    if membership_required and members is None:
+        # A locally available group can still be omitted by Zalo's batch reply.
+        # Writing unverified users there creates a config that fails every send.
+        return skipped("MEMBERS_UNKNOWN")
+
+    kept: dict[MentionTargetKind, list] = {}
+    # Per customer, and by name: somebody listed for both features who is absent
+    # from this group is one missing person here, not two.
+    missing: set[str] = set()
+    for kind, entries in (
+        (MentionTargetKind.MENTION, data.targets),
+        (MentionTargetKind.PRICE, data.price_targets),
+    ):
+        usable = []
+        for target in entries:
+            if members is None or target.user_id in members:
+                usable.append(target)
+            else:
+                missing.add(target.display_name)
+        kept[kind] = usable
+
+    mention_on = data.mention_tag_enabled and bool(kept[MentionTargetKind.MENTION])
+    price_on = data.price_inquiry_enabled and bool(kept[MentionTargetKind.PRICE])
+    # Asking for both features off is a request to disable tagging, so write it.
+    # Skipping is only for a customer where the chosen people cannot be tagged at
+    # all, which would leave an automation that can never fire.
+    turning_off = not data.mention_tag_enabled and not data.price_inquiry_enabled
+    if not mention_on and not price_on and not turning_off:
+        return skipped("NO_TAGGABLE_TARGET", missing)
+    return _GroupPlan(
+        kept=kept,
+        mention_on=mention_on,
+        price_on=price_on,
+        missing=missing,
+        skip_reason=None,
+    )
+
+
 async def preview_bulk_mention(
     db: AsyncSession, data: BulkMentionUpdate
 ) -> BulkMentionPreview:
@@ -218,38 +293,21 @@ async def preview_bulk_mention(
     rows: list[BulkMentionPreviewRow] = []
     for customer, group in pairs:
         automation = automations.get(group.id)
-        members = membership.get(group.zalo_group_id)
-        missing = (
-            sorted(
-                target.display_name
-                for target in [*data.targets, *data.price_targets]
-                if target.user_id not in members
-            )
-            if members is not None
-            else []
-        )
-        kept = {
-            MentionTargetKind.MENTION: [
-                target
-                for target in data.targets
-                if members is None or target.user_id in members
-            ],
-            MentionTargetKind.PRICE: [
-                target
-                for target in data.price_targets
-                if members is None or target.user_id in members
-            ],
-        }
-        mention_on = data.mention_tag_enabled and bool(kept[MentionTargetKind.MENTION])
-        price_on = data.price_inquiry_enabled and bool(kept[MentionTargetKind.PRICE])
         if automation is None:
             raise AppError(
                 "MENTION_AUTOMATION_CONFIG_MISSING",
                 f"Nhóm {group.name} thiếu cấu hình tag tên tự động.",
                 500,
             )
-        will_change = _differs(
-            automation, mention_on, price_on, data.delay_minutes, windows, kept
+        plan = _plan_group(data, group, membership.get(group.zalo_group_id))
+        # A group apply would skip never "will change", whatever the diff says.
+        will_change = plan.skip_reason is None and _differs(
+            automation,
+            plan.mention_on,
+            plan.price_on,
+            data.delay_minutes,
+            windows,
+            plan.kept,
         )
         rows.append(
             BulkMentionPreviewRow(
@@ -263,7 +321,7 @@ async def preview_bulk_mention(
                     else 0
                 ),
                 will_change=will_change,
-                missing_members=sorted(set(missing)),
+                missing_members=sorted(plan.missing),
             )
         )
     return BulkMentionPreview(rows=rows, gateway_error=gateway_error)
@@ -300,10 +358,10 @@ async def apply_bulk_mention(
 
     membership: dict[str, set[str]] = {}
     available = [group for _, group in pairs if group.is_available]
-    membership_required = bool(data.targets or data.price_targets)
     # Nobody to place means nothing to check. Asking the gateway anyway would
     # make switching tagging off impossible while the bot is disconnected, which
-    # is exactly when somebody wants to switch it off.
+    # is exactly when somebody wants to switch it off. `_plan_group` applies the
+    # matching rule per group.
     if available and (data.targets or data.price_targets):
         try:
             by_group = await zalo_gateway.get_group_members_batch(
@@ -335,46 +393,15 @@ async def apply_bulk_mention(
     skipped: list[str] = []
     dropped: dict[str, int] = {}
     for _customer, group in pairs:
-        if not group.is_available:
+        plan = _plan_group(data, group, membership.get(group.zalo_group_id))
+        if plan.skip_reason is not None:
+            # Nothing written here, so its dropped names are not counted either —
+            # there was no configuration to drop them from.
             skipped.append(group.name)
             continue
-        members = membership.get(group.zalo_group_id)
-        if membership_required and members is None:
-            # A locally available group can still be omitted by Zalo's batch
-            # response. Writing unverified users there creates a configuration
-            # that later fails every send, so leave that group untouched.
-            skipped.append(group.name)
-            continue
-        kept: dict[MentionTargetKind, list] = {}
-        # Per customer, and by name: somebody listed for both features who is
-        # absent from this group is one missing person here, not two.
-        missing_here: set[str] = set()
-        for kind, entries in (
-            (MentionTargetKind.MENTION, data.targets),
-            (MentionTargetKind.PRICE, data.price_targets),
-        ):
-            usable = []
-            for target in entries:
-                if members is None or target.user_id in members:
-                    usable.append(target)
-                else:
-                    missing_here.add(target.display_name)
-            kept[kind] = usable
-
-        mention_on = data.mention_tag_enabled and bool(kept[MentionTargetKind.MENTION])
-        price_on = data.price_inquiry_enabled and bool(kept[MentionTargetKind.PRICE])
-        # Asking for both features off is a request to disable tagging, so write
-        # it. Skipping is only for a customer where the chosen people cannot be
-        # tagged at all, which would leave an automation that can never fire.
-        turning_off = not data.mention_tag_enabled and not data.price_inquiry_enabled
-        if not mention_on and not price_on and not turning_off:
-            # Nothing left to tag with here; leave the customer untouched rather
-            # than writing an automation that can never fire. Its dropped names
-            # are not counted either — nothing was written to drop them from.
-            skipped.append(group.name)
-            continue
-        for name in missing_here:
-            dropped[name] = dropped.get(name, 0) + 1
+        kept = plan.kept
+        mention_on = plan.mention_on
+        price_on = plan.price_on
 
         automation = automations.get(group.id)
         if automation is None:
@@ -391,6 +418,12 @@ async def apply_bulk_mention(
             # has always guarded this; the bulk one has to as well.
             unchanged += 1
             continue
+
+        # Counted only now that a write is certain, for the same reason the skip
+        # path above does not count: "dropped from N customers" has to mean N
+        # customers whose configuration actually changed.
+        for name in plan.missing:
+            dropped[name] = dropped.get(name, 0) + 1
 
         await db.execute(
             delete(MentionTarget).where(MentionTarget.automation_id == automation.id)

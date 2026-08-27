@@ -250,7 +250,11 @@ class HealthResponse(BaseModel):
     zalo: str
     listener_status: str | None = None
     events_healthy: bool = False
+    #: Distinct from events_healthy on purpose: a working channel that simply has
+    #: events still in flight is normal, and must not read as an outage.
+    events_caught_up: bool = True
     event_backlog: int = 0
+    event_backlog_age_ms: int | None = None
 
 
 class GroupMemberResponse(BaseModel):

@@ -20,6 +20,7 @@ type GroupDetail = NonNullable<
 >;
 import type {
   BotState,
+  EventTransportStatus,
   ImageAttachment,
   IncomingGroupEvent,
   IncomingGroupMessageEvent,
@@ -128,9 +129,10 @@ export class ZcaJsClient implements ZaloClient {
     private readonly sessions: EncryptedSessionStore,
     private readonly eventSink: EventSink,
     private readonly sendIntervalMs = 1000,
-    private readonly eventTransportStatus: () => { healthy: boolean; pending: number } = () => ({
+    private readonly eventTransportStatus: () => EventTransportStatus = () => ({
       healthy: true,
       pending: 0,
+      oldestPendingMs: null,
     }),
   ) {}
 
@@ -226,7 +228,9 @@ export class ZcaJsClient implements ZaloClient {
         this.status === "CONNECTED"
         && this.listenerStatus === "LISTENING"
         && transport.healthy,
+      events_caught_up: transport.pending === 0,
       event_backlog: transport.pending,
+      event_backlog_age_ms: transport.oldestPendingMs,
     };
   }
 

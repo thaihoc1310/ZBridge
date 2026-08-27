@@ -134,7 +134,11 @@ async def sync_groups(db: AsyncSession) -> SyncResponse:
                     select(DebtReminderAutomation)
                     .join(Customer)
                     .where(Customer.zalo_group_id.in_(stale_ids))
-                    .with_for_update()
+                    # Automation only. Without `of=` Postgres also locks the
+                    # joined customers rows, and can take them in the opposite
+                    # order from update_customer (customer, then automation) —
+                    # a real deadlock between a group sync and an operator edit.
+                    .with_for_update(of=DebtReminderAutomation)
                 )
             ).all()
         )
@@ -199,7 +203,7 @@ async def sync_groups(db: AsyncSession) -> SyncResponse:
                         Customer.debt_file_url.is_not(None),
                         Customer.debt_file_url != "",
                     )
-                    .with_for_update()
+                    .with_for_update(of=DebtReminderAutomation)
                 )
             ).all()
         )

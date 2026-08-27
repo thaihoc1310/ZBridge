@@ -435,7 +435,20 @@ class MentionFollowup(Base):
         default=MentionFollowupStatus.PENDING,
         nullable=False,
     )
+    #: Claims of the current work item, reset by whichever stage settles it.
+    #: Deliberately NOT the retry budget: a failed send forces a fresh
+    #: classification, and that classification resets this counter.
     attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    #: Zalo sends attempted for the tag currently owed. Only a confirmed send or
+    #: a reply clears it, so MAX_ATTEMPTS is actually reachable.
+    send_attempt_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    #: Times this loop has been re-pointed at a newer message, so a run of
+    #: "ok"/"cảm ơn" cannot buy an unbounded number of model calls.
+    repoint_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     send_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

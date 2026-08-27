@@ -1,8 +1,11 @@
+import asyncio
 import logging
 import re
 import uuid
 from collections import deque
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
@@ -39,6 +42,61 @@ MAX_SCAN_FOLDERS = 10000
 MAX_SCAN_ENTRIES = 50000
 MAX_ITEM_ATTEMPTS = 3
 RETRYABLE_DRIVE_ERRORS = {"GOOGLE_API_ERROR", "GOOGLE_DRIVE_RATE_LIMIT"}
+#: Exponential backoff between item attempts. Retrying a rate-limit reply with
+#: no pause at all only deepens the throttle Google just applied.
+DRIVE_RETRY_BASE_DELAY_SECONDS = 2.0
+#: Ceiling on our *own* exponential backoff, when Google named no wait.
+DRIVE_RETRY_MAX_BACKOFF_SECONDS = 60.0
+#: Longest we will hold this worker asleep to honour a Retry-After. The drive
+#: queue runs at concurrency 1, so a longer nap would stall every other pending
+#: conversion; past this we stop retrying in-process instead of retrying early.
+DRIVE_RETRY_MAX_WAIT_SECONDS = 300.0
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Read a Retry-After header, in either of the two forms Google sends."""
+    if not value:
+        return None
+    text = value.strip()
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return max(0.0, (when - datetime.now(UTC)).total_seconds())
+
+
+async def _sleep(seconds: float) -> None:
+    """Indirection so a test can assert the backoff without patching asyncio."""
+    await asyncio.sleep(seconds)
+
+
+def _retry_delay_seconds(attempt: int, retry_after: float | None) -> float | None:
+    """Seconds to wait before attempt ``attempt + 1``, or None to stop retrying.
+
+    Never shorter than Google asked. Capping a Retry-After — as this used to,
+    at 60s — means retrying before the throttle lifts, which just earns another
+    rate-limit reply. When the requested wait is longer than we are willing to
+    occupy the worker, the honest answer is to stop rather than retry early: the
+    item lands FAILED and re-running the job picks it up, finding the Sheet
+    already there if the conversion had in fact gone through.
+    """
+    backoff = min(
+        DRIVE_RETRY_MAX_BACKOFF_SECONDS,
+        DRIVE_RETRY_BASE_DELAY_SECONDS * (2**attempt),
+    )
+    if retry_after is None:
+        return backoff
+    if retry_after > DRIVE_RETRY_MAX_WAIT_SECONDS:
+        return None
+    return max(backoff, retry_after)
 
 
 def _raise_drive_response_error(response: httpx.Response) -> None:
@@ -50,6 +108,7 @@ def _raise_drive_response_error(response: httpx.Response) -> None:
             reason = str(details[0].get("reason") or "")
     except (ValueError, AttributeError, TypeError):
         pass
+    retry_after = _parse_retry_after(response.headers.get("retry-after"))
     if reason == "storageQuotaExceeded":
         raise SheetExportError(
             "GOOGLE_DRIVE_STORAGE_QUOTA",
@@ -57,7 +116,9 @@ def _raise_drive_response_error(response: httpx.Response) -> None:
         )
     if reason in {"rateLimitExceeded", "userRateLimitExceeded"}:
         raise SheetExportError(
-            "GOOGLE_DRIVE_RATE_LIMIT", "Google Drive đang giới hạn tần suất thao tác."
+            "GOOGLE_DRIVE_RATE_LIMIT",
+            "Google Drive đang giới hạn tần suất thao tác.",
+            retry_after=retry_after,
         )
     if response.status_code in {401, 403}:
         raise SheetExportError(
@@ -69,7 +130,9 @@ def _raise_drive_response_error(response: httpx.Response) -> None:
             "GOOGLE_DRIVE_NOT_FOUND", "Không tìm thấy file hoặc folder Google Drive."
         )
     raise SheetExportError(
-        "GOOGLE_API_ERROR", f"Google Drive API gặp lỗi HTTP {response.status_code}."
+        "GOOGLE_API_ERROR",
+        f"Google Drive API gặp lỗi HTTP {response.status_code}.",
+        retry_after=retry_after,
     )
 
 
@@ -423,6 +486,20 @@ async def scan_conversion_job(job_id: uuid.UUID, task_token: str) -> None:
             await db.execute(
                 delete(DriveConversionItem).where(DriveConversionItem.job_id == job.id)
             )
+            # A Drive file can sit in two parents and be listed twice, which
+            # violates uq_drive_conversion_job_source. Keep the first path we
+            # reached it by; converting it once is what the operator wants.
+            unique_discovered: dict[str, DriveConversionItem] = {}
+            for candidate in discovered:
+                unique_discovered.setdefault(candidate.source_file_id, candidate)
+            if len(unique_discovered) != len(discovered):
+                logger.info(
+                    "DRIVE_SCAN_DEDUPED job_id=%s listed=%d unique=%d",
+                    job_id,
+                    len(discovered),
+                    len(unique_discovered),
+                )
+            discovered = list(unique_discovered.values())
             db.add_all(discovered)
             job.total_files = len(discovered)
             job.status = DriveConversionJobStatus.READY
@@ -431,15 +508,34 @@ async def scan_conversion_job(job_id: uuid.UUID, task_token: str) -> None:
             await db.commit()
         except Exception as exc:
             logger.exception("DRIVE_SCAN_FAILED job_id=%s", job_id)
-            job.status = DriveConversionJobStatus.FAILED
-            job.error_message = (
+            # The failure may well BE the commit above (a duplicate source id, an
+            # over-long name), which leaves this session unusable. Discard it and
+            # record the outcome on a clean one, or the handler raises
+            # PendingRollbackError, hides the real error, and strands the job in
+            # SCANNING with nothing to retry it.
+            await db.rollback()
+            await _fail_scan_job(
+                job_id,
                 exc.message
                 if isinstance(exc, (AppError, SheetExportError))
-                else "Không quét được folder Google Drive."
+                else "Không quét được folder Google Drive.",
             )
-            job.finished_at = datetime.now(UTC)
-            job.claim_token = None
-            await db.commit()
+
+
+async def _fail_scan_job(job_id: uuid.UUID, message: str) -> None:
+    async with SessionLocal() as db:
+        job = await db.scalar(
+            select(DriveConversionJob)
+            .where(DriveConversionJob.id == job_id)
+            .with_for_update()
+        )
+        if job is None:
+            return
+        job.status = DriveConversionJobStatus.FAILED
+        job.error_message = message
+        job.finished_at = datetime.now(UTC)
+        job.claim_token = None
+        await db.commit()
 
 
 async def start_conversion_job(
@@ -523,8 +619,25 @@ def _escape_drive_query(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
+@dataclass(frozen=True)
+class _ItemSnapshot:
+    """Everything one conversion needs, so no transaction spans the Drive calls.
+
+    Downloading 25 MB and uploading it back can take minutes; holding the row's
+    transaction open for that leaves a connection idle-in-transaction for the
+    whole time and blocks the API reading the same job.
+    """
+
+    id: uuid.UUID
+    source_file_id: str
+    source_name: str
+    parent_folder_id: str
+    destination_file_id: str | None
+    original_trashed: bool
+
+
 async def _find_existing_destination(
-    client: httpx.AsyncClient, token: str, item: DriveConversionItem
+    client: httpx.AsyncClient, token: str, item: _ItemSnapshot
 ) -> dict[str, object] | None:
     source_id = _escape_drive_query(item.source_file_id)
     query = (
@@ -588,7 +701,7 @@ async def _download_xlsx(
 async def _upload_xlsx_as_sheet(
     client: httpx.AsyncClient,
     token: str,
-    item: DriveConversionItem,
+    item: _ItemSnapshot,
     source_content: bytes,
 ) -> dict[str, object]:
     """Import an XLSX through a resumable session.
@@ -653,78 +766,145 @@ async def _upload_xlsx_as_sheet(
     return payload
 
 
+async def _claim_item(item_id: uuid.UUID) -> _ItemSnapshot | None:
+    """Mark the item in progress and snapshot it, in one short transaction."""
+    async with SessionLocal() as db:
+        item = await db.scalar(
+            select(DriveConversionItem)
+            .where(DriveConversionItem.id == item_id)
+            .with_for_update()
+        )
+        if item is None or item.status == DriveConversionItemStatus.CONVERTED:
+            return None
+        item.status = DriveConversionItemStatus.PROCESSING
+        item.attempt_count += 1
+        snapshot = _ItemSnapshot(
+            id=item.id,
+            source_file_id=item.source_file_id,
+            source_name=item.source_name,
+            parent_folder_id=item.parent_folder_id,
+            destination_file_id=item.destination_file_id,
+            original_trashed=item.original_trashed,
+        )
+        await db.commit()
+        return snapshot
+
+
+async def _record_destination(
+    item_id: uuid.UUID, destination_file_id: str, destination_url: str
+) -> None:
+    """Persist the Sheet before trashing the original.
+
+    Committed separately so a crash between the two can never leave the original
+    in the bin with no record of where its replacement went.
+    """
+    async with SessionLocal() as db:
+        item = await db.get(DriveConversionItem, item_id)
+        if item is None:
+            return
+        item.destination_file_id = destination_file_id
+        item.destination_url = destination_url
+        await db.commit()
+
+
+async def _mark_item_converted(item_id: uuid.UUID, *, original_trashed: bool) -> None:
+    async with SessionLocal() as db:
+        item = await db.get(DriveConversionItem, item_id)
+        if item is None:
+            return
+        item.original_trashed = original_trashed
+        item.status = DriveConversionItemStatus.CONVERTED
+        item.processed_at = datetime.now(UTC)
+        item.error_code = None
+        item.error_message = None
+        await db.commit()
+
+
 async def _convert_one(item_id: uuid.UUID, delete_original: bool) -> None:
     for attempt in range(MAX_ITEM_ATTEMPTS):
-        async with SessionLocal() as db:
-            item = await db.scalar(
-                select(DriveConversionItem)
-                .where(DriveConversionItem.id == item_id)
-                .with_for_update()
-            )
-            if item is None or item.status == DriveConversionItemStatus.CONVERTED:
-                return
-            item.status = DriveConversionItemStatus.PROCESSING
-            item.attempt_count += 1
-            await db.commit()
+        item = await _claim_item(item_id)
+        if item is None:
+            return
         try:
             token = await google_oauth_tokens.access_token()
+            # No session is open past this point: every write below opens its
+            # own short transaction after the Drive call it records has ended.
             async with httpx.AsyncClient(timeout=180, follow_redirects=True) as client:
-                async with SessionLocal() as db:
-                    item = await db.get(DriveConversionItem, item_id)
-                    if item is None:
-                        return
-                    existing = await _find_existing_destination(client, token, item)
-                    if existing is None and item.destination_file_id:
-                        existing = await _drive_json(
-                            client,
-                            "GET",
-                            f"https://www.googleapis.com/drive/v3/files/{item.destination_file_id}",
-                            token,
-                            params={
-                                "supportsAllDrives": "true",
-                                "fields": "id,name,mimeType,webViewLink,parents",
-                            },
-                        )
-                    if existing is None:
-                        source_content = await _download_xlsx(
-                            client, token, item.source_file_id
-                        )
-                        existing = await _upload_xlsx_as_sheet(
-                            client,
-                            token,
-                            item,
-                            source_content,
-                        )
-                    item.destination_file_id = str(existing.get("id") or "")
-                    item.destination_url = str(
-                        existing.get("webViewLink")
-                        or f"https://docs.google.com/spreadsheets/d/{item.destination_file_id}/edit"
+                existing = await _find_existing_destination(client, token, item)
+                if existing is None and item.destination_file_id:
+                    existing = await _drive_json(
+                        client,
+                        "GET",
+                        f"https://www.googleapis.com/drive/v3/files/{item.destination_file_id}",
+                        token,
+                        params={
+                            "supportsAllDrives": "true",
+                            "fields": "id,name,mimeType,webViewLink,parents",
+                        },
                     )
-                    await db.commit()
-                    if delete_original and not item.original_trashed:
-                        await _drive_json(
-                            client,
-                            "PATCH",
-                            f"https://www.googleapis.com/drive/v3/files/{item.source_file_id}",
-                            token,
-                            params={"supportsAllDrives": "true", "fields": "id,trashed"},
-                            json_body={"trashed": True},
-                        )
-                        item.original_trashed = True
-                    item.status = DriveConversionItemStatus.CONVERTED
-                    item.processed_at = datetime.now(UTC)
-                    item.error_code = None
-                    item.error_message = None
-                    await db.commit()
-                    return
+                if existing is None:
+                    source_content = await _download_xlsx(
+                        client, token, item.source_file_id
+                    )
+                    existing = await _upload_xlsx_as_sheet(
+                        client,
+                        token,
+                        item,
+                        source_content,
+                    )
+                destination_file_id = str(existing.get("id") or "")
+                destination_url = str(
+                    existing.get("webViewLink")
+                    or f"https://docs.google.com/spreadsheets/d/{destination_file_id}/edit"
+                )
+                await _record_destination(
+                    item.id, destination_file_id, destination_url
+                )
+                original_trashed = item.original_trashed
+                if delete_original and not original_trashed:
+                    await _drive_json(
+                        client,
+                        "PATCH",
+                        f"https://www.googleapis.com/drive/v3/files/{item.source_file_id}",
+                        token,
+                        params={"supportsAllDrives": "true", "fields": "id,trashed"},
+                        json_body={"trashed": True},
+                    )
+                    original_trashed = True
+                await _mark_item_converted(
+                    item.id, original_trashed=original_trashed
+                )
+                return
         except Exception as exc:
             retryable = (
                 isinstance(exc, SheetExportError) and exc.code in RETRYABLE_DRIVE_ERRORS
             ) or (isinstance(exc, AppError) and exc.status_code >= 500)
             if not isinstance(exc, (AppError, SheetExportError)):
                 retryable = True
+            retry_after = getattr(exc, "retry_after", None)
             if retryable and attempt + 1 < MAX_ITEM_ATTEMPTS:
-                continue
+                delay = _retry_delay_seconds(attempt, retry_after)
+                if delay is not None:
+                    logger.warning(
+                        "DRIVE_CONVERSION_ITEM_RETRY item_id=%s attempt=%d"
+                        " delay_s=%.1f code=%s",
+                        item_id,
+                        attempt + 1,
+                        delay,
+                        getattr(exc, "code", type(exc).__name__),
+                    )
+                    await _sleep(delay)
+                    continue
+                # Google asked for longer than we will hold the worker. Waiting
+                # less would just be throttled again, so settle the item and let
+                # a re-run pick it up.
+                logger.warning(
+                    "DRIVE_CONVERSION_ITEM_THROTTLED_TOO_LONG item_id=%s"
+                    " retry_after_s=%.0f max_wait_s=%.0f",
+                    item_id,
+                    retry_after or 0.0,
+                    DRIVE_RETRY_MAX_WAIT_SECONDS,
+                )
             async with SessionLocal() as db:
                 item = await db.get(DriveConversionItem, item_id)
                 if item:
@@ -735,13 +915,24 @@ async def _convert_one(item_id: uuid.UUID, delete_original: bool) -> None:
                         if isinstance(exc, (AppError, SheetExportError))
                         else "DRIVE_CONVERSION_ERROR"
                     )
-                    item.error_message = (
+                    message = (
                         exc.message
                         if isinstance(exc, (AppError, SheetExportError))
                         else "Lỗi không xác định khi chuyển file."
                     )
+                    if retry_after is not None and retry_after > DRIVE_RETRY_MAX_WAIT_SECONDS:
+                        # Say why we stopped, so this reads as "try again later"
+                        # rather than "this file cannot be converted".
+                        message = (
+                            f"{message} Google yêu cầu chờ {int(retry_after)} giây;"
+                            " hãy chạy lại lượt chuyển đổi sau đó."
+                        )
+                    item.error_message = message
                     await db.commit()
             logger.exception("DRIVE_CONVERSION_ITEM_FAILED item_id=%s", item_id)
+            # Settled. Without this the loop went round again and re-tried even
+            # a permission error, three times over, ignoring `retryable`.
+            return
 
 
 async def process_conversion_job(job_id: uuid.UUID, task_token: str) -> None:

@@ -53,6 +53,51 @@ ACTIVE_FOLLOWUP_STATUSES = (
 ACKNOWLEDGING_REACTIONS = {"heart", "like"}
 
 
+async def _lock_enabled_automation(
+    db: AsyncSession,
+    zalo_group_id: str,
+    *,
+    load_targets: bool = False,
+) -> MentionAutomation | None:
+    """Lock the group, then its automation — the order `sync_groups` uses.
+
+    Two statements rather than one join, for a reason that is easy to get wrong.
+    A joined ``FOR UPDATE`` without ``of=`` locks a row in every joined table, and
+    then the acquisition order is up to the query plan — it can take the
+    automation before the group while a group sync takes them the other way, and
+    the two deadlock.
+
+    But narrowing that same join to ``of=MentionAutomation`` trades the deadlock
+    for a lost invariant: Postgres only re-checks a predicate against the newest
+    row version for rows the statement *locks*. With only the automation locked,
+    a sync that flipped ``is_available`` to false mid-wait is invisible, and this
+    returns an automation for a group that is already gone — creating follow-ups
+    and paying for classifications that the send step will only cancel later.
+
+    Locking the group in its own statement gets both: the order matches
+    ``sync_groups``, and the availability predicate is re-checked under the lock.
+    """
+    group_id = await db.scalar(
+        select(ZaloGroup.id)
+        .where(
+            ZaloGroup.zalo_group_id == zalo_group_id,
+            ZaloGroup.is_available.is_(True),
+        )
+        .with_for_update()
+    )
+    if group_id is None:
+        return None
+    statement = select(MentionAutomation).where(
+        MentionAutomation.zalo_group_id == group_id,
+        MentionAutomation.enabled.is_(True),
+    )
+    if load_targets:
+        statement = statement.options(selectinload(MentionAutomation.targets))
+    # lock-scope: single-table — mention_automations only; the group above is
+    # locked by its own statement, in order.
+    return await db.scalar(statement.with_for_update())
+
+
 async def _attach_reaction_to_context(
     db: AsyncSession,
     automation_id: uuid.UUID,
@@ -189,6 +234,30 @@ def _invalidate_for_new_context(followups: list[MentionFollowup]) -> None:
             followup.attempt_count = 0
 
 
+def _followups_started_before(
+    followups: list[MentionFollowup],
+    occurred_at: datetime,
+    started_at_by_source: dict[str, datetime],
+) -> list[MentionFollowup]:
+    """Loops that already existed when this event actually happened.
+
+    The gateway outbox retries a delayed event for as long as it takes, so an
+    event can arrive hours after it occurred. Such an event belongs in history,
+    but it is not new context for a loop opened after it: invalidating those
+    would drop a live claim and force a needless model call.
+    """
+    relevant: list[MentionFollowup] = []
+    for followup in followups:
+        started_at = started_at_by_source.get(
+            followup.source_message_id, followup.created_at
+        )
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=UTC)
+        if started_at <= occurred_at:
+            relevant.append(followup)
+    return relevant
+
+
 async def _started_at_by_source(
     db: AsyncSession, followups: list[MentionFollowup]
 ) -> dict[str, datetime]:
@@ -217,16 +286,7 @@ async def acknowledge_from_reaction(
     if event.reaction not in ACKNOWLEDGING_REACTIONS:
         return IncomingEventResponse(scheduled=False)
 
-    automation = await db.scalar(
-        select(MentionAutomation)
-        .join(ZaloGroup, ZaloGroup.id == MentionAutomation.zalo_group_id)
-        .where(
-            ZaloGroup.zalo_group_id == event.group_id,
-            ZaloGroup.is_available.is_(True),
-            MentionAutomation.enabled.is_(True),
-        )
-        .with_for_update()
-    )
+    automation = await _lock_enabled_automation(db, event.group_id)
     if automation is None:
         return IncomingEventResponse(scheduled=False)
 
@@ -265,16 +325,9 @@ async def acknowledge_from_reaction(
         started_at_by_source=started_at_by_source,
     )
     if context_changed:
-        # A delayed/replayed old reaction belongs in history, but must not
-        # invalidate a loop whose source message did not exist at that time.
-        relevant_followups = []
-        for followup in followups:
-            started_at = started_at_by_source.get(followup.source_message_id, followup.created_at)
-            if started_at.tzinfo is None:
-                started_at = started_at.replace(tzinfo=UTC)
-            if started_at <= occurred_at:
-                relevant_followups.append(followup)
-        _invalidate_for_new_context(relevant_followups)
+        _invalidate_for_new_context(
+            _followups_started_before(followups, occurred_at, started_at_by_source)
+        )
     await db.commit()
     if acknowledged:
         logger.info(
@@ -319,6 +372,7 @@ async def _load_automation(
         .where(MentionAutomation.zalo_group_id == group_id)
     )
     if for_update:
+        # lock-scope: single-table — mention_automations only, no join.
         statement = statement.with_for_update()
     return await db.scalar(statement)
 
@@ -472,19 +526,8 @@ async def save_mention_automation(
 async def schedule_from_incoming_event(
     db: AsyncSession, event: IncomingGroupMessage
 ) -> IncomingEventResponse:
-    automation = await db.scalar(
-        select(MentionAutomation)
-        .join(ZaloGroup, ZaloGroup.id == MentionAutomation.zalo_group_id)
-        .options(
-            selectinload(MentionAutomation.targets),
-            selectinload(MentionAutomation.group),
-        )
-        .where(
-            ZaloGroup.zalo_group_id == event.group_id,
-            ZaloGroup.is_available.is_(True),
-            MentionAutomation.enabled.is_(True),
-        )
-        .with_for_update()
+    automation = await _lock_enabled_automation(
+        db, event.group_id, load_targets=True
     )
     if automation is None:
         return IncomingEventResponse(scheduled=False)
@@ -525,6 +568,7 @@ async def schedule_from_incoming_event(
             )
         ).all()
     )
+    started_at_by_source = await _started_at_by_source(db, active_followups)
     acknowledged_followups = (
         _acknowledge_target(
             active_followups,
@@ -535,7 +579,7 @@ async def schedule_from_incoming_event(
                 automation.active_windows,
             ),
             occurred_at=sent_at,
-            started_at_by_source=await _started_at_by_source(db, active_followups),
+            started_at_by_source=started_at_by_source,
         )
         if event.sender_id
         else 0
@@ -551,8 +595,12 @@ async def schedule_from_incoming_event(
 
     # A coworker may have answered on the target's behalf. Even when this sender
     # is not a configured target, no previously approved send may ignore the new
-    # context; the due dispatcher will wait for another AI verdict.
-    _invalidate_for_new_context(active_followups)
+    # context; the due dispatcher will wait for another AI verdict. Bounded by
+    # the same time guard as the reaction path: a replayed message is not new
+    # context for a loop that opened after it was sent.
+    _invalidate_for_new_context(
+        _followups_started_before(active_followups, sent_at, started_at_by_source)
+    )
 
     existing = await db.scalar(
         select(MentionFollowup.id).where(
@@ -606,6 +654,7 @@ async def schedule_from_incoming_event(
                 now,
                 trigger=MentionFollowupTrigger.PRICE_INQUIRY,
                 initial_status=MentionFollowupStatus.CLASSIFYING,
+                acknowledged_followups=acknowledged_followups,
             )
         await db.commit()
         return IncomingEventResponse(
@@ -666,6 +715,7 @@ async def schedule_from_incoming_event(
         now,
         trigger=MentionFollowupTrigger.MENTION,
         initial_status=initial_status,
+        acknowledged_followups=acknowledged_followups,
         classification_model=classification_model,
         classification_result=classification_result,
     )
@@ -759,6 +809,7 @@ async def _create_followup(
     *,
     trigger: MentionFollowupTrigger,
     initial_status: MentionFollowupStatus,
+    acknowledged_followups: int = 0,
     classification_model: str | None = None,
     classification_result: list[dict[str, object]] | None = None,
 ) -> IncomingEventResponse:
@@ -780,18 +831,40 @@ async def _create_followup(
     )
     automation_id = automation.id
     group_id = automation.zalo_group_id
-    db.add(followup)
+    # Insert behind a savepoint. A plain rollback here would also discard the
+    # acknowledgements and the context message this transaction already holds —
+    # exactly the work that stops a loop running forever.
+    #
+    # `add` has to happen INSIDE the savepoint. Adding it first puts the pending
+    # insert in the enclosing transaction's flush plan, and a failure there
+    # deactivates that transaction instead of just this savepoint.
     try:
-        await db.commit()
+        async with db.begin_nested():
+            db.add(followup)
+            await db.flush()
     except IntegrityError:
-        await db.rollback()
+        # The savepoint rollback normally discards the pending insert already;
+        # confirm it, so the commit below cannot retry the row that just failed.
+        if followup in db:
+            db.expunge(followup)
         existing = await db.scalar(
             select(MentionFollowup.id).where(
                 MentionFollowup.automation_id == automation_id,
                 MentionFollowup.source_message_id == event.message_id,
             )
         )
-        return IncomingEventResponse(scheduled=False, followup_id=existing)
+        await db.commit()
+        logger.info(
+            "MENTION_FOLLOWUP_DUPLICATE_SOURCE group_id=%s message_id=%s",
+            event.group_id,
+            event.message_id,
+        )
+        return IncomingEventResponse(
+            scheduled=False,
+            followup_id=existing,
+            acknowledged_followups=acknowledged_followups,
+        )
+    await db.commit()
     await db.refresh(followup)
     logger.info(
         "MENTION_FOLLOWUP_CREATED followup_id=%s group_id=%s trigger=%s status=%s"
@@ -807,4 +880,5 @@ async def _create_followup(
         scheduled=initial_status != MentionFollowupStatus.SKIPPED,
         followup_id=followup.id,
         matched_targets=len(targets),
+        acknowledged_followups=acknowledged_followups,
     )

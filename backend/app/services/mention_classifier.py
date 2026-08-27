@@ -427,7 +427,10 @@ async def _prepare_job(followup_id: uuid.UUID, claimed_at: datetime) -> _Classif
             prompt=PRICE_CLASSIFIER_PROMPT if is_price else CLASSIFIER_PROMPT,
             source=source,
             evaluated_due_at=_aware(followup.due_at) if _aware(followup.due_at) <= now else None,
-            repoints=followup.attempt_count - 1 if followup.attempt_count else 0,
+            # Its own column: reading `attempt_count` here always yielded 0,
+            # because this function's own verdict resets that counter before the
+            # next claim increments it back to 1. MAX_REPOINTS never applied.
+            repoints=followup.repoint_count,
             target_labels=target_labels,
             payload={
                 "prompt_version": PRICE_PROMPT_VERSION if is_price else PROMPT_VERSION,
@@ -765,6 +768,9 @@ async def process_classification(followup_id: uuid.UUID, claimed_at: datetime) -
             followup.status = MentionFollowupStatus.PENDING
             followup.evaluated_due_at = job.evaluated_due_at
             followup.processed_at = None
+            # The walk forward ended in a real tag, so the next skip chain
+            # starts from a full budget rather than inheriting this one.
+            followup.repoint_count = 0
             outcome = "SCHEDULED"
         else:
             newer = (
@@ -781,6 +787,7 @@ async def process_classification(followup_id: uuid.UUID, claimed_at: datetime) -
                 followup.processed_at = None
                 followup.classification_result = None
                 followup.evaluated_due_at = None
+                followup.repoint_count = job.repoints + 1
                 logger.info(
                     "MENTION_RECLASSIFY_NEWER followup_id=%s from=%s to=%s repoints=%d",
                     followup_id,

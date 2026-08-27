@@ -24,7 +24,9 @@ async def health() -> HealthResponse:
     zalo = "UNAVAILABLE"
     listener_status = None
     events_healthy = False
+    events_caught_up = True
     event_backlog = 0
+    event_backlog_age_ms: int | None = None
     database = "UP" if await _database_reachable() else "DOWN"
     try:
         gateway_health = await zalo_gateway.health()
@@ -32,7 +34,10 @@ async def health() -> HealthResponse:
         zalo = str(gateway_health.get("zalo", "UNAVAILABLE"))
         listener_status = str(gateway_health.get("listener") or "") or None
         events_healthy = bool(gateway_health.get("events_healthy", False))
+        events_caught_up = bool(gateway_health.get("events_caught_up", True))
         event_backlog = int(gateway_health.get("event_backlog") or 0)
+        raw_age = gateway_health.get("event_backlog_age_ms")
+        event_backlog_age_ms = int(raw_age) if raw_age is not None else None
     except GatewayError:
         pass
     return HealthResponse(
@@ -42,7 +47,9 @@ async def health() -> HealthResponse:
         zalo=zalo,
         listener_status=listener_status,
         events_healthy=events_healthy,
+        events_caught_up=events_caught_up,
         event_backlog=event_backlog,
+        event_backlog_age_ms=event_backlog_age_ms,
     )
 
 

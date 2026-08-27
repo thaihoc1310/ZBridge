@@ -26,7 +26,11 @@ class ZaloGatewayClient:
                 response = await client.request(
                     method, f"{self.base_url}{path}", headers=request_headers, **kwargs
                 )
-        except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        # Every transport failure, not just connect/timeout. A RemoteProtocolError
+        # or ReadError used to escape raw: callers that only handle GatewayError
+        # then let it reach Celery, which reported a CRITICAL "task crashed" and
+        # left the follow-up stuck in PROCESSING until its claim went stale.
+        except httpx.HTTPError as exc:
             raise GatewayError(
                 "ZALO_GATEWAY_UNAVAILABLE",
                 "Không thể kết nối tới Zalo Gateway.",

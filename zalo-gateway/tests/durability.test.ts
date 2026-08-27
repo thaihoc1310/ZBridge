@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -34,8 +34,13 @@ test("event outbox survives a gateway restart before backend delivery", async ()
     );
     await blocked.initialize();
     await blocked.enqueue(event);
-    assert.equal(blocked.status().pending, 1);
-    assert.equal(blocked.status().healthy, false);
+    const blockedStatus = blocked.status();
+    assert.equal(blockedStatus.pending, 1);
+    // A backlog is not an unhealthy transport. Conflating the two made the
+    // backend postpone every mention follow-up for five minutes whenever one
+    // event happened to be in flight, and alert about a lost event channel.
+    assert.equal(blockedStatus.healthy, true);
+    assert.equal(typeof blockedStatus.oldestPendingMs, "number");
 
     const delivered: IncomingGroupEvent[] = [];
     const restarted = new DurableEventOutbox(directory, "test-secret", async (item) => {
@@ -44,7 +49,25 @@ test("event outbox survives a gateway restart before backend delivery", async ()
     await restarted.initialize();
     await eventually(() => restarted.status().pending === 0);
     assert.deepEqual(delivered, [event]);
-    assert.equal(restarted.status().healthy, true);
+    const drainedStatus = restarted.status();
+    assert.equal(drainedStatus.healthy, true);
+    assert.equal(drainedStatus.oldestPendingMs, null);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a corrupt stored event marks the transport unhealthy, not merely behind", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "zbridge-outbox-corrupt-"));
+  try {
+    await writeFile(join(directory, "broken.event"), "not-encrypted-json", "utf8");
+    const outbox = new DurableEventOutbox(directory, "test-secret", async () => undefined);
+    await outbox.initialize();
+    const status = outbox.status();
+    // Nothing is queued, so only the storage failure can make this false — which
+    // is the signal that genuinely means "we may be missing replies".
+    assert.equal(status.pending, 0);
+    assert.equal(status.healthy, false);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

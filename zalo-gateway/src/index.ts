@@ -63,6 +63,9 @@ const client: ZaloClient = config.mock
       () => eventOutbox.status(),
     );
 
+/** Set once the outbox and the receipt store have been read off disk. */
+let storesReady = false;
+
 app.get("/health", asyncRoute(async (_req, res) => {
   const state = await client.getStatus();
   res.json({
@@ -70,13 +73,33 @@ app.get("/health", asyncRoute(async (_req, res) => {
     zalo: state.status,
     listener: state.listener_status,
     events_healthy: state.events_healthy,
+    events_caught_up: state.events_caught_up,
     event_backlog: state.event_backlog,
+    event_backlog_age_ms: state.event_backlog_age_ms,
+    stores_ready: storesReady,
   });
 }));
 
 app.use((req, res, next) => {
   if (!secretMatches(req.header("X-Gateway-Secret"), config.gatewaySecret)) {
     res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Invalid gateway secret." } });
+    return;
+  }
+  next();
+});
+
+// Sending before the receipt store is loaded would bypass dedup entirely, so
+// answer with a retryable 503 instead of the bare Error the store used to throw
+// (which surfaced as an opaque 500 the backend counted as a real send failure).
+app.use((req, _res, next) => {
+  if (req.path.startsWith("/messages/") && !storesReady) {
+    next(
+      new GatewayError(
+        "GATEWAY_STARTING",
+        "Gateway đang khởi động, chưa nhận yêu cầu gửi tin.",
+        503,
+      ),
+    );
     return;
   }
   next();
@@ -226,7 +249,10 @@ app.listen(config.port, "0.0.0.0", () => {
 });
 
 void Promise.all([eventOutbox.initialize(), sendReceipts.initialize()])
-  .then(() => client.initialize()).catch((error: unknown) => {
+  .then(() => {
+    storesReady = true;
+    return client.initialize();
+  }).catch((error: unknown) => {
   console.error(
     "ZALO_INITIALIZE_FAILED",
     error instanceof Error ? error.message : "unknown error",

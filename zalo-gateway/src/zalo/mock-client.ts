@@ -36,7 +36,9 @@ export class MockZaloClient implements ZaloClient {
       last_error: null,
       listener_status: this.connected ? "LISTENING" : "STOPPED",
       events_healthy: this.connected,
+      events_caught_up: true,
       event_backlog: 0,
+      event_backlog_age_ms: null,
     };
   }
   async getQr() {

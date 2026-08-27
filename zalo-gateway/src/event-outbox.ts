@@ -99,11 +99,30 @@ export class DurableEventOutbox {
     this.pump(event.group_id);
   }
 
-  status(): { healthy: boolean; pending: number } {
-    const pending = [...this.queues.values()].reduce((total, queue) => total + queue.length, 0);
+  /**
+   * Whether the transport works, and how far behind it is — separately.
+   *
+   * Folding `pending === 0` into `healthy` conflated the two: one event in
+   * flight, which is the normal case in an active group, read as "the Zalo
+   * event channel is lost" and made the backend postpone every mention
+   * follow-up by five minutes with a misleading alert.
+   */
+  status(): { healthy: boolean; pending: number; oldestPendingMs: number | null } {
+    let pending = 0;
+    let oldest: number | null = null;
+    for (const queue of this.queues.values()) {
+      pending += queue.length;
+      for (const record of queue) {
+        const createdAt = Date.parse(record.created_at);
+        if (!Number.isNaN(createdAt) && (oldest === null || createdAt < oldest)) {
+          oldest = createdAt;
+        }
+      }
+    }
     return {
-      healthy: this.initialized && !this.storageFailed && pending === 0,
+      healthy: this.initialized && !this.storageFailed,
       pending,
+      oldestPendingMs: oldest === null ? null : Math.max(0, Date.now() - oldest),
     };
   }
 

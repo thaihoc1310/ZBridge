@@ -316,6 +316,88 @@ async def test_scheduler_defers_a_legacy_blackout_schedule_before_creating_a_run
     await engine.dispose()
 
 
+async def test_one_duplicate_run_does_not_starve_every_other_customer(
+    monkeypatch,
+) -> None:
+    """A single conflicting insert used to abort the whole claim transaction.
+
+    Every automation was materialised in one flush, so one bad row meant nobody
+    got reminded that tick — and the next tick failed on the same row again.
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    due_at = datetime(2026, 6, 1, 2, tzinfo=UTC)
+
+    async with sessions() as db:
+        account = ZaloAccount(status=BotStatus.CONNECTED)
+        db.add(account)
+        await db.flush()
+        automation_ids = []
+        for index in range(2):
+            group = ZaloGroup(
+                zalo_account_id=account.id,
+                zalo_group_id=f"batch-group-{index}",
+                name=f"Khách {index}",
+                member_count=2,
+                is_available=True,
+                last_synced_at=due_at,
+            )
+            db.add(group)
+            await db.flush()
+            customer = Customer(
+                zalo_group_id=group.id,
+                has_debt=True,
+                debt_file_url=f"https://docs.google.com/spreadsheets/d/f{index}/edit",
+            )
+            db.add(customer)
+            await db.flush()
+            automation = DebtReminderAutomation(
+                customer_id=customer.id,
+                next_run_at=due_at,
+            )
+            db.add(automation)
+            await db.flush()
+            automation_ids.append(automation.id)
+        # The first customer already has a run for this exact slot, so its insert
+        # will violate uq_debt_reminder_run_schedule.
+        db.add(
+            DebtReminderRun(
+                automation_id=automation_ids[0],
+                scheduled_for=due_at,
+                retry_at=due_at,
+                status=DebtReminderStatus.CANCELLED,
+                processed_at=due_at,
+            )
+        )
+        await db.commit()
+
+    monkeypatch.setattr(debt_reminder_scheduler, "SessionLocal", sessions)
+    claimed = await claim_due_debt_reminders()
+
+    async with sessions() as db:
+        runs = list(
+            (
+                await db.scalars(
+                    select(DebtReminderRun).where(
+                        DebtReminderRun.automation_id == automation_ids[1]
+                    )
+                )
+            ).all()
+        )
+        # The healthy customer still got its run despite the neighbour's conflict.
+        assert len(runs) == 1
+        assert runs[0].id in claimed
+        # And both schedules moved on rather than retrying the same slot forever.
+        for automation_id in automation_ids:
+            automation = await db.get(DebtReminderAutomation, automation_id)
+            assert automation is not None
+            assert automation.next_run_at is not None
+            assert automation.next_run_at.replace(tzinfo=UTC) > due_at
+    await engine.dispose()
+
+
 def test_extract_spreadsheet_id() -> None:
     assert (
         extract_spreadsheet_id(

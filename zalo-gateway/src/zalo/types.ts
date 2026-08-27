@@ -29,8 +29,23 @@ export type BotState = {
   qr_status: string | null;
   last_error: string | null;
   listener_status: ListenerStatus;
+  /**
+   * The event channel is working: connected, listening, and the outbox can
+   * still store and forward. Deliberately independent of the backlog — an event
+   * being POSTed right now is the channel working, not failing.
+   */
   events_healthy: boolean;
+  /** Nothing is waiting to reach the backend, so replies observed so far are known. */
+  events_caught_up: boolean;
   event_backlog: number;
+  /** Age of the oldest undelivered event, which separates a blip from a stall. */
+  event_backlog_age_ms: number | null;
+};
+
+export type EventTransportStatus = {
+  healthy: boolean;
+  pending: number;
+  oldestPendingMs: number | null;
 };
 
 export type ZaloGroup = {

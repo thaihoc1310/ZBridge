@@ -5,6 +5,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.alerts import Severity
@@ -61,7 +63,13 @@ async def claim_due_debt_reminders() -> list[uuid.UUID]:
                     )
                     .order_by(DebtReminderAutomation.next_run_at)
                     .limit(100)
-                    .with_for_update(skip_locked=True)
+                    # `of=` matters: without it Postgres locks a row in every
+                    # joined table, so this would hold customers and zalo_groups
+                    # too — and could take the automation before the customer,
+                    # the reverse of _LOCK_ORDER. Only the automation is being
+                    # claimed here; the customer's debt state is re-checked under
+                    # its own lock in _send_step_if_current before anything sends.
+                    .with_for_update(of=DebtReminderAutomation, skip_locked=True)
                 )
             ).all()
         )
@@ -78,14 +86,28 @@ async def claim_due_debt_reminders() -> list[uuid.UUID]:
             if deferred_for != scheduled_for_utc:
                 automation.next_run_at = deferred_for
                 continue
-            db.add(
-                DebtReminderRun(
-                    automation_id=automation.id,
-                    scheduled_for=scheduled_for,
-                    retry_at=scheduled_for,
-                    status=DebtReminderStatus.PENDING,
+            # Per automation, behind a savepoint. One bad row used to abort the
+            # whole flush below, so no customer got reminded that tick — and the
+            # next tick would fail on the same row again.
+            try:
+                async with db.begin_nested():
+                    db.add(
+                        DebtReminderRun(
+                            automation_id=automation.id,
+                            scheduled_for=scheduled_for,
+                            retry_at=scheduled_for,
+                            status=DebtReminderStatus.PENDING,
+                        )
+                    )
+                    await db.flush()
+            except IntegrityError:
+                # A run for this exact slot already exists, so materialising it
+                # again is not wanted anyway. Advance the schedule and move on.
+                logger.warning(
+                    "DEBT_REMINDER_RUN_DUPLICATE automation_id=%s scheduled_for=%s",
+                    automation.id,
+                    scheduled_for,
                 )
-            )
             automation.next_run_at = next_debt_reminder_run(
                 automation.day_of_month,
                 automation.send_time,
@@ -119,6 +141,42 @@ async def claim_due_debt_reminders() -> list[uuid.UUID]:
         return [job.id for job in jobs]
 
 
+#: The one order in which every debt-reminder writer takes its row locks.
+#:
+#: Postgres deadlocks the moment two transactions disagree on it. The subtle part
+#: is that the foreign key from bot_delivery_logs to customers makes inserting a
+#: delivery log an implicit lock on the customer row — so a writer that only
+#: *logs* still participates, and must take the customer lock first rather than
+#: grabbing the run and reaching for the customer afterwards. Skipping a lock in
+#: the middle is fine; taking them out of order is not.
+_LOCK_ORDER = ("customers", "debt_reminder_automations", "debt_reminder_runs")
+
+
+async def _lock_customer(db: AsyncSession, customer_id: uuid.UUID) -> Customer | None:
+    """First lock in :data:`_LOCK_ORDER`."""
+    return await db.scalar(
+        select(Customer).where(Customer.id == customer_id).with_for_update()
+    )
+
+
+async def _lock_automation(
+    db: AsyncSession, automation_id: uuid.UUID
+) -> DebtReminderAutomation | None:
+    """Second lock in :data:`_LOCK_ORDER`."""
+    return await db.scalar(
+        select(DebtReminderAutomation)
+        .where(DebtReminderAutomation.id == automation_id)
+        .with_for_update()
+    )
+
+
+async def _lock_run(db: AsyncSession, run_id: uuid.UUID) -> DebtReminderRun | None:
+    """Last lock in :data:`_LOCK_ORDER`."""
+    return await db.scalar(
+        select(DebtReminderRun).where(DebtReminderRun.id == run_id).with_for_update()
+    )
+
+
 def _current_delivery_type(run: DebtReminderRun) -> DeliveryType:
     if not run.image_message_id:
         return DeliveryType.DEBT_REMINDER_IMAGE
@@ -134,7 +192,17 @@ async def _fail_run(
     message: str,
 ) -> None:
     async with SessionLocal() as db:
-        current = await db.get(DebtReminderRun, run.id)
+        # Locked, like every other writer of this row: an unlocked check-then-act
+        # let this failure interleave with the block that marks the run SENT, so
+        # a delivered reminder could end up carrying an error code, or a sent run
+        # could be flipped back to PENDING and sent a second time.
+        #
+        # Customer first, per _LOCK_ORDER, even though nothing here mutates it.
+        # add_delivery_log below needs that lock anyway via its foreign key, and
+        # taking the run first put this function in the opposite order from
+        # _send_step_if_current — a real deadlock, not a theoretical one.
+        await _lock_customer(db, customer_id)
+        current = await _lock_run(db, run.id)
         if (
             current is None
             or current.status != DebtReminderStatus.PROCESSING
@@ -199,11 +267,9 @@ async def _finish_without_sending(
     reason: str,
 ) -> None:
     async with SessionLocal() as db:
-        run = await db.scalar(
-            select(DebtReminderRun)
-            .where(DebtReminderRun.id == run_id)
-            .with_for_update()
-        )
+        # Only the run: this path writes no delivery log, so it never reaches for
+        # the customer row. Holding a strict suffix of _LOCK_ORDER cannot deadlock.
+        run = await _lock_run(db, run_id)
         if (
             run is None
             or run.status != DebtReminderStatus.PROCESSING
@@ -244,23 +310,13 @@ async def _send_step_if_current(
         automation_snapshot = await db.get(DebtReminderAutomation, snapshot.automation_id)
         if automation_snapshot is None:
             return False, None
-        customer = await db.scalar(
-            select(Customer)
-            .where(Customer.id == automation_snapshot.customer_id)
-            .with_for_update()
-        )
-        automation = await db.scalar(
-            select(DebtReminderAutomation)
-            .where(DebtReminderAutomation.id == snapshot.automation_id)
-            .with_for_update()
-        )
+        # _LOCK_ORDER, in full. The two db.get calls above are unlocked reads
+        # used only to resolve the ids needed to take these in order.
+        customer = await _lock_customer(db, automation_snapshot.customer_id)
+        automation = await _lock_automation(db, snapshot.automation_id)
         if automation is None:
             return False, None
-        run = await db.scalar(
-            select(DebtReminderRun)
-            .where(DebtReminderRun.id == run_id)
-            .with_for_update()
-        )
+        run = await _lock_run(db, run_id)
         if (
             run is None
             or run.status != DebtReminderStatus.PROCESSING
@@ -364,8 +420,9 @@ async def process_debt_reminder(run_id: uuid.UUID) -> None:
                 await db.commit()
 
             if not run.image_message_id:
-                if artifact is None:
-                    artifact = await google_sheets.export_first_sheet(debt_file_url)
+                # The export above always runs when image_message_id is unset, so
+                # `artifact` is populated here by construction.
+                assert artifact is not None
                 sent, message_id = await _send_step_if_current(
                     run.id,
                     run.claimed_at,
@@ -419,11 +476,8 @@ async def process_debt_reminder(run_id: uuid.UUID) -> None:
                     return
 
             async with SessionLocal() as finish_db:
-                current = await finish_db.scalar(
-                    select(DebtReminderRun)
-                    .where(DebtReminderRun.id == run.id)
-                    .with_for_update()
-                )
+                # Run only, and no delivery log here, so a suffix of _LOCK_ORDER.
+                current = await _lock_run(finish_db, run.id)
                 if (
                     current is not None
                     and current.status == DebtReminderStatus.PROCESSING

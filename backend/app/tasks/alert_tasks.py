@@ -41,6 +41,18 @@ def _occurrence(dedup_key: str, window_seconds: int) -> int:
         return 1
 
 
+#: Matches EVENTS_BEHIND_ESCALATE_AFTER in the mention scheduler: the point at
+#: which a backlog stops being a blip and becomes something to report.
+EVENT_BACKLOG_STALL_MS = 120_000
+
+
+def _backlog_stalled(health: dict[str, Any]) -> bool:
+    if health.get("events_caught_up", True):
+        return False
+    age_ms = health.get("event_backlog_age_ms")
+    return age_ms is not None and float(age_ms) >= EVENT_BACKLOG_STALL_MS
+
+
 def _format(
     code: str,
     message: str,
@@ -195,6 +207,20 @@ def heartbeat() -> None:
                 "Kênh nhận phản hồi Zalo không khỏe; tag tự động đang tạm dừng. "
                 f"Listener={health.get('listener_status') or 'UNKNOWN'}, "
                 f"backlog={health.get('event_backlog') or 0}."
+            ),
+            severity="ERROR",
+            service="heartbeat",
+        )
+    elif _backlog_stalled(health):
+        # A healthy channel that is not draining. events_healthy no longer folds
+        # the backlog in — an event in flight is normal — so a genuine stall
+        # needs its own check rather than riding on that flag.
+        send_alert(
+            code="ZALO_EVENTS_BACKLOG_STALLED",
+            message=(
+                f"Gateway còn {health.get('event_backlog') or 0} sự kiện Zalo chưa chuyển"
+                f" được về backend sau {int((health.get('event_backlog_age_ms') or 0) / 1000)}"
+                " giây; tag tự động đang chờ."
             ),
             severity="ERROR",
             service="heartbeat",

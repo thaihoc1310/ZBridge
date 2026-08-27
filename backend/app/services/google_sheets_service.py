@@ -28,9 +28,12 @@ WHITE_THRESHOLD = 10
 
 
 class SheetExportError(Exception):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, retry_after: float | None = None) -> None:
         self.code = code
         self.message = message
+        #: Seconds Google asked us to wait, when it said so. Callers that retry
+        #: honour this instead of guessing a delay.
+        self.retry_after = retry_after
         super().__init__(message)
 
 

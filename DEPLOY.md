@@ -342,6 +342,9 @@ secret đó mà không mã hoá lại thì buộc phải quét QR lần nữa. M
 
 ## 10. Cập nhật phiên bản
 
+> **Nâng lên bản có migration `0028_mention_followup_counters`:** làm mục
+> "Một lần" ngay bên dưới **trước**, đừng chạy `dc up -d` của khối này.
+
 ```bash
 cd /opt/zbridge
 git fetch origin && git reset --hard origin/main
@@ -353,6 +356,79 @@ dc ps
 
 `git reset --hard` **không** ảnh hưởng `.env.prod` và `secrets/` vì chúng đã được
 gitignore. Migration tự chạy qua `migrate` trước khi backend mới lên.
+
+### Một lần: bản đổi khoá idempotency của tag tên
+
+Bản có migration `0028_mention_followup_counters` đổi khoá chống gửi trùng của
+tag tên từ `mention:{id}:{due_at}` sang `mention:{id}:{send_count}`. Receipt do
+bản cũ ghi mang khoá cũ, nên gateway không nhận ra chúng nữa.
+
+Chỉ có đúng một cửa sổ rủi ro: một lượt tag mà **Zalo đã nhận nhưng backend bị
+timeout**, đang chờ thử lại đúng lúc nâng phiên bản. Lần thử lại sau khi nâng
+dùng khoá mới nên có thể tag trùng một lần.
+
+Từ bản này về sau khoá không đổi nữa, nên quy trình dưới đây chỉ làm một lần.
+
+**Bước 1 — chờ hết các lượt đang có nguy cơ.** Cứ để nguyên hệ thống chạy: chỉ
+worker cũ mới xử lý xong được các lượt này. Poll đến khi truy vấn rỗng:
+
+```bash
+dc exec -T postgres psql -U zbridge -d zbridge -c "
+SELECT status, count(*)
+FROM mention_followups
+WHERE status = 'PROCESSING'
+   OR (status IN ('PENDING', 'CLASSIFYING') AND error_message IS NOT NULL)
+GROUP BY status;"
+```
+
+`CLASSIFYING` **phải** có trong danh sách: một lượt gửi lỗi sẽ về `PENDING` kèm
+`error_message`, rồi bị claim để phân loại lại và chuyển sang `CLASSIFYING` mà
+`error_message` vẫn còn — bỏ sót trạng thái này là bỏ sót đúng nhóm nguy hiểm.
+
+Lượt mới do tin nhắn Zalo vừa tới tạo ra có `error_message` NULL nên không lọt
+vào truy vấn và không cần chờ.
+
+**Đừng đặt hạn thời gian cho bước này.** Phiên bản đang bị drain là phiên bản
+*cũ* — chính phiên bản có lỗi reset `attempt_count`, nên nếu gateway vẫn lỗi thì
+lượt tag sẽ thử lại **vô hạn** và không bao giờ đạt `MAX_ATTEMPTS` để dừng. Khung
+giờ hoạt động cũng đẩy mỗi lần thử lại sang lần mở cửa sổ kế tiếp, có thể hàng
+giờ. Cứ poll đến khi rỗng.
+
+Nếu truy vấn không tự rỗng thì phải xử lý chủ đích, chọn một trong hai:
+
+- Sửa nguyên nhân gateway lỗi (xem mục 13) rồi để nó tự thử lại thành công.
+- Hoặc dừng hẳn các lượt đó: trang **Công cụ → Vòng tag đang hoạt động** có nút
+  dừng từng lượt. Lượt đã dừng chuyển sang `CANCELLED` và rời khỏi truy vấn.
+  Tài khoản thao tác cần đủ ba quyền: `tools:read` để vào trang,
+  `mention_followup:read` để thấy danh sách, `mention_followup:cancel` để dừng.
+
+**Bước 2 — đóng băng trạng thái.** Chỉ sau khi truy vấn đã rỗng:
+
+```bash
+dc stop celery-beat celery-worker celery-ai
+```
+
+Dừng `celery-beat` trước là điều quan trọng: nó là thứ dispatch các lượt thử lại.
+
+> Đừng dừng worker ở Bước 1. Dừng worker **không** làm hàng đợi cạn — nó làm các
+> row `PENDING`/`CLASSIFYING` đứng nguyên, và truy vấn trên sẽ không bao giờ tự
+> trở về rỗng.
+
+**Bước 3 — kiểm tra lần cuối rồi nâng.** Chạy lại truy vấn ở Bước 1. Tin nhắn
+Zalo đến sau khi dừng worker vẫn tạo được lượt mới, nên nếu xuất hiện row có
+`error_message` thì khởi động lại worker cũ (`dc start celery-beat celery-worker
+celery-ai`) và quay về Bước 1.
+
+Khi đã rỗng và đứng yên, mới cập nhật code rồi nâng:
+
+```bash
+cd /opt/zbridge
+git fetch origin && git reset --hard origin/main
+# sửa IMAGE_TAG trong .env.prod nếu ghim theo tag/SHA
+dc pull
+dc up -d      # khởi động lại cả ba service vừa dừng
+dc ps
+```
 
 ## 11. Rollback
 
