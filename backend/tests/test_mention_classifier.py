@@ -594,6 +594,60 @@ async def test_overdue_classification_is_released_and_alerts(monkeypatch) -> Non
     await engine.dispose()
 
 
+async def test_a_fresh_repoint_is_not_timed_out_using_the_original_created_at(
+    monkeypatch,
+) -> None:
+    """Repointing keeps created_at for audit, but starts a new classification.
+
+    The dispatcher has not claimed that new work item yet, so claimed_at is
+    intentionally null. Falling back to the original created_at here used to
+    release it immediately and impose an unnecessary five-minute retry delay.
+    """
+    engine, sessions = await _database()
+    now = datetime.now(UTC)
+    async with sessions() as db:
+        automation = await db.scalar(select(MentionAutomation))
+        assert automation is not None
+        followup = MentionFollowup(
+            automation_id=automation.id,
+            source_message_id="fresh-repoint-of-old-followup",
+            target_user_ids=["target-user"],
+            target_display_names=["Abcd"],
+            due_at=now,
+            status=MentionFollowupStatus.CLASSIFYING,
+            created_at=now - timedelta(minutes=40),
+            claimed_at=None,
+            repoint_count=1,
+        )
+        db.add(followup)
+        await db.commit()
+        followup_id = followup.id
+
+    alerts: list[str] = []
+
+    async def capture(code, _message, **_kwargs):
+        alerts.append(code)
+
+    monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
+    monkeypatch.setattr(mention_classifier, "report_async", capture)
+
+    assert await mention_classifier.release_overdue_classifications() == 0
+    assert alerts == []
+
+    # It is still ordinary unclaimed work: the next dispatcher pass claims it
+    # immediately rather than leaving it exempt from timeout forever.
+    claimed = await mention_classifier.claim_pending_classifications()
+    assert [item[0] for item in claimed] == [followup_id]
+    async with sessions() as db:
+        stored = await db.get(MentionFollowup, followup_id)
+        assert stored is not None
+        assert stored.status == MentionFollowupStatus.CLASSIFYING
+        assert stored.claimed_at is not None
+        assert stored.classification_error is None
+
+    await engine.dispose()
+
+
 async def test_classification_failure_alerts_and_postpones_tag(monkeypatch) -> None:
     engine, sessions = await _database()
     async with sessions() as db:

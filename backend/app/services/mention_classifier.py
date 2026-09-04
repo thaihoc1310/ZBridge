@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from app.core.alerts import Severity
@@ -197,15 +197,30 @@ async def release_overdue_classifications() -> int:
     """
     deadline = timedelta(minutes=settings.mention_classification_deadline_minutes)
     now = datetime.now(UTC)
+    cutoff = now - deadline
     async with SessionLocal() as db:
         overdue = list(
             (
                 await db.scalars(
-                    select(MentionFollowup).where(
+                    select(MentionFollowup)
+                    .where(
                         MentionFollowup.status == MentionFollowupStatus.CLASSIFYING,
-                        func.coalesce(MentionFollowup.claimed_at, MentionFollowup.created_at)
-                        < now - deadline,
+                        or_(
+                            and_(
+                                MentionFollowup.claimed_at.is_not(None),
+                                MentionFollowup.claimed_at < cutoff,
+                            ),
+                            and_(
+                                MentionFollowup.claimed_at.is_(None),
+                                MentionFollowup.repoint_count == 0,
+                                MentionFollowup.created_at < cutoff,
+                            ),
+                        ),
                     )
+                    # The AI result writer locks the same row before finalizing.
+                    # Skip an in-flight result instead of overwriting it with a
+                    # timeout retry based on a stale snapshot.
+                    .with_for_update(skip_locked=True)
                 )
             ).all()
         )
