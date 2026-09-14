@@ -1,10 +1,12 @@
 import os
 import time as system_time
+import uuid
 from datetime import UTC, date, datetime, time, timedelta
 
 import pytest
 from PIL import Image, ImageDraw
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.database import Base
@@ -29,6 +31,7 @@ from app.services.debt_reminder_service import (
     next_debt_reminder_run,
     next_monthly_run,
     save_debt_reminder,
+    trigger_debt_reminder_now,
 )
 from app.services.google_sheets_service import (
     SheetArtifact,
@@ -36,6 +39,7 @@ from app.services.google_sheets_service import (
     crop_white_margins,
     extract_spreadsheet_id,
 )
+from app.tasks import debt_reminder_tasks
 
 
 def test_next_monthly_run_uses_vietnam_time_and_clamps_short_months() -> None:
@@ -49,11 +53,10 @@ def test_next_monthly_run_uses_vietnam_time_and_clamps_short_months() -> None:
     february_run = next_monthly_run(
         31,
         time(9, 0),
-        # February 2031 ends on lunar 08/02, so the monthly blackout moves it
-        # to lunar 09/02 on 01/03.
+        # February 2031 ends on lunar 08/02, which is allowed.
         now=datetime(2031, 2, 1, tzinfo=UTC),
     )
-    assert february_run == datetime(2031, 3, 1, 2, tzinfo=UTC)
+    assert february_run == datetime(2031, 2, 28, 2, tzinfo=UTC)
 
 
 @pytest.mark.parametrize("server_timezone", ["UTC", "Asia/Singapore"])
@@ -84,11 +87,12 @@ def test_vietnamese_lunar_blackouts_are_deferred_even_across_solar_months() -> N
     assert is_debt_reminder_blackout(datetime(2026, 3, 19).date())
     assert is_debt_reminder_blackout(datetime(2026, 4, 2).date())
     assert is_debt_reminder_blackout(datetime(2026, 3, 20).date())
+    assert not is_debt_reminder_blackout(datetime(2026, 3, 25).date())
     assert not is_debt_reminder_blackout(datetime(2026, 3, 27).date())
 
     assert defer_debt_reminder(
         datetime(2026, 2, 17, 2, tzinfo=UTC)
-    ) == datetime(2026, 3, 27, 2, tzinfo=UTC)
+    ) == datetime(2026, 3, 25, 2, tzinfo=UTC)
 
     # 31/05/2026 is lunar 15/04, so a configured day 31 must run on 01/06.
     assert next_monthly_run(
@@ -114,19 +118,20 @@ def test_hung_kings_commemoration_is_deferred(
 
 @pytest.mark.parametrize(
     ("solar_month", "solar_day"),
-    [(4, 17), (4, 24), (5, 17), (5, 24), (6, 15), (6, 22)],
+    [(4, 17), (4, 22), (5, 17), (5, 22), (6, 15), (6, 20)],
 )
-def test_first_eight_lunar_days_are_deferred(
+def test_first_six_lunar_days_are_deferred(
     solar_month: int, solar_day: int
 ) -> None:
     assert is_debt_reminder_blackout(date(2026, solar_month, solar_day))
 
-    # 17/04/2026 is 01/03 lunar; the first allowed date is 09/03 lunar.
+    # 17/04/2026 is 01/03 lunar; the first allowed date is 07/03 lunar.
     if (solar_month, solar_day) == (4, 17):
         assert defer_debt_reminder(
             datetime(2026, solar_month, solar_day, 2, tzinfo=UTC)
-        ) == datetime(2026, 4, 25, 2, tzinfo=UTC)
-        assert not is_debt_reminder_blackout(date(2026, 4, 25))
+        ) == datetime(2026, 4, 23, 2, tzinfo=UTC)
+        assert not is_debt_reminder_blackout(date(2026, 4, 23))
+        assert not is_debt_reminder_blackout(date(2026, 4, 24))
 
 
 def test_solar_new_year_is_deferred_to_january_second() -> None:
@@ -148,10 +153,10 @@ def test_fixed_solar_holidays_are_deferred_to_the_next_working_day() -> None:
     assert defer_debt_reminder(
         datetime(2027, 5, 1, 2, tzinfo=UTC)
     ) == datetime(2027, 5, 2, 2, tzinfo=UTC)
-    # 02/09/2027 is also 02/08 lunar, so both rules defer it to 09/08 lunar.
+    # 02/09/2027 is also 02/08 lunar, so both rules defer it to 07/08 lunar.
     assert defer_debt_reminder(
         datetime(2027, 9, 2, 2, tzinfo=UTC)
-    ) == datetime(2027, 9, 9, 2, tzinfo=UTC)
+    ) == datetime(2027, 9, 7, 2, tzinfo=UTC)
     assert next_monthly_run(
         1,
         time(9, 0),
@@ -159,32 +164,34 @@ def test_fixed_solar_holidays_are_deferred_to_the_next_working_day() -> None:
     ) == datetime(2027, 1, 2, 2, tzinfo=UTC)
 
 
-def test_tet_break_and_monthly_blackout_resume_on_mung_9_thang_hai() -> None:
+def test_tet_break_and_monthly_blackout_resume_on_mung_7_thang_hai() -> None:
     # In 2026: 14/02 is 27/12, 15/02 is 28/12, 19/03 is 01/02,
-    # while the monthly rule keeps 01/02 through 08/02 blocked. Reminders resume
-    # on 27/03, which is 09/02.
+    # while the monthly rule keeps 01/02 through 06/02 blocked. Reminders resume
+    # on 25/03, which is 07/02.
     assert not is_debt_reminder_blackout(datetime(2026, 2, 14).date())
     assert is_debt_reminder_blackout(datetime(2026, 2, 15).date())
     assert is_debt_reminder_blackout(datetime(2026, 3, 4).date())
     assert is_debt_reminder_blackout(datetime(2026, 3, 19).date())
     assert is_debt_reminder_blackout(datetime(2026, 3, 20).date())
-    assert is_debt_reminder_blackout(datetime(2026, 3, 26).date())
+    assert is_debt_reminder_blackout(datetime(2026, 3, 24).date())
+    assert not is_debt_reminder_blackout(datetime(2026, 3, 25).date())
+    assert not is_debt_reminder_blackout(datetime(2026, 3, 26).date())
     assert not is_debt_reminder_blackout(datetime(2026, 3, 27).date())
 
     # Keep the configured Vietnam-local send time while crossing the solar month.
     assert defer_debt_reminder(
         datetime(2026, 2, 15, 2, tzinfo=UTC)
-    ) == datetime(2026, 3, 27, 2, tzinfo=UTC)
+    ) == datetime(2026, 3, 25, 2, tzinfo=UTC)
 
     # The clamped end of February can also fall inside tháng Giêng and must
-    # wait for mùng 9 tháng Hai rather than send at the solar month boundary.
+    # wait for mùng 7 tháng Hai rather than send at the solar month boundary.
     assert next_monthly_run(
         31,
         time(9, 0),
         now=datetime(2027, 2, 1, tzinfo=UTC),
-    ) == datetime(2027, 3, 16, 2, tzinfo=UTC)
+    ) == datetime(2027, 3, 14, 2, tzinfo=UTC)
 
-    # An interval landing on 28 tháng Chạp also resumes on 09 tháng Hai.
+    # An interval landing on 28 tháng Chạp also resumes on 07 tháng Hai.
     february_12 = datetime(2026, 2, 12, 2, tzinfo=UTC)
     assert next_debt_reminder_run(
         31,
@@ -193,11 +200,135 @@ def test_tet_break_and_monthly_blackout_resume_on_mung_9_thang_hai() -> None:
         february_12,
         has_debt=True,
         now=february_12,
-    ) == datetime(2026, 3, 27, 2, tzinfo=UTC)
+    ) == datetime(2026, 3, 25, 2, tzinfo=UTC)
 
 
 def test_debt_reminder_has_no_independent_enabled_field() -> None:
     assert "enabled" not in DebtReminderUpdate.model_fields
+
+
+async def test_manual_debt_reminder_queues_on_blackout_without_moving_schedule(
+    monkeypatch,
+) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 4, 17, 2, tzinfo=UTC)  # 01/03 lunar
+    automatic_run = datetime(2026, 4, 25, 2, tzinfo=UTC)
+    queued: list[str] = []
+    monkeypatch.setattr(
+        debt_reminder_tasks.process_debt_reminder_task,
+        "delay",
+        lambda run_id: queued.append(run_id),
+    )
+
+    async with sessions() as db:
+        account = ZaloAccount(status=BotStatus.CONNECTED)
+        db.add(account)
+        await db.flush()
+        group = ZaloGroup(
+            zalo_account_id=account.id,
+            zalo_group_id="manual-debt-reminder",
+            name="Khách cần nhắc gấp",
+            member_count=2,
+            is_available=True,
+            last_synced_at=now,
+        )
+        db.add(group)
+        await db.flush()
+        customer = Customer(
+            zalo_group_id=group.id,
+            has_debt=True,
+            debt_file_url="https://docs.google.com/spreadsheets/d/manual/edit",
+        )
+        db.add(customer)
+        await db.flush()
+        automation = DebtReminderAutomation(
+            customer_id=customer.id,
+            day_of_month=25,
+            send_time=time(9, 0),
+            message_parts=[{"type": "text", "text": "Nhắc công nợ."}],
+            next_run_at=automatic_run,
+        )
+        db.add(automation)
+        await db.commit()
+
+        assert is_debt_reminder_blackout(now.date())
+        actor_id = uuid.uuid4()
+        request_id = uuid.uuid4()
+        result = await trigger_debt_reminder_now(
+            db,
+            customer.id,
+            actor_id=actor_id,
+            actor_email="collector@zbridge.vn",
+            request_id=request_id,
+            now=now,
+        )
+
+        run = await db.get(DebtReminderRun, result.run_id)
+        await db.refresh(automation)
+        assert run is not None
+        assert run.is_manual is True
+        assert run.triggered_by_user_id == actor_id
+        assert run.triggered_by_email == "collector@zbridge.vn"
+        assert run.status == DebtReminderStatus.PROCESSING
+        assert run.scheduled_for.replace(tzinfo=UTC) == now
+        assert automation.next_run_at.replace(tzinfo=UTC) == automatic_run
+        assert queued == [str(run.id)]
+
+        run.status = DebtReminderStatus.SENT
+        run.claimed_at = None
+        run.processed_at = now
+        customer.has_debt = False
+        await db.commit()
+        replayed = await trigger_debt_reminder_now(
+            db,
+            customer.id,
+            actor_id=actor_id,
+            actor_email="collector@zbridge.vn",
+            request_id=request_id,
+            now=now + timedelta(minutes=1),
+        )
+        assert replayed.run_id == result.run_id
+        assert replayed.status == DebtReminderStatus.SENT
+        assert queued == [str(run.id)]
+
+        customer.has_debt = True
+        second = await trigger_debt_reminder_now(
+            db,
+            customer.id,
+            actor_id=actor_id,
+            actor_email="collector@zbridge.vn",
+            request_id=uuid.uuid4(),
+            now=now,
+        )
+        assert second.run_id != result.run_id
+        assert queued == [str(run.id), str(second.run_id)]
+        second_run = await db.get(DebtReminderRun, second.run_id)
+        assert second_run is not None
+        second_run.status = DebtReminderStatus.SENT
+        second_run.claimed_at = None
+        second_run.processed_at = now
+        await db.commit()
+
+        # Manual sends are visible in history but never become the repeat anchor.
+        updated = await save_debt_reminder(
+            db,
+            customer.id,
+            DebtReminderUpdate(
+                day_of_month=25,
+                repeat_enabled=True,
+                repeat_interval_days=3,
+                send_time="09:00",
+                message_parts=[{"type": "text", "text": "Nhắc công nợ."}],
+            ),
+            now=now,
+        )
+        assert updated.next_run_at is not None
+        assert updated.next_run_at.replace(tzinfo=UTC) == automatic_run
+
+    await engine.dispose()
 
 
 def test_next_debt_reminder_repeats_and_preserves_monthly_anchor() -> None:
@@ -257,7 +388,7 @@ def test_outage_does_not_replay_every_missed_reminder() -> None:
     )
 
     # Keeps the 3-day rhythm of the original schedule instead of resetting to now.
-    assert following == datetime(2026, 8, 23, 18, tzinfo=UTC)
+    assert following == datetime(2026, 8, 21, 18, tzinfo=UTC)
     assert following > now
     # Feeding the result back in must stay in the future, i.e. no runaway loop.
     assert next_debt_reminder_run(
@@ -310,9 +441,238 @@ async def test_scheduler_defers_a_legacy_blackout_schedule_before_creating_a_run
         automation = await db.scalar(select(DebtReminderAutomation))
         assert automation is not None
         assert automation.next_run_at.replace(tzinfo=UTC) == datetime(
-            2026, 3, 27, 2, tzinfo=UTC
+            2026, 3, 25, 2, tzinfo=UTC
         )
         assert list((await db.scalars(select(DebtReminderRun))).all()) == []
+    await engine.dispose()
+
+
+async def test_scheduler_waits_for_manual_run_and_skips_the_covered_due_slot(
+    monkeypatch,
+) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    due_day = datetime.now(UTC).date() - timedelta(days=1)
+    while is_debt_reminder_blackout(due_day):
+        due_day -= timedelta(days=1)
+    due_at = datetime.combine(due_day, time(2, 0), tzinfo=UTC)
+
+    async with sessions() as db:
+        account = ZaloAccount(status=BotStatus.CONNECTED)
+        db.add(account)
+        await db.flush()
+        group = ZaloGroup(
+            zalo_account_id=account.id,
+            zalo_group_id="manual-overlap",
+            name="Khách đang được nhắc thủ công",
+            member_count=2,
+            is_available=True,
+            last_synced_at=due_at,
+        )
+        db.add(group)
+        await db.flush()
+        customer = Customer(
+            zalo_group_id=group.id,
+            has_debt=True,
+            debt_file_url="https://docs.google.com/spreadsheets/d/overlap/edit",
+        )
+        db.add(customer)
+        await db.flush()
+        automation = DebtReminderAutomation(
+            customer_id=customer.id,
+            next_run_at=due_at,
+        )
+        db.add(automation)
+        await db.flush()
+        manual_run = DebtReminderRun(
+            automation_id=automation.id,
+            scheduled_for=due_at + timedelta(minutes=1),
+            retry_at=due_at + timedelta(minutes=1),
+            is_manual=True,
+            status=DebtReminderStatus.PROCESSING,
+            claimed_at=datetime.now(UTC),
+            attempt_count=1,
+        )
+        db.add(manual_run)
+        await db.commit()
+        automation_id = automation.id
+        run_id = manual_run.id
+
+    monkeypatch.setattr(debt_reminder_scheduler, "SessionLocal", sessions)
+    assert await claim_due_debt_reminders() == []
+
+    async with sessions() as db:
+        automation = await db.get(DebtReminderAutomation, automation_id)
+        runs = list(
+            (
+                await db.scalars(
+                    select(DebtReminderRun).where(
+                        DebtReminderRun.automation_id == automation_id
+                    )
+                )
+            ).all()
+        )
+        assert automation is not None
+        assert automation.next_run_at.replace(tzinfo=UTC) == due_at
+        assert [run.id for run in runs] == [run_id]
+
+        manual_run = await db.get(DebtReminderRun, run_id)
+        assert manual_run is not None
+        manual_run.status = DebtReminderStatus.SENT
+        manual_run.claimed_at = None
+        manual_run.processed_at = datetime.now(UTC)
+        await db.commit()
+
+    assert await claim_due_debt_reminders() == []
+
+    async with sessions() as db:
+        automation = await db.get(DebtReminderAutomation, automation_id)
+        runs = list(
+            (
+                await db.scalars(
+                    select(DebtReminderRun).where(
+                        DebtReminderRun.automation_id == automation_id
+                    )
+                )
+            ).all()
+        )
+        assert automation is not None
+        assert automation.next_run_at.replace(tzinfo=UTC) > due_at
+        assert len(runs) == 1
+        assert runs[0].is_manual is True
+
+    await engine.dispose()
+
+
+async def test_failed_manual_run_does_not_cover_due_automatic_slot(
+    monkeypatch,
+) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    due_day = datetime.now(UTC).date() - timedelta(days=1)
+    while is_debt_reminder_blackout(due_day):
+        due_day -= timedelta(days=1)
+    due_at = datetime.combine(due_day, time(2, 0), tzinfo=UTC)
+
+    async with sessions() as db:
+        account = ZaloAccount(status=BotStatus.CONNECTED)
+        db.add(account)
+        await db.flush()
+        group = ZaloGroup(
+            zalo_account_id=account.id,
+            zalo_group_id="failed-manual-overlap",
+            name="Nhắc tay lỗi không che lịch",
+            member_count=2,
+            is_available=True,
+            last_synced_at=due_at,
+        )
+        db.add(group)
+        await db.flush()
+        customer = Customer(
+            zalo_group_id=group.id,
+            has_debt=True,
+            debt_file_url="https://docs.google.com/spreadsheets/d/failed-manual/edit",
+        )
+        db.add(customer)
+        await db.flush()
+        automation = DebtReminderAutomation(
+            customer_id=customer.id,
+            next_run_at=due_at,
+        )
+        db.add(automation)
+        await db.flush()
+        db.add(
+            DebtReminderRun(
+                automation_id=automation.id,
+                scheduled_for=due_at,
+                retry_at=due_at,
+                is_manual=True,
+                status=DebtReminderStatus.FAILED,
+                processed_at=due_at,
+                attempt_count=5,
+            )
+        )
+        await db.commit()
+        automation_id = automation.id
+
+    monkeypatch.setattr(debt_reminder_scheduler, "SessionLocal", sessions)
+    claimed = await claim_due_debt_reminders()
+    assert len(claimed) == 1
+
+    async with sessions() as db:
+        automation = await db.get(DebtReminderAutomation, automation_id)
+        runs = list(
+            (
+                await db.scalars(
+                    select(DebtReminderRun).where(
+                        DebtReminderRun.automation_id == automation_id
+                    )
+                )
+            ).all()
+        )
+        assert automation is not None
+        assert automation.next_run_at.replace(tzinfo=UTC) > due_at
+        assert len(runs) == 2
+        automatic = next(run for run in runs if not run.is_manual)
+        assert automatic.scheduled_for.replace(tzinfo=UTC) == due_at
+        assert automatic.id in claimed
+
+    await engine.dispose()
+
+
+async def test_database_rejects_two_active_debt_runs_for_one_automation() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+
+    async with sessions() as db:
+        account = ZaloAccount(status=BotStatus.CONNECTED)
+        db.add(account)
+        await db.flush()
+        group = ZaloGroup(
+            zalo_account_id=account.id,
+            zalo_group_id="active-run-invariant",
+            name="Khách kiểm tra invariant",
+            member_count=2,
+            is_available=True,
+            last_synced_at=now,
+        )
+        db.add(group)
+        await db.flush()
+        customer = Customer(zalo_group_id=group.id, has_debt=True)
+        db.add(customer)
+        await db.flush()
+        automation = DebtReminderAutomation(customer_id=customer.id)
+        db.add(automation)
+        await db.flush()
+        db.add(
+            DebtReminderRun(
+                automation_id=automation.id,
+                scheduled_for=now,
+                retry_at=now,
+                status=DebtReminderStatus.PENDING,
+            )
+        )
+        await db.commit()
+        db.add(
+            DebtReminderRun(
+                automation_id=automation.id,
+                scheduled_for=now + timedelta(seconds=1),
+                retry_at=now + timedelta(seconds=1),
+                status=DebtReminderStatus.PROCESSING,
+                claimed_at=now,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            await db.commit()
+        await db.rollback()
+
     await engine.dispose()
 
 
@@ -495,11 +855,11 @@ async def test_overdue_repeat_stays_due_after_editing_the_config() -> None:
         await db.commit()
 
         # The repeat is overdue, but now is lunar 05/07 and therefore waits for
-        # the first allowed day, lunar 09/07.
+        # the first allowed day, lunar 07/07.
         updated = await save_debt_reminder(db, customer.id, config, now=now)
         assert updated.next_run_at is not None
         assert updated.next_run_at.replace(tzinfo=UTC) == datetime(
-            2026, 8, 21, 2, tzinfo=UTC
+            2026, 8, 19, 2, tzinfo=UTC
         )
 
         # During the Tết blackout, the same overdue path must resume at the
@@ -513,7 +873,7 @@ async def test_overdue_repeat_stays_due_after_editing_the_config() -> None:
         )
         assert updated_during_tet.next_run_at is not None
         assert updated_during_tet.next_run_at.replace(tzinfo=UTC) == datetime(
-            2027, 3, 16, 2, tzinfo=UTC
+            2027, 3, 14, 2, tzinfo=UTC
         )
 
     await engine.dispose()
@@ -666,7 +1026,7 @@ async def test_debt_reminder_config_and_three_required_deliveries(monkeypatch) -
         )
         assert rescheduled.next_run_at is not None
         assert rescheduled.next_run_at.replace(tzinfo=UTC) == datetime(
-            2026, 8, 21, 2, tzinfo=UTC
+            2026, 8, 20, 2, tzinfo=UTC
         )
 
     await engine.dispose()

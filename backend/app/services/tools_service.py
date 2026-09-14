@@ -300,6 +300,7 @@ async def apply_bulk_debt_reminders(
                 .where(
                     DebtReminderRun.automation_id == automation.id,
                     DebtReminderRun.status == DebtReminderStatus.SENT,
+                    DebtReminderRun.is_manual.is_(False),
                 )
                 .order_by(DebtReminderRun.scheduled_for.desc())
                 .limit(1)
@@ -451,6 +452,8 @@ async def list_debt_reminder_runs(
                 id=run.id,
                 customer_id=customer_id,
                 customer_name=customer_name,
+                is_manual=run.is_manual,
+                triggered_by_email=run.triggered_by_email,
                 status=run.status,
                 scheduled_for=run.scheduled_for,
                 retry_at=run.retry_at,

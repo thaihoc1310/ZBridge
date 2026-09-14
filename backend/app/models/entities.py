@@ -18,6 +18,7 @@ from sqlalchemy import (
     Text,
     Time,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -551,8 +552,33 @@ class DebtReminderAutomation(TimestampMixin, Base):
 class DebtReminderRun(TimestampMixin, Base):
     __tablename__ = "debt_reminder_runs"
     __table_args__ = (
-        UniqueConstraint("automation_id", "scheduled_for", name="uq_debt_reminder_run_schedule"),
+        # Automatic slots stay unique. Manual sends use `now` as scheduled_for
+        # and must not collide with a due automatic row at the same instant.
+        Index(
+            "uq_debt_reminder_run_schedule",
+            "automation_id",
+            "scheduled_for",
+            unique=True,
+            postgresql_where=text("NOT is_manual"),
+            sqlite_where=text("NOT is_manual"),
+        ),
+        Index(
+            "uq_debt_reminder_run_manual_request",
+            "automation_id",
+            "triggered_by_user_id",
+            "manual_request_id",
+            unique=True,
+            postgresql_where=text("is_manual AND manual_request_id IS NOT NULL"),
+            sqlite_where=text("is_manual AND manual_request_id IS NOT NULL"),
+        ),
         Index("ix_debt_reminder_runs_due", "status", "retry_at"),
+        Index(
+            "uq_debt_reminder_runs_active_automation",
+            "automation_id",
+            unique=True,
+            postgresql_where=text("status IN ('PENDING', 'PROCESSING')"),
+            sqlite_where=text("status IN ('PENDING', 'PROCESSING')"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -563,6 +589,17 @@ class DebtReminderRun(TimestampMixin, Base):
         index=True,
     )
     scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    is_manual: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    triggered_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    triggered_by_email: Mapped[str | None] = mapped_column(String(320))
+    manual_request_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     retry_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[DebtReminderStatus] = mapped_column(
         Enum(DebtReminderStatus, native_enum=False),

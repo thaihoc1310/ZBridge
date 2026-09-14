@@ -1,14 +1,15 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import require_permission
+from app.api.deps import require_any_permission, require_permission
 from app.core.permissions import (
     CUSTOMER_READ,
     CUSTOMER_SYNC,
     CUSTOMER_UPDATE,
     DEBT_REMINDER_READ,
+    DEBT_REMINDER_SEND,
     DEBT_REMINDER_UPDATE,
     MENTION_READ,
     MENTION_UPDATE,
@@ -21,6 +22,8 @@ from app.schemas.api import (
     CustomerResponse,
     CustomerUpdate,
     DebtReminderResponse,
+    DebtReminderTriggerRequest,
+    DebtReminderTriggerResponse,
     DebtReminderUpdate,
     DeliveryLogResponse,
     GroupMemberResponse,
@@ -35,7 +38,11 @@ from app.services.customer_service import (
     list_customers,
     update_customer,
 )
-from app.services.debt_reminder_service import get_debt_reminder, save_debt_reminder
+from app.services.debt_reminder_service import (
+    get_debt_reminder,
+    save_debt_reminder,
+    trigger_debt_reminder_now,
+)
 from app.services.delivery_service import send_customer_message
 from app.services.group_service import sync_groups
 from app.services.mention_automation_service import (
@@ -134,7 +141,9 @@ async def create_message(
 async def debt_reminder(
     customer_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    _actor: User = Depends(require_permission(DEBT_REMINDER_READ)),
+    _actor: User = Depends(
+        require_any_permission(DEBT_REMINDER_READ, DEBT_REMINDER_SEND)
+    ),
 ) -> DebtReminderResponse:
     return await get_debt_reminder(db, customer_id)
 
@@ -147,3 +156,23 @@ async def update_debt_reminder(
     _actor: User = Depends(require_permission(DEBT_REMINDER_UPDATE)),
 ) -> DebtReminderResponse:
     return await save_debt_reminder(db, customer_id, data)
+
+
+@router.post(
+    "/{customer_id}/debt-reminder/send-now",
+    response_model=DebtReminderTriggerResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def send_debt_reminder_now(
+    customer_id: uuid.UUID,
+    data: DebtReminderTriggerRequest,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_permission(DEBT_REMINDER_SEND)),
+) -> DebtReminderTriggerResponse:
+    return await trigger_debt_reminder_now(
+        db,
+        customer_id,
+        actor_id=actor.id,
+        actor_email=actor.email,
+        request_id=data.request_id,
+    )

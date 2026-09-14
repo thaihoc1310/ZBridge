@@ -482,6 +482,14 @@ class DebtReminderResponse(BaseModel):
     last_error: str | None = None
     updated_at: datetime | None = None
 
+class DebtReminderTriggerResponse(BaseModel):
+    run_id: uuid.UUID
+    status: DebtReminderStatus
+
+
+class DebtReminderTriggerRequest(BaseModel):
+    request_id: uuid.UUID
+
 
 class ActiveMentionTaskResponse(BaseModel):
     id: uuid.UUID
@@ -560,6 +568,8 @@ class DebtReminderRunResponse(BaseModel):
     id: uuid.UUID
     customer_id: uuid.UUID
     customer_name: str
+    is_manual: bool
+    triggered_by_email: str | None = None
     status: DebtReminderStatus
     scheduled_for: datetime
     retry_at: datetime

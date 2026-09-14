@@ -388,9 +388,9 @@ export function DebtReminderModal({
                     ? `Sau đó bot tiếp tục gửi lại mỗi ${repeatIntervalDays || "—"} ngày cho đến khi khách hàng được chuyển sang “Đã thanh toán”. `
                     : "Bot không gửi các lượt lặp xen giữa. "}
                   Mốc ngày hàng tháng vẫn luôn hoạt động. Nếu lịch rơi vào mùng 1
-                  đến hết mùng 8 hoặc ngày rằm âm lịch, lượt nhắc sẽ lùi sang ngày
+                  đến hết mùng 6 hoặc ngày rằm âm lịch, lượt nhắc sẽ lùi sang ngày
                   hợp lệ tiếp theo. Dịp Tết, bot tạm dừng từ 28 tháng Chạp đến hết
-                  tháng Giêng; kết hợp quy tắc trên, bot gửi lại từ mùng 9 tháng Hai.
+                  tháng Giêng; kết hợp quy tắc trên, bot gửi lại từ mùng 7 tháng Hai.
                   Ngày Giỗ Tổ Hùng Vương
                   (10/03 âm lịch) và các ngày 01/01, 30/04, 01/05, 02/09 dương
                   lịch cũng không gửi.

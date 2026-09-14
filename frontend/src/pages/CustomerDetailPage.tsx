@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowUpRight, AtSign, CalendarDays, CheckCircle2, Clock3, Copy, ExternalLink, FileSpreadsheet, IdCard, MessageSquareText, Pencil, ReceiptText, Send, UsersRound, WalletCards, XCircle, type LucideIcon } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, AtSign, BellRing, CalendarDays, CheckCircle2, Clock3, Copy, ExternalLink, FileSpreadsheet, IdCard, MessageSquareText, Pencil, ReceiptText, Send, UsersRound, WalletCards, XCircle, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
@@ -10,6 +10,7 @@ import { Modal } from "../components/ui/Modal";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { DebtConfirmModal, DebtStatusOptions, DebtFileEditorModal, LastPaidEditorModal, NoteEditorModal, type DebtConfirmation } from "../features/customers/CustomerFields";
 import { DebtReminderModal } from "../features/debt-reminders/DebtReminderModal";
+import { ManualDebtReminderModal } from "../features/debt-reminders/ManualDebtReminderModal";
 import { MentionAutomationModal } from "../features/mentions/MentionAutomationModal";
 import { formatDate, initials } from "../lib/format";
 import { PERMISSIONS } from "../lib/permissions";
@@ -22,6 +23,7 @@ export function CustomerDetailPage() {
   const [composerOpen, setComposerOpen] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [debtReminderOpen, setDebtReminderOpen] = useState(false);
+  const [manualDebtReminderOpen, setManualDebtReminderOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   const [debtFileOpen, setDebtFileOpen] = useState(false);
   const [lastPaidOpen, setLastPaidOpen] = useState(false);
@@ -72,10 +74,11 @@ export function CustomerDetailPage() {
 
       <section className="card p-6 sm:p-8">
         <SectionTitle title="Chức năng" description="Các công cụ và tự động hóa dành riêng cho khách hàng này." />
-        <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {can(PERMISSIONS.messageSend) && <CustomerAction icon={MessageSquareText} title="Gửi tin nhắn" description="Soạn và gửi tin nhắn văn bản vào nhóm" onClick={() => setComposerOpen(true)} disabled={!item.is_available} primary />}
           {can(PERMISSIONS.mentionRead) && <CustomerAction icon={AtSign} title="Tag tên tự động" description="Tag lại người được chọn sau một khoảng chờ" onClick={() => setMentionOpen(true)} disabled={!item.is_available} />}
           {can(PERMISSIONS.debtReminderRead) && <CustomerAction icon={ReceiptText} title="Nhắc thanh toán công nợ" description="Gửi ảnh Google Sheet, link và nội dung nhắc hàng tháng" onClick={() => setDebtReminderOpen(true)} disabled={!item.is_available} />}
+          {can(PERMISSIONS.debtReminderSend) && <CustomerAction icon={BellRing} title="Nhắc công nợ ngay" description={!item.has_debt ? "Khách hàng đã thanh toán" : !item.debt_file_url ? "Cần thêm file công nợ trước khi gửi" : "Gửi ngay ảnh, link và nội dung nhắc đã cấu hình"} onClick={() => setManualDebtReminderOpen(true)} disabled={!item.is_available || !item.has_debt || !item.debt_file_url} />}
         </div>
         <div className="mt-5 rounded-xl border border-dashed border-border bg-muted/40 px-4 py-3 text-center text-xs text-muted-foreground">Các chức năng mới sẽ được bổ sung tại đây.</div>
       </section>
@@ -101,6 +104,7 @@ export function CustomerDetailPage() {
     <ResultModal result={result} onClose={() => setResult(null)} />
     <MentionAutomationModal open={mentionOpen} onClose={() => setMentionOpen(false)} customerId={id} customerName={item.name} />
     <DebtReminderModal open={debtReminderOpen} onClose={() => setDebtReminderOpen(false)} customerId={id} customerName={item.name} hasDebtFile={Boolean(item.debt_file_url)} hasDebt={item.has_debt} />
+    <ManualDebtReminderModal open={manualDebtReminderOpen} onClose={() => setManualDebtReminderOpen(false)} customerId={id} customerName={item.name} debtFileUrl={item.debt_file_url} />
     <NoteEditorModal customer={noteOpen ? item : null} onClose={() => setNoteOpen(false)} />
     <DebtFileEditorModal customer={debtFileOpen ? item : null} onClose={() => setDebtFileOpen(false)} />
     <LastPaidEditorModal customer={lastPaidOpen ? item : null} onClose={() => setLastPaidOpen(false)} />

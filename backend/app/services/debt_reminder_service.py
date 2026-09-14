@@ -1,18 +1,25 @@
 import calendar
+import logging
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from lunar_vn import solar_to_lunar
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.errors import AppError
 from app.models import Customer, DebtReminderAutomation, DebtReminderRun
 from app.models.entities import DebtReminderStatus
-from app.schemas.api import DebtReminderResponse, DebtReminderUpdate
+from app.schemas.api import (
+    DebtReminderResponse,
+    DebtReminderTriggerResponse,
+    DebtReminderUpdate,
+)
 
+logger = logging.getLogger("zbridge.debt_reminder_service")
 LOCAL_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 SOLAR_DEBT_REMINDER_BLACKOUTS = {(1, 1), (4, 30), (5, 1), (9, 2)}
 DEFAULT_MESSAGE_PARTS = [
@@ -29,10 +36,10 @@ def _as_utc(value: datetime) -> datetime:
 def is_debt_reminder_blackout(value: date) -> bool:
     """Return whether a Vietnam-local date is excluded from debt reminders.
 
-    Fixed solar holidays are excluded. In the lunar calendar, the first eight
+    Fixed solar holidays are excluded. In the lunar calendar, the first six
     days of every month, ngày rằm and Giỗ Tổ Hùng Vương (10/03) are excluded.
     The longer Tết break runs continuously from 28 tháng Chạp through the end
-    of tháng Giêng; combined with the monthly rule, reminders resume on mùng 9
+    of tháng Giêng; combined with the monthly rule, reminders resume on mùng 7
     tháng Hai.
     """
     if (value.month, value.day) in SOLAR_DEBT_REMINDER_BLACKOUTS:
@@ -41,7 +48,7 @@ def is_debt_reminder_blackout(value: date) -> bool:
     in_tet_break = (lunar.month == 12 and lunar.day >= 28) or lunar.month == 1
     return (
         in_tet_break
-        or 1 <= lunar.day <= 8
+        or 1 <= lunar.day <= 6
         or lunar.day == 15
         or (lunar.month, lunar.day) == (3, 10)
     )
@@ -136,6 +143,7 @@ async def _latest_sent_run(
         .where(
             DebtReminderRun.automation_id == automation_id,
             DebtReminderRun.status == DebtReminderStatus.SENT,
+            DebtReminderRun.is_manual.is_(False),
         )
         .order_by(DebtReminderRun.scheduled_for.desc())
         .limit(1)
@@ -181,6 +189,137 @@ async def get_debt_reminder(
             500,
         )
     return await _response(db, customer_id, automation)
+
+
+async def trigger_debt_reminder_now(
+    db: AsyncSession,
+    customer_id: uuid.UUID,
+    *,
+    actor_id: uuid.UUID,
+    actor_email: str,
+    request_id: uuid.UUID,
+    now: datetime | None = None,
+) -> DebtReminderTriggerResponse:
+    """Queue one immediate reminder without moving the automatic schedule."""
+    effective_now = _as_utc(now or datetime.now(UTC))
+    customer = await db.scalar(
+        select(Customer)
+        .options(selectinload(Customer.group))
+        .where(Customer.id == customer_id)
+        .with_for_update()
+    )
+    if customer is None:
+        raise AppError("CUSTOMER_NOT_FOUND", "Không tìm thấy khách hàng.", 404)
+    automation = await db.scalar(
+        select(DebtReminderAutomation)
+        .where(DebtReminderAutomation.customer_id == customer_id)
+        .with_for_update()
+    )
+    if automation is None:
+        raise AppError(
+            "DEBT_REMINDER_CONFIG_MISSING",
+            "Khách hàng thiếu cấu hình nhắc công nợ.",
+            500,
+        )
+    prior_run = await db.scalar(
+        select(DebtReminderRun).where(
+            DebtReminderRun.automation_id == automation.id,
+            DebtReminderRun.triggered_by_user_id == actor_id,
+            DebtReminderRun.manual_request_id == request_id,
+        )
+    )
+    if prior_run is not None:
+        return DebtReminderTriggerResponse(run_id=prior_run.id, status=prior_run.status)
+    if not customer.has_debt:
+        raise AppError(
+            "CUSTOMER_HAS_NO_DEBT",
+            "Khách hàng đã thanh toán nên không thể gửi nhắc công nợ.",
+            409,
+        )
+    if not customer.debt_file_url:
+        raise AppError(
+            "CUSTOMER_FOLDER_REQUIRED",
+            "Hãy thêm file công nợ (Google Sheet) trước khi gửi nhắc.",
+            422,
+        )
+    if not customer.group.is_available:
+        raise AppError(
+            "GROUP_UNAVAILABLE",
+            "Bot hiện không còn trong nhóm Zalo của khách hàng.",
+            409,
+        )
+    active_run = await db.scalar(
+        select(DebtReminderRun)
+        .where(
+            DebtReminderRun.automation_id == automation.id,
+            DebtReminderRun.status.in_(
+                [DebtReminderStatus.PENDING, DebtReminderStatus.PROCESSING]
+            ),
+        )
+        .limit(1)
+        .with_for_update()
+    )
+    if active_run is not None:
+        raise AppError(
+            "DEBT_REMINDER_ALREADY_RUNNING",
+            "Đang có một lượt nhắc công nợ chờ gửi hoặc thử lại.",
+            409,
+        )
+
+    run = DebtReminderRun(
+        automation_id=automation.id,
+        scheduled_for=effective_now,
+        retry_at=effective_now,
+        is_manual=True,
+        triggered_by_user_id=actor_id,
+        triggered_by_email=actor_email,
+        manual_request_id=request_id,
+        status=DebtReminderStatus.PROCESSING,
+        attempt_count=1,
+        claimed_at=effective_now,
+    )
+    db.add(run)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        prior_run = await db.scalar(
+            select(DebtReminderRun).where(
+                DebtReminderRun.automation_id == automation.id,
+                DebtReminderRun.triggered_by_user_id == actor_id,
+                DebtReminderRun.manual_request_id == request_id,
+            )
+        )
+        if prior_run is not None:
+            return DebtReminderTriggerResponse(
+                run_id=prior_run.id, status=prior_run.status
+            )
+        raise AppError(
+            "DEBT_REMINDER_ALREADY_RUNNING",
+            "Đang có một lượt nhắc công nợ chờ gửi hoặc thử lại.",
+            409,
+        ) from None
+    await db.refresh(run)
+
+    from app.tasks.debt_reminder_tasks import process_debt_reminder_task
+
+    try:
+        process_debt_reminder_task.delay(str(run.id))
+    except Exception as exc:
+        logger.exception("DEBT_REMINDER_MANUAL_ENQUEUE_FAILED run_id=%s", run.id)
+        run.status = DebtReminderStatus.FAILED
+        run.claimed_at = None
+        run.processed_at = datetime.now(UTC)
+        run.error_code = "DEBT_REMINDER_QUEUE_UNAVAILABLE"
+        run.error_message = "Không đưa được lượt nhắc công nợ vào hàng đợi."
+        await db.commit()
+        raise AppError(
+            "DEBT_REMINDER_QUEUE_UNAVAILABLE",
+            "Hàng đợi nhắc công nợ đang không phản hồi. Hãy thử lại sau.",
+            503,
+        ) from exc
+
+    return DebtReminderTriggerResponse(run_id=run.id, status=run.status)
 
 
 async def sync_debt_reminder_state(

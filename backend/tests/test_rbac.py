@@ -16,6 +16,8 @@ from app.core.permissions import (
     ADMIN_ROLE_CODE,
     ALL_PERMISSION_CODES,
     CUSTOMER_READ,
+    DEBT_REMINDER_SEND,
+    DEBT_REMINDER_UPDATE,
     MENTION_BULK_APPLY,
     MENTION_POLICY_MANAGE,
     MENTION_READ,
@@ -496,6 +498,50 @@ async def test_each_tag_feature_is_its_own_grant(client, session_factory) -> Non
     client.cookies.clear()
     await _login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
     assert (await client.get("/api/staff")).status_code == 200
+
+
+async def test_manual_debt_send_is_separate_from_schedule_editing(
+    client, session_factory
+) -> None:
+    async with session_factory() as db:
+        role = Role(code="DEBT_SENDER", name="Chỉ gửi nhắc nợ", is_system=False)
+        role.permissions = list(
+            (
+                await db.scalars(
+                    select(Permission).where(
+                        Permission.code.in_([CUSTOMER_READ, DEBT_REMINDER_SEND])
+                    )
+                )
+            ).all()
+        )
+        db.add(role)
+        await db.flush()
+        db.add(
+            User(
+                email="debt-sender@zbridge.vn",
+                password_hash=hash_password("sender-password"),
+                role_id=role.id,
+            )
+        )
+        await db.commit()
+
+    session = await _login(client, "debt-sender@zbridge.vn", "sender-password")
+    assert DEBT_REMINDER_SEND in session["role"]["permissions"]
+    assert DEBT_REMINDER_UPDATE not in session["role"]["permissions"]
+
+    missing_customer = uuid.uuid4()
+    preview = await client.get(f"/api/customers/{missing_customer}/debt-reminder")
+    send = await client.post(
+        f"/api/customers/{missing_customer}/debt-reminder/send-now",
+        json={"request_id": str(uuid.uuid4())},
+    )
+    update = await client.put(
+        f"/api/customers/{missing_customer}/debt-reminder",
+        json={},
+    )
+    assert preview.status_code == 404
+    assert send.status_code == 404
+    assert update.status_code == 403
 
 
 async def test_admin_is_the_only_locked_role(client) -> None:

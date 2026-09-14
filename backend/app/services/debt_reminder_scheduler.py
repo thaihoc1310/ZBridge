@@ -86,6 +86,47 @@ async def claim_due_debt_reminders() -> list[uuid.UUID]:
             if deferred_for != scheduled_for_utc:
                 automation.next_run_at = deferred_for
                 continue
+            active_run_id = await db.scalar(
+                select(DebtReminderRun.id)
+                .where(
+                    DebtReminderRun.automation_id == automation.id,
+                    DebtReminderRun.status.in_(
+                        [DebtReminderStatus.PENDING, DebtReminderStatus.PROCESSING]
+                    ),
+                )
+                .limit(1)
+            )
+            if active_run_id is not None:
+                # Keep the automatic slot due while the existing run finishes.
+                # If it is a manual run, the next tick either treats its success
+                # as covering this slot or creates the automatic run after failure.
+                continue
+            manual_delivery_id = await db.scalar(
+                select(DebtReminderRun.id)
+                .where(
+                    DebtReminderRun.automation_id == automation.id,
+                    DebtReminderRun.is_manual.is_(True),
+                    DebtReminderRun.status == DebtReminderStatus.SENT,
+                    DebtReminderRun.processed_at.is_not(None),
+                    DebtReminderRun.processed_at >= scheduled_for_utc,
+                )
+                .order_by(DebtReminderRun.processed_at.desc())
+                .limit(1)
+            )
+            if manual_delivery_id is not None:
+                # A manual reminder delivered after this slot became due already
+                # served the customer. Advance only the automatic occurrence that
+                # it covered; the remaining schedule keeps its normal cadence.
+                automation.next_run_at = next_debt_reminder_run(
+                    automation.day_of_month,
+                    automation.send_time,
+                    automation.repeat_interval_days,
+                    scheduled_for,
+                    repeat_enabled=automation.repeat_enabled,
+                    has_debt=automation.customer.has_debt,
+                    now=now,
+                )
+                continue
             # Per automation, behind a savepoint. One bad row used to abort the
             # whole flush below, so no customer got reminded that tick — and the
             # next tick would fail on the same row again.

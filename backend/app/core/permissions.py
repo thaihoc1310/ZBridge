@@ -36,6 +36,7 @@ MENTION_FOLLOWUP_CANCEL = "mention_followup:cancel"
 
 DEBT_REMINDER_READ = "debt_reminder:read"
 DEBT_REMINDER_UPDATE = "debt_reminder:update"
+DEBT_REMINDER_SEND = "debt_reminder:send"
 DEBT_REMINDER_BULK_APPLY = "debt_reminder_bulk:apply"
 DEBT_REMINDER_HISTORY_READ = "debt_reminder_history:read"
 
@@ -96,6 +97,7 @@ PERMISSION_CATALOG: tuple[PermissionDef, ...] = (
     PermissionDef(MENTION_FOLLOWUP_CANCEL, "Dừng vòng tag đang hoạt động", CATEGORY_MENTION),
     PermissionDef(DEBT_REMINDER_READ, "Xem cấu hình nhắc công nợ", CATEGORY_DEBT),
     PermissionDef(DEBT_REMINDER_UPDATE, "Thay đổi cấu hình nhắc công nợ", CATEGORY_DEBT),
+    PermissionDef(DEBT_REMINDER_SEND, "Gửi nhắc công nợ ngay", CATEGORY_DEBT),
     PermissionDef(DEBT_REMINDER_BULK_APPLY, "Áp lịch nhắc công nợ hàng loạt", CATEGORY_DEBT),
     PermissionDef(DEBT_REMINDER_HISTORY_READ, "Xem lịch sử lượt nhắc công nợ", CATEGORY_DEBT),
     PermissionDef(

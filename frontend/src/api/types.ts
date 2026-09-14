@@ -274,6 +274,11 @@ export type DebtReminder = {
   updated_at: string | null;
 };
 
+export type DebtReminderTrigger = {
+  run_id: string;
+  status: DebtReminderStatus;
+};
+
 export type ActiveMentionTask = {
   id: string;
   trigger: "MENTION" | "PRICE_INQUIRY";
@@ -333,6 +338,8 @@ export type DebtReminderRun = {
   id: string;
   customer_id: string;
   customer_name: string;
+  is_manual: boolean;
+  triggered_by_email: string | null;
   status: DebtReminderStatus;
   scheduled_for: string;
   retry_at: string;

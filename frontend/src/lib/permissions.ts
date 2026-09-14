@@ -18,6 +18,7 @@ export const PERMISSIONS = {
   mentionFollowupCancel: "mention_followup:cancel",
   debtReminderRead: "debt_reminder:read",
   debtReminderUpdate: "debt_reminder:update",
+  debtReminderSend: "debt_reminder:send",
   debtReminderBulkApply: "debt_reminder_bulk:apply",
   debtReminderHistoryRead: "debt_reminder_history:read",
   driveConversionManage: "drive_conversion:manage",

@@ -173,7 +173,12 @@ export function DebtReminderHistoryPanel() {
                       {run.customer_name}
                     </span>
                     <span className="mt-1 block text-xs text-muted-foreground">
-                      Lịch chạy {formatDate(run.scheduled_for)} ·{" "}
+                      {run.is_manual ? "Gửi thủ công" : "Lịch chạy"}{" "}
+                      {formatDate(run.scheduled_for)}
+                      {run.is_manual && run.triggered_by_email
+                        ? ` · ${run.triggered_by_email}`
+                        : ""}{" "}
+                      ·{" "}
                       {run.attempt_count === 0
                         ? "chưa chạy lần nào"
                         : `${run.attempt_count} lượt xử lý`}

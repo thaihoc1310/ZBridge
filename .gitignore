@@ -20,3 +20,7 @@ zalo-session/
 secrets/*
 !secrets/.gitignore
 .DS_Store
+
+# Runbook local cho coding agent, có thông tin truy cập production.
+/AGENTS.md
+omp-session-*.html
