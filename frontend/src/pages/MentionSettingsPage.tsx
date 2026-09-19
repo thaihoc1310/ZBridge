@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import {
+  BadgeCheck,
   BrainCircuit,
   ChevronRight,
   FileClock,
@@ -12,7 +13,11 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api/client";
-import type { MentionClassifierSettings, StaffMember } from "../api/types";
+import type {
+  DebtPaymentSettings,
+  MentionClassifierSettings,
+  StaffMember,
+} from "../api/types";
 import { PageHeader } from "../components/PageHeader";
 import { Modal } from "../components/ui/Modal";
 import { BulkMentionSection } from "../features/mentions/BulkMentionSection";
@@ -21,6 +26,7 @@ import { StaffRosterSection } from "../features/mentions/StaffRosterSection";
 import { ActiveMentionTasksPanel } from "../features/tools/ActiveMentionTasksPanel";
 import { BulkDebtReminderSection } from "../features/tools/BulkDebtReminderSection";
 import { DebtReminderHistoryPanel } from "../features/tools/DebtReminderHistoryPanel";
+import { DebtPaymentConfirmationSection } from "../features/tools/DebtPaymentConfirmationSection";
 import { DriveConverterPanel } from "../features/tools/DriveConverterPanel";
 import { PERMISSIONS } from "../lib/permissions";
 import { usePermissions } from "../lib/session";
@@ -32,6 +38,7 @@ type Panel =
   | "tasks"
   | "debt-bulk"
   | "debt-history"
+  | "debt-payment"
   | "drive";
 
 export function MentionSettingsPage() {
@@ -45,6 +52,7 @@ export function MentionSettingsPage() {
   const canTaskCancel = can(PERMISSIONS.mentionFollowupCancel);
   const canDebtBulk = can(PERMISSIONS.debtReminderBulkApply);
   const canDebtHistory = can(PERMISSIONS.debtReminderHistoryRead);
+  const canDebtPayment = can(PERMISSIONS.debtPaymentConfirmationManage);
   const canDrive = can(PERMISSIONS.driveConversionManage);
   const [panel, setPanel] = useState<Panel | null>(() => {
     const requested = new URLSearchParams(window.location.search).get("panel");
@@ -60,6 +68,12 @@ export function MentionSettingsPage() {
     queryKey: ["mention-classifier-settings"],
     queryFn: () => api<MentionClassifierSettings>("/mention-settings"),
     enabled: canPolicy,
+  });
+  const debtPayment = useQuery({
+    queryKey: ["debt-payment-confirmation-settings"],
+    queryFn: () =>
+      api<DebtPaymentSettings>("/tools/debt-payment-confirmation"),
+    enabled: canDebtPayment,
   });
 
   const staffCount = roster.data?.length ?? 0;
@@ -126,7 +140,7 @@ export function MentionSettingsPage() {
         </div>
       </section>
 
-      {(canDebtBulk || canDebtHistory) && (
+      {(canDebtBulk || canDebtHistory || canDebtPayment) && (
         <section className="mt-8">
           <h2 className="mb-3 text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">
             Công nợ
@@ -150,6 +164,22 @@ export function MentionSettingsPage() {
                 description="Theo dõi từng lượt gửi ảnh, link và nội dung nhắc."
                 summary="Lưu 45 ngày"
                 onClick={() => setPanel("debt-history")}
+              />
+            )}
+            {canDebtPayment && (
+              <PanelCard
+                icon={BadgeCheck}
+                tone="emerald"
+                title="Tự động ghi nhận thanh toán"
+                description="Chọn người và câu nhắn được phép tự chuyển khách hàng sang đã thanh toán."
+                summary={
+                  debtPayment.isLoading
+                    ? "Đang tải..."
+                    : debtPayment.data
+                      ? `${debtPayment.data.tracked_members.length} người · ${debtPayment.data.phrases.length} câu`
+                      : "Không tải được"
+                }
+                onClick={() => setPanel("debt-payment")}
               />
             )}
           </div>
@@ -219,6 +249,15 @@ export function MentionSettingsPage() {
         description="Các lượt nhắc trong tháng hiện tại còn nằm trong thời hạn lưu 45 ngày."
       >
         <DebtReminderHistoryPanel />
+      </Modal>
+      <Modal
+        open={panel === "debt-payment"}
+        onClose={() => setPanel(null)}
+        className="max-w-3xl"
+        title="Tự động ghi nhận thanh toán"
+        description="Tin nhắn hợp lệ sẽ xử lý giống thao tác chuyển công nợ sang Đã thanh toán trên giao diện."
+      >
+        <DebtPaymentConfirmationSection />
       </Modal>
       <Modal
         open={panel === "drive"}

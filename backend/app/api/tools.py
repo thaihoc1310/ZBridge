@@ -13,6 +13,7 @@ from app.api.deps import get_db, require_permission
 from app.core.config import settings
 from app.core.errors import AppError
 from app.core.permissions import (
+    DEBT_PAYMENT_CONFIRMATION_MANAGE,
     DEBT_REMINDER_BULK_APPLY,
     DEBT_REMINDER_HISTORY_READ,
     DRIVE_CONVERSION_MANAGE,
@@ -24,6 +25,8 @@ from app.models.entities import DebtReminderStatus
 from app.schemas.api import (
     ActiveMentionCompanyListResponse,
     ActiveMentionTaskResponse,
+    DebtPaymentSettingsResponse,
+    DebtPaymentSettingsUpdate,
     DebtReminderBulkApply,
     DebtReminderBulkApplyResponse,
     DebtReminderBulkPreviewResponse,
@@ -35,7 +38,9 @@ from app.schemas.api import (
     DriveFolderResponse,
     GoogleOAuthStartResponse,
     GoogleOAuthStatusResponse,
+    GroupMemberResponse,
 )
+from app.services.debt_payment_service import get_settings, save_settings
 from app.services.drive_conversion_service import (
     create_scan_job,
     get_conversion_job,
@@ -50,6 +55,7 @@ from app.services.google_oauth_service import (
     exchange_authorization_code,
     google_connection_status,
 )
+from app.services.staff_service import list_staff_candidates
 from app.services.tools_service import (
     apply_bulk_debt_reminders,
     cancel_mention_followup,
@@ -59,6 +65,40 @@ from app.services.tools_service import (
 )
 
 router = APIRouter(prefix="/tools", tags=["tools"])
+
+
+@router.get(
+    "/debt-payment-confirmation",
+    response_model=DebtPaymentSettingsResponse,
+)
+async def debt_payment_confirmation_settings(
+    db: AsyncSession = Depends(get_db),
+    _actor: User = Depends(require_permission(DEBT_PAYMENT_CONFIRMATION_MANAGE)),
+) -> DebtPaymentSettingsResponse:
+    return await get_settings(db)
+
+
+@router.put(
+    "/debt-payment-confirmation",
+    response_model=DebtPaymentSettingsResponse,
+)
+async def update_debt_payment_confirmation_settings(
+    data: DebtPaymentSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    _actor: User = Depends(require_permission(DEBT_PAYMENT_CONFIRMATION_MANAGE)),
+) -> DebtPaymentSettingsResponse:
+    return await save_settings(db, data)
+
+
+@router.get(
+    "/debt-payment-confirmation/candidates",
+    response_model=list[GroupMemberResponse],
+)
+async def debt_payment_confirmation_candidates(
+    db: AsyncSession = Depends(get_db),
+    _actor: User = Depends(require_permission(DEBT_PAYMENT_CONFIRMATION_MANAGE)),
+) -> list[GroupMemberResponse]:
+    return await list_staff_candidates(db)
 
 
 def _google_callback_redirect(**params: str) -> RedirectResponse:

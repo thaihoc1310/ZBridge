@@ -14,6 +14,7 @@ from app.db.database import get_db
 from app.models import (
     BotDeliveryLog,
     Customer,
+    DebtPaymentConfirmation,
     DebtReminderAutomation,
     DebtReminderRun,
     MentionClassifierSettings,
@@ -33,10 +34,12 @@ from app.models.entities import (
 )
 from app.schemas.api import (
     DashboardDailyMessages,
+    DashboardDebtPaymentConfirmation,
     DashboardHourlyMessages,
     DashboardResponse,
     DashboardUpcomingReminder,
 )
+from app.services.log_retention import DEBT_PAYMENT_CONFIRMATION_RETENTION_DAYS
 from app.services.mention_settings_service import GLOBAL_SETTINGS_ID
 from app.services.zalo_gateway_client import zalo_gateway
 
@@ -289,6 +292,23 @@ async def dashboard(
             ModelCallLog.latency_ms.is_not(None),
         )
     )
+    payment_rows = (
+        await db.execute(
+            select(
+                DebtPaymentConfirmation,
+                ZaloGroup.name,
+                ZaloGroup.avatar_url,
+            )
+            .join(Customer, Customer.id == DebtPaymentConfirmation.customer_id)
+            .join(ZaloGroup, ZaloGroup.id == Customer.zalo_group_id)
+            .where(
+                DebtPaymentConfirmation.created_at
+                >= datetime.now(UTC)
+                - timedelta(days=DEBT_PAYMENT_CONFIRMATION_RETENTION_DAYS)
+            )
+            .order_by(DebtPaymentConfirmation.message_sent_at.desc())
+        )
+    ).all()
 
     return DashboardResponse(
         bot_status=account.status if account else BotStatus.AUTH_REQUIRED,
@@ -332,4 +352,17 @@ async def dashboard(
         ai_blocked_today=ai_blocked_today,
         ai_avg_latency_ms=round(ai_avg_latency) if ai_avg_latency is not None else None,
         ai_tokens_today={"input": int(ai_row[1] or 0), "output": int(ai_row[2] or 0)},
+        debt_payment_confirmations=[
+            DashboardDebtPaymentConfirmation(
+                id=confirmation.id,
+                customer_id=confirmation.customer_id,
+                customer_name=customer_name,
+                customer_avatar_url=customer_avatar_url,
+                sender_display_name=confirmation.sender_display_name,
+                content=confirmation.content,
+                matched_phrase=confirmation.matched_phrase,
+                message_sent_at=confirmation.message_sent_at,
+            )
+            for confirmation, customer_name, customer_avatar_url in payment_rows
+        ],
     )

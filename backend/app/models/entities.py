@@ -247,6 +247,9 @@ class Customer(TimestampMixin, Base):
     debt_reminder: Mapped[DebtReminderAutomation | None] = relationship(
         back_populates="customer", cascade="all, delete-orphan", uselist=False
     )
+    payment_confirmations: Mapped[list[DebtPaymentConfirmation]] = relationship(
+        back_populates="customer", cascade="all, delete-orphan"
+    )
 
 
 class BotDeliveryLog(Base):
@@ -327,6 +330,46 @@ class MentionClassifierSettings(TimestampMixin, Base):
         Boolean, default=True, nullable=False
     )
     skip_phrases: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+
+
+class DebtPaymentSettings(TimestampMixin, Base):
+    """One global rule for messages that mark a customer as paid."""
+
+    __tablename__ = "debt_payment_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    tracked_members: Mapped[list[dict[str, str | None]]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
+    phrases: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+
+
+class DebtPaymentConfirmation(Base):
+    """Durable evidence for one automatic paid-status change."""
+
+    __tablename__ = "debt_payment_confirmations"
+    __table_args__ = (
+        UniqueConstraint(
+            "customer_id", "source_message_id", name="uq_debt_payment_confirmation_message"
+        ),
+        Index("ix_debt_payment_confirmations_created", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    customer_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_message_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    sender_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    sender_display_name: Mapped[str | None] = mapped_column(String(255))
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    matched_phrase: Mapped[str] = mapped_column(String(100), nullable=False)
+    message_sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    customer: Mapped[Customer] = relationship(back_populates="payment_confirmations")
 
 
 class MentionContextMessage(Base):

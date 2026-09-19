@@ -13,6 +13,7 @@ from app.schemas.api import (
     IncomingGroupReaction,
 )
 from app.services.alerting import report_async
+from app.services.debt_payment_service import apply_payment_confirmation
 from app.services.mention_automation_service import (
     acknowledge_from_reaction,
     schedule_from_incoming_event,
@@ -38,6 +39,7 @@ async def receive_zalo_event(
         raise AppError("UNAUTHORIZED", "Invalid event secret.", 401)
     if isinstance(event, IncomingGroupReaction):
         return await acknowledge_from_reaction(db, event)
+    await apply_payment_confirmation(db, event)
     return await schedule_from_incoming_event(db, event)
 
 

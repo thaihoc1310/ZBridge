@@ -21,6 +21,7 @@ export const PERMISSIONS = {
   debtReminderSend: "debt_reminder:send",
   debtReminderBulkApply: "debt_reminder_bulk:apply",
   debtReminderHistoryRead: "debt_reminder_history:read",
+  debtPaymentConfirmationManage: "debt_payment_confirmation:manage",
   driveConversionManage: "drive_conversion:manage",
   activityRead: "activity:read",
   modelActivityRead: "model_activity:read",

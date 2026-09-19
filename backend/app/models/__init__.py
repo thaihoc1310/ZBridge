@@ -1,6 +1,8 @@
 from app.models.entities import (
     BotDeliveryLog,
     Customer,
+    DebtPaymentConfirmation,
+    DebtPaymentSettings,
     DebtReminderAutomation,
     DebtReminderRun,
     DriveConversionFolder,
@@ -30,6 +32,8 @@ from app.models.entities import (
 __all__ = [
     "BotDeliveryLog",
     "Customer",
+    "DebtPaymentConfirmation",
+    "DebtPaymentSettings",
     "DebtReminderAutomation",
     "DebtReminderRun",
     "DriveConversionFolder",

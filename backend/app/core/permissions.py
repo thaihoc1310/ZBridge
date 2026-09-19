@@ -39,6 +39,7 @@ DEBT_REMINDER_UPDATE = "debt_reminder:update"
 DEBT_REMINDER_SEND = "debt_reminder:send"
 DEBT_REMINDER_BULK_APPLY = "debt_reminder_bulk:apply"
 DEBT_REMINDER_HISTORY_READ = "debt_reminder_history:read"
+DEBT_PAYMENT_CONFIRMATION_MANAGE = "debt_payment_confirmation:manage"
 
 DRIVE_CONVERSION_MANAGE = "drive_conversion:manage"
 
@@ -100,6 +101,11 @@ PERMISSION_CATALOG: tuple[PermissionDef, ...] = (
     PermissionDef(DEBT_REMINDER_SEND, "Gửi nhắc công nợ ngay", CATEGORY_DEBT),
     PermissionDef(DEBT_REMINDER_BULK_APPLY, "Áp lịch nhắc công nợ hàng loạt", CATEGORY_DEBT),
     PermissionDef(DEBT_REMINDER_HISTORY_READ, "Xem lịch sử lượt nhắc công nợ", CATEGORY_DEBT),
+    PermissionDef(
+        DEBT_PAYMENT_CONFIRMATION_MANAGE,
+        "Cấu hình tự động ghi nhận thanh toán",
+        CATEGORY_DEBT,
+    ),
     PermissionDef(
         DRIVE_CONVERSION_MANAGE, "Quản lý chuyển Excel sang Google Sheets", CATEGORY_TOOLS
     ),

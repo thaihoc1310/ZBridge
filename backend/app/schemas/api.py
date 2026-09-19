@@ -244,6 +244,17 @@ class DashboardUpcomingReminder(BaseModel):
     next_run_at: datetime
 
 
+class DashboardDebtPaymentConfirmation(BaseModel):
+    id: uuid.UUID
+    customer_id: uuid.UUID
+    customer_name: str
+    customer_avatar_url: str | None = None
+    sender_display_name: str | None = None
+    content: str
+    matched_phrase: str
+    message_sent_at: datetime
+
+
 class DashboardResponse(BaseModel):
     bot_status: BotStatus
     customer_count: int
@@ -286,6 +297,9 @@ class DashboardResponse(BaseModel):
     ai_blocked_today: int = 0
     ai_avg_latency_ms: int | None = None
     ai_tokens_today: dict[str, int] = Field(default_factory=dict)
+    debt_payment_confirmations: list[DashboardDebtPaymentConfirmation] = Field(
+        default_factory=list
+    )
 
 
 class HealthResponse(BaseModel):
@@ -431,6 +445,33 @@ class MentionClassifierSettingsUpdate(BaseModel):
 
 
 class MentionClassifierSettingsResponse(MentionClassifierSettingsUpdate):
+    updated_at: datetime | None = None
+
+
+class DebtPaymentTrackedMember(BaseModel):
+    user_id: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(min_length=1, max_length=255)
+    avatar_url: str | None = Field(default=None, max_length=2000)
+
+
+class DebtPaymentSettingsUpdate(BaseModel):
+    tracked_members: list[DebtPaymentTrackedMember] = Field(
+        default_factory=list, max_length=200
+    )
+    phrases: list[str] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_settings(self):
+        if len({member.user_id for member in self.tracked_members}) != len(
+            self.tracked_members
+        ):
+            raise ValueError("Danh sách người theo dõi bị trùng.")
+        if any(not phrase.strip() or len(phrase.strip()) > 100 for phrase in self.phrases):
+            raise ValueError("Mỗi câu xác nhận phải có từ 1 đến 100 ký tự.")
+        return self
+
+
+class DebtPaymentSettingsResponse(DebtPaymentSettingsUpdate):
     updated_at: datetime | None = None
 
 

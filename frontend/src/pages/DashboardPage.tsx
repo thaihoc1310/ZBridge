@@ -7,6 +7,7 @@ import type { Dashboard } from "../api/types";
 import { PageHeader } from "../components/PageHeader";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { DashboardCharts } from "../features/dashboard/DashboardCharts";
+import { DebtPaymentConfirmationsPanel } from "../features/dashboard/DebtPaymentConfirmationsPanel";
 import { HealthStrip } from "../features/dashboard/HealthStrip";
 import { PERMISSIONS } from "../lib/permissions";
 import { usePermissions } from "../lib/session";
@@ -52,6 +53,11 @@ export function DashboardPage() {
       </motion.div>
 
       <HealthStrip data={data} />
+
+      <DebtPaymentConfirmationsPanel
+        items={data?.debt_payment_confirmations ?? []}
+        canOpenCustomer={customersLink}
+      />
 
       <DashboardCharts data={data} />
 

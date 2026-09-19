@@ -11,6 +11,7 @@ from app.db.database import Base
 from app.models import (
     BotDeliveryLog,
     Customer,
+    DebtPaymentConfirmation,
     DebtReminderAutomation,
     DebtReminderRun,
     MentionAutomation,
@@ -132,6 +133,15 @@ async def test_dashboard_returns_debt_split_and_sent_messages_by_local_hour(
                     status=DeliveryStatus.SENT,
                     created_at=first_sent - timedelta(days=1),
                 ),
+                DebtPaymentConfirmation(
+                    customer_id=customers[0].id,
+                    source_message_id="paid-dashboard-1",
+                    sender_id="employee-1",
+                    sender_display_name="Thu ngân",
+                    content="Khách đã thanh toán",
+                    matched_phrase="đã thanh toán",
+                    message_sent_at=second_sent,
+                ),
             ]
         )
         await db.commit()
@@ -146,6 +156,8 @@ async def test_dashboard_returns_debt_split_and_sent_messages_by_local_hour(
     assert len(result.messages_by_hour) == 24
     assert result.messages_by_hour[local_now.hour].count == 2
     assert sum(point.count for point in result.messages_by_hour) == 2
+    assert len(result.debt_payment_confirmations) == 1
+    assert result.debt_payment_confirmations[0].customer_name == "Khách 0"
     await engine.dispose()
 
 

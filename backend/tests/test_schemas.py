@@ -2,11 +2,25 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.api import (
+    DebtPaymentSettingsUpdate,
     LoginRequest,
     MentionAutomationUpdate,
     MentionTargetInput,
     MessageCreate,
 )
+
+
+def test_debt_payment_tracked_member_limits() -> None:
+    with pytest.raises(ValidationError):
+        DebtPaymentSettingsUpdate(
+            tracked_members=[
+                {
+                    "user_id": "x" * 129,
+                    "display_name": "x" * 256,
+                    "avatar_url": "x" * 2001,
+                }
+            ]
+        )
 
 
 def test_message_content_limits() -> None:

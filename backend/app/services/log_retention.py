@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.db.database import SessionLocal
 from app.models import (
     BotDeliveryLog,
+    DebtPaymentConfirmation,
     DebtReminderRun,
     DriveConversionJob,
     MentionContextMessage,
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 ACTIVITY_LOG_RETENTION_DAYS = 7
 DEBT_REMINDER_RUN_RETENTION_DAYS = 45
+DEBT_PAYMENT_CONFIRMATION_RETENTION_DAYS = 45
 DRIVE_CONVERSION_JOB_RETENTION_DAYS = 45
 
 
@@ -50,6 +52,11 @@ async def delete_expired_delivery_logs(
                     DebtReminderStatus.CANCELLED,
                 ]
             ),
+        )
+    )
+    await db.execute(
+        delete(DebtPaymentConfirmation).where(
+            DebtPaymentConfirmation.created_at < debt_cutoff
         )
     )
     # Follow-ups in a terminal state only: PENDING/PROCESSING rows are live loops
