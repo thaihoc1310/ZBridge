@@ -458,6 +458,9 @@ class DebtPaymentSettingsUpdate(BaseModel):
     tracked_members: list[DebtPaymentTrackedMember] = Field(
         default_factory=list, max_length=200
     )
+    notification_targets: list[DebtPaymentTrackedMember] = Field(
+        default_factory=list, max_length=200
+    )
     phrases: list[str] = Field(default_factory=list, max_length=100)
 
     @model_validator(mode="after")
@@ -466,6 +469,10 @@ class DebtPaymentSettingsUpdate(BaseModel):
             self.tracked_members
         ):
             raise ValueError("Danh sách người theo dõi bị trùng.")
+        if len({member.user_id for member in self.notification_targets}) != len(
+            self.notification_targets
+        ):
+            raise ValueError("Danh sách người nhận thông báo bị trùng.")
         if any(not phrase.strip() or len(phrase.strip()) > 100 for phrase in self.phrases):
             raise ValueError("Mỗi câu xác nhận phải có từ 1 đến 100 ký tự.")
         return self

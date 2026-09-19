@@ -342,6 +342,9 @@ class DebtPaymentSettings(TimestampMixin, Base):
     tracked_members: Mapped[list[dict[str, str | None]]] = mapped_column(
         JSON, default=list, nullable=False
     )
+    notification_targets: Mapped[list[dict[str, str | None]]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
     phrases: Mapped[list[str]] = mapped_column(JSON, nullable=False)
 
 

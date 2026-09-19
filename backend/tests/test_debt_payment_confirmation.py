@@ -41,7 +41,12 @@ async def test_trusted_message_marks_paid_without_prior_sent_reminder() -> None:
         )
         db.add(group)
         await db.flush()
-        customer = Customer(id=group.id, zalo_group_id=group.id, has_debt=True)
+        customer = Customer(
+            id=group.id,
+            zalo_group_id=group.id,
+            has_debt=True,
+            debt_file_url="https://docs.google.com/spreadsheets/d/debt-sheet",
+        )
         automation = DebtReminderAutomation(
             customer_id=group.id, next_run_at=sent_at
         )
@@ -55,6 +60,13 @@ async def test_trusted_message_marks_paid_without_prior_sent_reminder() -> None:
                         {
                             "user_id": "employee-1",
                             "display_name": "Thu ngân",
+                            "avatar_url": None,
+                        }
+                    ],
+                    notification_targets=[
+                        {
+                            "user_id": "accountant-1",
+                            "display_name": "Kế toán",
                             "avatar_url": None,
                         }
                     ],
@@ -111,11 +123,21 @@ async def test_trusted_message_marks_paid_without_prior_sent_reminder() -> None:
             group.zalo_group_id,
             [
                 {
-                    "type": "mention",
-                    "user_id": "employee-1",
-                    "display_name": "Thu ngân",
+                    "type": "text",
+                    "text": "Hệ thống đã xác nhận thanh toán, vui lòng ",
                 },
-                {"type": "text", "text": " Hệ thống xác nhận đã thanh toán ạ."},
+                {
+                    "type": "mention",
+                    "user_id": "accountant-1",
+                    "display_name": "Kế toán",
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        " vào chỉnh sửa công nợ: "
+                        "https://docs.google.com/spreadsheets/d/debt-sheet"
+                    ),
+                },
             ],
             idempotency_key=f"debt-payment-confirmation:{customer.id}:paid-message-1",
         )

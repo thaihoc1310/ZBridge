@@ -25,12 +25,12 @@ from app.services.zalo_gateway_client import GatewayError, zalo_gateway
 logger = logging.getLogger("zbridge.debt_payment")
 GLOBAL_SETTINGS_ID = 1
 DEFAULT_PHRASES = ["đã thanh toán", "đã tt", "da thanh toan"]
-CONFIRMATION_TEXT = " Hệ thống xác nhận đã thanh toán ạ."
 
 
 def _response(settings: DebtPaymentSettings) -> DebtPaymentSettingsResponse:
     return DebtPaymentSettingsResponse(
         tracked_members=settings.tracked_members,
+        notification_targets=settings.notification_targets,
         phrases=settings.phrases,
         updated_at=settings.updated_at,
     )
@@ -42,6 +42,7 @@ async def get_settings(db: AsyncSession) -> DebtPaymentSettingsResponse:
         settings = DebtPaymentSettings(
             id=GLOBAL_SETTINGS_ID,
             tracked_members=[],
+            notification_targets=[],
             phrases=DEFAULT_PHRASES,
         )
         db.add(settings)
@@ -56,7 +57,10 @@ async def save_settings(
     settings = await db.get(DebtPaymentSettings, GLOBAL_SETTINGS_ID)
     if settings is None:
         settings = DebtPaymentSettings(
-            id=GLOBAL_SETTINGS_ID, tracked_members=[], phrases=[]
+            id=GLOBAL_SETTINGS_ID,
+            tracked_members=[],
+            notification_targets=[],
+            phrases=[],
         )
         db.add(settings)
 
@@ -69,12 +73,16 @@ async def save_settings(
             seen.add(normalized)
 
     settings.tracked_members = [member.model_dump() for member in data.tracked_members]
+    settings.notification_targets = [
+        member.model_dump() for member in data.notification_targets
+    ]
     settings.phrases = phrases
     await db.commit()
     await db.refresh(settings)
     logger.info(
-        "DEBT_PAYMENT_SETTINGS_SAVED members=%d phrases=%d",
+        "DEBT_PAYMENT_SETTINGS_SAVED members=%d notification_targets=%d phrases=%d",
         len(settings.tracked_members),
+        len(settings.notification_targets),
         len(settings.phrases),
     )
     return _response(settings)
@@ -179,43 +187,53 @@ async def apply_payment_confirmation(
     )
     # The acknowledgement must never get ahead of the source-of-truth state.
     await db.commit()
-    try:
-        result = await zalo_gateway.send_rich_text(
-            event.group_id,
-            [
+    if settings.notification_targets:
+        parts: list[dict[str, str]] = [
+            {"type": "text", "text": "Hệ thống đã xác nhận thanh toán, vui lòng "}
+        ]
+        for index, target in enumerate(settings.notification_targets):
+            if index:
+                parts.append({"type": "text", "text": ", "})
+            parts.append(
                 {
                     "type": "mention",
-                    "user_id": event.sender_id,
-                    "display_name": display_name,
-                },
-                {"type": "text", "text": CONFIRMATION_TEXT},
-            ],
-            idempotency_key=(
-                f"debt-payment-confirmation:{customer.id}:{event.message_id}"
-            ),
-        )
-        await add_delivery_log(
-            db,
-            customer.id,
-            DeliveryType.DEBT_PAYMENT_CONFIRMATION,
-            DeliveryStatus.SENT,
-            zalo_message_id=str(result.get("message_id") or "") or None,
-        )
-    except GatewayError as exc:
-        await add_delivery_log(
-            db,
-            customer.id,
-            DeliveryType.DEBT_PAYMENT_CONFIRMATION,
-            DeliveryStatus.FAILED,
-            error_code=exc.code,
-            error_message=exc.message,
-        )
-        logger.warning(
-            "DEBT_PAYMENT_CONFIRMATION_REPLY_FAILED customer_id=%s code=%s",
-            customer.id,
-            exc.code,
-        )
-    await db.commit()
+                    "user_id": str(target["user_id"]),
+                    "display_name": str(target["display_name"]),
+                }
+            )
+        suffix = " vào chỉnh sửa công nợ"
+        suffix += f": {customer.debt_file_url}" if customer.debt_file_url else "."
+        parts.append({"type": "text", "text": suffix})
+        try:
+            result = await zalo_gateway.send_rich_text(
+                event.group_id,
+                parts,
+                idempotency_key=(
+                    f"debt-payment-confirmation:{customer.id}:{event.message_id}"
+                ),
+            )
+            await add_delivery_log(
+                db,
+                customer.id,
+                DeliveryType.DEBT_PAYMENT_CONFIRMATION,
+                DeliveryStatus.SENT,
+                zalo_message_id=str(result.get("message_id") or "") or None,
+            )
+        except GatewayError as exc:
+            await add_delivery_log(
+                db,
+                customer.id,
+                DeliveryType.DEBT_PAYMENT_CONFIRMATION,
+                DeliveryStatus.FAILED,
+                error_code=exc.code,
+                error_message=exc.message,
+            )
+            logger.warning(
+                "DEBT_PAYMENT_CONFIRMATION_REPLY_FAILED customer_id=%s code=%s",
+                customer.id,
+                exc.code,
+            )
+        await db.commit()
     logger.info(
         "DEBT_PAYMENT_AUTO_CONFIRMED customer_id=%s group_id=%s sender_id=%s message_id=%s",
         customer.id,

@@ -206,6 +206,7 @@ export type GroupMember = {
 
 export type DebtPaymentSettings = {
   tracked_members: GroupMember[];
+  notification_targets: GroupMember[];
   phrases: string[];
   updated_at: string | null;
 };

@@ -176,7 +176,7 @@ export function MentionSettingsPage() {
                   debtPayment.isLoading
                     ? "Đang tải..."
                     : debtPayment.data
-                      ? `${debtPayment.data.tracked_members.length} người · ${debtPayment.data.phrases.length} câu`
+                      ? `${debtPayment.data.tracked_members.length} người theo dõi · ${debtPayment.data.notification_targets.length} người nhận · ${debtPayment.data.phrases.length} câu`
                       : "Không tải được"
                 }
                 onClick={() => setPanel("debt-payment")}
