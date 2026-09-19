@@ -80,12 +80,19 @@ async def test_trusted_message_marks_paid_without_prior_sent_reminder() -> None:
             sent_at=sent_at,
             content="KHÁCH ĐÃ   THANH TOÁN!!!",
         )
-        send_reply = AsyncMock(return_value={"message_id": "payment-reply-1"})
+        commit = AsyncMock(wraps=db.commit)
+
+        async def send_after_payment_commit(*_args, **_kwargs):
+            assert commit.await_count == 1
+            return {"message_id": "payment-reply-1"}
+
+        send_reply = AsyncMock(side_effect=send_after_payment_commit)
         with patch(
             "app.services.debt_payment_service.zalo_gateway.send_rich_text",
             send_reply,
-        ):
+        ), patch.object(db, "commit", commit):
             assert await apply_payment_confirmation(db, event) is True
+        assert commit.await_count == 2
 
         await db.refresh(customer)
         await db.refresh(automation)

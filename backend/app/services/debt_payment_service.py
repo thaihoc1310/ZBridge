@@ -177,6 +177,8 @@ async def apply_payment_confirmation(
         now=now,
         inactive_reason="Khách hàng đã được tự động đánh dấu thanh toán từ tin nhắn Zalo.",
     )
+    # The acknowledgement must never get ahead of the source-of-truth state.
+    await db.commit()
     try:
         result = await zalo_gateway.send_rich_text(
             event.group_id,
