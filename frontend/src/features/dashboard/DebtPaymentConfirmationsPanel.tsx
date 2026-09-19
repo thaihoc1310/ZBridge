@@ -52,7 +52,7 @@ export function DebtPaymentConfirmationsPanel({
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <strong className="text-sm">{item.customer_name}</strong>
                       <span className="rounded-full bg-success-bg px-2 py-0.5 text-[11px] font-semibold text-success-fg">
-                        Đã tự chuyển sang thanh toán
+                        Đã chuyển sang thanh toán
                       </span>
                     </span>
                     <span className="mt-1 block text-xs text-muted-foreground">
