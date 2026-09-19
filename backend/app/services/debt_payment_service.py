@@ -11,17 +11,21 @@ from app.models import (
     DebtPaymentSettings,
     ZaloGroup,
 )
+from app.models.entities import DeliveryStatus, DeliveryType
 from app.schemas.api import (
     DebtPaymentSettingsResponse,
     DebtPaymentSettingsUpdate,
     IncomingGroupMessage,
 )
 from app.services.debt_reminder_service import sync_debt_reminder_state
+from app.services.delivery_service import add_delivery_log
 from app.services.mention_rules import normalize_phrase
+from app.services.zalo_gateway_client import GatewayError, zalo_gateway
 
 logger = logging.getLogger("zbridge.debt_payment")
 GLOBAL_SETTINGS_ID = 1
 DEFAULT_PHRASES = ["đã thanh toán", "đã tt", "da thanh toan"]
+CONFIRMATION_TEXT = " Hệ thống xác nhận đã thanh toán ạ."
 
 
 def _response(settings: DebtPaymentSettings) -> DebtPaymentSettingsResponse:
@@ -149,6 +153,11 @@ async def apply_payment_confirmation(
     ):
         return False
 
+    display_name = (
+        event.sender_display_name
+        or str(member.get("display_name") or "")
+        or event.sender_id
+    )
     customer.has_debt = False
     customer.last_debt_paid_at = sent_at
     db.add(
@@ -156,9 +165,7 @@ async def apply_payment_confirmation(
             customer_id=customer.id,
             source_message_id=event.message_id,
             sender_id=event.sender_id,
-            sender_display_name=event.sender_display_name
-            or str(member.get("display_name") or "")
-            or None,
+            sender_display_name=display_name,
             content=event.content,
             matched_phrase=phrase,
             message_sent_at=sent_at,
@@ -170,6 +177,42 @@ async def apply_payment_confirmation(
         now=now,
         inactive_reason="Khách hàng đã được tự động đánh dấu thanh toán từ tin nhắn Zalo.",
     )
+    try:
+        result = await zalo_gateway.send_rich_text(
+            event.group_id,
+            [
+                {
+                    "type": "mention",
+                    "user_id": event.sender_id,
+                    "display_name": display_name,
+                },
+                {"type": "text", "text": CONFIRMATION_TEXT},
+            ],
+            idempotency_key=(
+                f"debt-payment-confirmation:{customer.id}:{event.message_id}"
+            ),
+        )
+        await add_delivery_log(
+            db,
+            customer.id,
+            DeliveryType.DEBT_PAYMENT_CONFIRMATION,
+            DeliveryStatus.SENT,
+            zalo_message_id=str(result.get("message_id") or "") or None,
+        )
+    except GatewayError as exc:
+        await add_delivery_log(
+            db,
+            customer.id,
+            DeliveryType.DEBT_PAYMENT_CONFIRMATION,
+            DeliveryStatus.FAILED,
+            error_code=exc.code,
+            error_message=exc.message,
+        )
+        logger.warning(
+            "DEBT_PAYMENT_CONFIRMATION_REPLY_FAILED customer_id=%s code=%s",
+            customer.id,
+            exc.code,
+        )
     await db.commit()
     logger.info(
         "DEBT_PAYMENT_AUTO_CONFIRMED customer_id=%s group_id=%s sender_id=%s message_id=%s",

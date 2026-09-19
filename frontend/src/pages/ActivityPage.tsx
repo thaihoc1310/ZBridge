@@ -120,6 +120,7 @@ function DeliveryLogTable({ data, loading, page, onPageChange }: { data?: Delive
 
 function deliveryTypeLabel(type: DeliveryLogList["items"][number]["type"]) {
   if (type === "MENTION_AUTOMATION") return "Tag tên tự động";
+  if (type === "DEBT_PAYMENT_CONFIRMATION") return "Xác nhận thanh toán";
   if (type === "DEBT_REMINDER_IMAGE") return "Nhắc công nợ · Ảnh";
   if (type === "DEBT_REMINDER_LINK") return "Nhắc công nợ · Link";
   if (type === "DEBT_REMINDER_MESSAGE") return "Nhắc công nợ · Nội dung";

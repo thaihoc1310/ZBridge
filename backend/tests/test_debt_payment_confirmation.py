@@ -1,10 +1,12 @@
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.database import Base
 from app.models import (
+    BotDeliveryLog,
     Customer,
     DebtPaymentConfirmation,
     DebtPaymentSettings,
@@ -13,7 +15,7 @@ from app.models import (
     ZaloAccount,
     ZaloGroup,
 )
-from app.models.entities import DebtReminderStatus
+from app.models.entities import DebtReminderStatus, DeliveryStatus, DeliveryType
 from app.schemas.api import IncomingGroupMessage
 from app.services.debt_payment_service import apply_payment_confirmation
 
@@ -78,7 +80,12 @@ async def test_trusted_message_marks_paid_without_prior_sent_reminder() -> None:
             sent_at=sent_at,
             content="KHÁCH ĐÃ   THANH TOÁN!!!",
         )
-        assert await apply_payment_confirmation(db, event) is True
+        send_reply = AsyncMock(return_value={"message_id": "payment-reply-1"})
+        with patch(
+            "app.services.debt_payment_service.zalo_gateway.send_rich_text",
+            send_reply,
+        ):
+            assert await apply_payment_confirmation(db, event) is True
 
         await db.refresh(customer)
         await db.refresh(automation)
@@ -88,6 +95,23 @@ async def test_trusted_message_marks_paid_without_prior_sent_reminder() -> None:
         assert automation.next_run_at is None
         assert run.status == DebtReminderStatus.CANCELLED
         assert await db.scalar(select(func.count()).select_from(DebtPaymentConfirmation)) == 1
+        delivery = await db.scalar(select(BotDeliveryLog))
+        assert delivery is not None
+        assert delivery.type == DeliveryType.DEBT_PAYMENT_CONFIRMATION
+        assert delivery.status == DeliveryStatus.SENT
+        assert delivery.zalo_message_id == "payment-reply-1"
+        send_reply.assert_awaited_once_with(
+            group.zalo_group_id,
+            [
+                {
+                    "type": "mention",
+                    "user_id": "employee-1",
+                    "display_name": "Thu ngân",
+                },
+                {"type": "text", "text": " Hệ thống xác nhận đã thanh toán ạ."},
+            ],
+            idempotency_key=f"debt-payment-confirmation:{customer.id}:paid-message-1",
+        )
 
         # A replayed outbox event must not close a later debt cycle again.
         customer.has_debt = True

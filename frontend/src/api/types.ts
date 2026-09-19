@@ -8,6 +8,7 @@ export type DeliveryStatus = "SENT" | "FAILED";
 export type DeliveryType =
   | "MANUAL_MESSAGE"
   | "MENTION_AUTOMATION"
+  | "DEBT_PAYMENT_CONFIRMATION"
   | "DEBT_REMINDER_IMAGE"
   | "DEBT_REMINDER_LINK"
   | "DEBT_REMINDER_MESSAGE";
