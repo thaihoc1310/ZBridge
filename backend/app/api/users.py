@@ -25,9 +25,9 @@ async def index(
 async def create(
     data: UserCreate,
     db: AsyncSession = Depends(get_db),
-    _actor: User = Depends(require_permission(USER_CREATE)),
+    actor: User = Depends(require_permission(USER_CREATE)),
 ) -> UserResponse:
-    return await create_user(db, data)
+    return await create_user(db, actor, data)
 
 
 @router.patch("/{user_id}", response_model=UserResponse)

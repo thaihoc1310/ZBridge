@@ -676,7 +676,9 @@ async def test_last_user_manager_cannot_be_removed(session_factory) -> None:
         assert USER_UPDATE not in loaded_actor.permission_codes
         with pytest.raises(AppError) as failure:
             await delete_user(db, loaded_actor, admin.id)
-        assert failure.value.code == "LAST_USER_MANAGER"
+        # Refused before the last-manager check: deleting an account that holds
+        # permissions the actor lacks is itself an escalation.
+        assert failure.value.code == "PERMISSION_ESCALATION"
         assert await db.scalar(select(User.id).where(User.id == admin.id)) is not None
 
 
@@ -702,14 +704,68 @@ async def test_last_user_manager_cannot_remove_permission_from_own_role(client) 
 
     client.cookies.clear()
     await _login(client, "manager@zbridge.vn", "manager-password")
+    # A narrower manager can no longer take over the admin account...
     disabled = await client.patch(
         f"/api/users/{admin['id']}", json={"is_active": False}
     )
-    assert disabled.status_code == 200, disabled.text
+    assert disabled.status_code == 403, disabled.text
+    assert disabled.json()["error"]["code"] == "PERMISSION_ESCALATION"
+    reset = await client.patch(
+        f"/api/users/{admin['id']}", json={"password": "taken-over-password"}
+    )
+    assert reset.status_code == 403
 
+    # ...nor edit the role it holds, which also rules out locking itself out.
     lockout = await client.patch(
         f"/api/roles/{role.json()['id']}",
         json={"permissions": ["user:read", "role:read", "role:manage"]},
     )
     assert lockout.status_code == 422
-    assert lockout.json()["error"]["code"] == "LAST_USER_MANAGER"
+    assert lockout.json()["error"]["code"] == "CANNOT_MODIFY_SELF"
+
+
+async def test_narrow_admin_grants_cannot_be_turned_into_full_admin(client) -> None:
+    """role:manage, user:create and user:update each used to be as good as ADMIN."""
+    await _login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    roles = {role["code"]: role for role in (await client.get("/api/roles")).json()}
+    narrow = await client.post(
+        "/api/roles",
+        json={
+            "name": "Quản lý hẹp",
+            "permissions": ["user:read", "user:create", "role:read", "role:manage"],
+        },
+    )
+    assert narrow.status_code == 201, narrow.text
+    created = await client.post(
+        "/api/users",
+        json={
+            "email": "narrow@zbridge.vn",
+            "password": "narrow-password",
+            "role_id": narrow.json()["id"],
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    client.cookies.clear()
+    await _login(client, "narrow@zbridge.vn", "narrow-password")
+    # Creating an ADMIN account with a password of one's choosing.
+    admin_account = await client.post(
+        "/api/users",
+        json={
+            "email": "sneaky@zbridge.vn",
+            "password": "sneaky-password",
+            "role_id": roles[ADMIN_ROLE_CODE]["id"],
+        },
+    )
+    assert admin_account.status_code == 403
+    assert admin_account.json()["error"]["code"] == "PERMISSION_ESCALATION"
+    # Minting a role with permissions the actor does not hold.
+    bigger = await client.post(
+        "/api/roles", json={"name": "To hơn", "permissions": ["user:delete"]}
+    )
+    assert bigger.status_code == 403
+    # Within its own grant it still works.
+    same = await client.post(
+        "/api/roles", json={"name": "Chỉ xem", "permissions": ["user:read"]}
+    )
+    assert same.status_code == 201, same.text

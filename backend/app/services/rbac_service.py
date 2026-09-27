@@ -2,6 +2,7 @@ import logging
 import re
 import unicodedata
 import uuid
+from collections.abc import Iterable
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -203,8 +204,24 @@ def _slug(name: str) -> str:
     return slug[:48] or "ROLE"
 
 
-async def create_role(db: AsyncSession, data: RoleCreate) -> RoleResponse:
+def ensure_within_grant(actor: User, codes: Iterable[str]) -> None:
+    """Refuse to grant or manage permissions the actor does not hold.
+
+    Without it, `role:manage`, `user:create` and `user:update` were each as good
+    as ADMIN: edit your own role, create an ADMIN account, or reset the real
+    admin's password. The catalog presents them as narrower grants than that.
+    """
+    if set(codes) - actor.permission_codes:
+        raise AppError(
+            "PERMISSION_ESCALATION",
+            "Không thể cấp hoặc quản lý quyền mà chính bạn không có.",
+            403,
+        )
+
+
+async def create_role(db: AsyncSession, actor: User, data: RoleCreate) -> RoleResponse:
     permissions = await _resolve_permissions(db, data.permissions)
+    ensure_within_grant(actor, data.permissions)
     role = Role(
         code=await _unique_code(db, data.name),
         name=data.name.strip(),
@@ -219,7 +236,7 @@ async def create_role(db: AsyncSession, data: RoleCreate) -> RoleResponse:
 
 
 async def update_role(
-    db: AsyncSession, role_id: uuid.UUID, data: RoleUpdate
+    db: AsyncSession, actor: User, role_id: uuid.UUID, data: RoleUpdate
 ) -> RoleResponse:
     role = await get_role(db, role_id)
     await lock_user_management_invariant(db)
@@ -229,6 +246,11 @@ async def update_role(
             "Vai trò hệ thống không thể sửa. Hãy tạo một vai trò riêng.",
             422,
         )
+    if role.id == actor.role_id:
+        raise AppError(
+            "CANNOT_MODIFY_SELF", "Không thể tự sửa vai trò mình đang giữ.", 422
+        )
+    ensure_within_grant(actor, (permission.code for permission in role.permissions))
     fields = data.model_fields_set
     if "name" in fields and data.name:
         role.name = data.name.strip()
@@ -238,6 +260,7 @@ async def update_role(
         if not data.permissions:
             raise AppError("EMPTY_ROLE", "Vai trò phải có ít nhất một quyền.", 422)
         role.permissions = await _resolve_permissions(db, data.permissions)
+        ensure_within_grant(actor, data.permissions)
     await db.flush()
     if await _active_user_manager_count(db) == 0:
         await db.rollback()
@@ -251,10 +274,11 @@ async def update_role(
     return role_response(await get_role(db, role.id))
 
 
-async def delete_role(db: AsyncSession, role_id: uuid.UUID) -> None:
+async def delete_role(db: AsyncSession, actor: User, role_id: uuid.UUID) -> None:
     role = await get_role(db, role_id)
     if role.is_system:
         raise AppError("SYSTEM_ROLE_READ_ONLY", "Không thể xóa vai trò hệ thống.", 422)
+    ensure_within_grant(actor, (permission.code for permission in role.permissions))
     assigned = int(
         await db.scalar(
             select(func.count()).select_from(User).where(User.role_id == role.id)

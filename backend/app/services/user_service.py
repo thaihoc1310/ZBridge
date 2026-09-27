@@ -18,6 +18,7 @@ from app.schemas.api import (
     UserUpdate,
 )
 from app.services.rbac_service import (
+    ensure_within_grant,
     get_role,
     lock_user_management_invariant,
     role_response,
@@ -104,8 +105,9 @@ async def _ensure_user_management_survives(db: AsyncSession, user: User) -> None
         )
 
 
-async def create_user(db: AsyncSession, data: UserCreate) -> UserResponse:
+async def create_user(db: AsyncSession, actor: User, data: UserCreate) -> UserResponse:
     role = await get_role(db, data.role_id)
+    ensure_within_grant(actor, (permission.code for permission in role.permissions))
     email = data.email.lower()
     if await db.scalar(select(User.id).where(User.email == email)):
         raise AppError("EMAIL_ALREADY_USED", "Email này đã được sử dụng.", 409)
@@ -134,6 +136,8 @@ async def update_user(
     user = await get_user(db, user_id)
     fields = data.model_fields_set
     is_self = user.id == actor.id
+    # Resetting a stronger account's password or disabling it is taking it over.
+    ensure_within_grant(actor, user.permission_codes)
 
     if "full_name" in fields:
         user.full_name = (data.full_name or "").strip() or None
@@ -150,7 +154,9 @@ async def update_user(
             raise AppError(
                 "CANNOT_MODIFY_SELF", "Không thể tự thay đổi vai trò của mình.", 422
             )
-        user.role_id = (await get_role(db, data.role_id)).id
+        new_role = await get_role(db, data.role_id)
+        ensure_within_grant(actor, (permission.code for permission in new_role.permissions))
+        user.role_id = new_role.id
 
     if "password" in fields and data.password:
         # Invalidates every session that account still holds.
@@ -168,6 +174,7 @@ async def delete_user(db: AsyncSession, actor: User, user_id: uuid.UUID) -> None
     user = await get_user(db, user_id)
     if user.id == actor.id:
         raise AppError("CANNOT_MODIFY_SELF", "Không thể tự xóa tài khoản của mình.", 422)
+    ensure_within_grant(actor, user.permission_codes)
     if await _other_user_managers(db, exclude_id=user.id) == 0:
         raise AppError(
             "LAST_USER_MANAGER",

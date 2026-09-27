@@ -38,9 +38,9 @@ async def permissions(
 async def create(
     data: RoleCreate,
     db: AsyncSession = Depends(get_db),
-    _actor: User = Depends(require_permission(ROLE_MANAGE)),
+    actor: User = Depends(require_permission(ROLE_MANAGE)),
 ) -> RoleResponse:
-    return await create_role(db, data)
+    return await create_role(db, actor, data)
 
 
 @router.patch("/{role_id}", response_model=RoleResponse)
@@ -48,15 +48,15 @@ async def update(
     role_id: uuid.UUID,
     data: RoleUpdate,
     db: AsyncSession = Depends(get_db),
-    _actor: User = Depends(require_permission(ROLE_MANAGE)),
+    actor: User = Depends(require_permission(ROLE_MANAGE)),
 ) -> RoleResponse:
-    return await update_role(db, role_id, data)
+    return await update_role(db, actor, role_id, data)
 
 
 @router.delete("/{role_id}", status_code=204)
 async def destroy(
     role_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    _actor: User = Depends(require_permission(ROLE_MANAGE)),
+    actor: User = Depends(require_permission(ROLE_MANAGE)),
 ) -> None:
-    await delete_role(db, role_id)
+    await delete_role(db, actor, role_id)
