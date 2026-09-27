@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from app.core.alerts import Severity
@@ -205,17 +205,14 @@ async def release_overdue_classifications() -> int:
                     select(MentionFollowup)
                     .where(
                         MentionFollowup.status == MentionFollowupStatus.CLASSIFYING,
-                        or_(
-                            and_(
-                                MentionFollowup.claimed_at.is_not(None),
-                                MentionFollowup.claimed_at < cutoff,
-                            ),
-                            and_(
-                                MentionFollowup.claimed_at.is_(None),
-                                MentionFollowup.repoint_count == 0,
-                                MentionFollowup.created_at < cutoff,
-                            ),
-                        ),
+                        # Time in CLASSIFYING, not since the last claim: a new
+                        # message clears the claim, and the 10-minute stale reset
+                        # re-claims, so claim-based deadlines both fired on healthy
+                        # re-checks and never fired while celery-ai was down.
+                        func.coalesce(
+                            MentionFollowup.classifying_since, MentionFollowup.created_at
+                        )
+                        < cutoff,
                     )
                     # The AI result writer locks the same row before finalizing.
                     # Skip an in-flight result instead of overwriting it with a
@@ -307,6 +304,7 @@ async def claim_pending_classifications() -> list[tuple[uuid.UUID, datetime]]:
             )
             for job in due_rechecks:
                 job.status = MentionFollowupStatus.CLASSIFYING
+                job.classifying_since = now
                 job.claimed_at = now
                 job.attempt_count += 1
         else:
@@ -799,6 +797,7 @@ async def process_classification(followup_id: uuid.UUID, claimed_at: datetime) -
                 # flight will discard its own result rather than overwrite this.
                 followup.source_message_id = newer.message_id
                 followup.status = MentionFollowupStatus.CLASSIFYING
+                followup.classifying_since = datetime.now(UTC)
                 followup.processed_at = None
                 followup.classification_result = None
                 followup.evaluated_due_at = None

@@ -825,6 +825,7 @@ async def _create_followup(
             automation.active_windows,
         ),
         status=initial_status,
+        classifying_since=now if initial_status == MentionFollowupStatus.CLASSIFYING else None,
         processed_at=now if initial_status == MentionFollowupStatus.SKIPPED else None,
         classification_model=classification_model,
         classification_result=classification_result,

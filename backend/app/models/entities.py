@@ -506,6 +506,9 @@ class MentionFollowup(Base):
     )
     send_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When it last entered CLASSIFYING. Unlike claimed_at, a new message never
+    # clears it, so the stuck watchdog can measure how long a verdict is taking.
+    classifying_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_message_id: Mapped[str | None] = mapped_column(String(128))
     error_message: Mapped[str | None] = mapped_column(Text)

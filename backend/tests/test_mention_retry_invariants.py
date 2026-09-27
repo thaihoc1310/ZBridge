@@ -763,3 +763,58 @@ async def test_repointing_stops_at_the_configured_cap(monkeypatch) -> None:
     assert calls == 1
 
     await engine.dispose()
+
+
+async def test_a_reply_landing_during_the_readiness_check_is_not_tagged(monkeypatch) -> None:
+    """The job snapshot predates readiness; sending it tagged someone who replied."""
+    engine, session_factory = await _database()
+    _group_id, automation_id = await _seed(session_factory, group_id="group-race")
+    sends: list[object] = []
+
+    async def reply_then_healthy() -> dict[str, object]:
+        async with session_factory() as db:
+            await schedule_from_incoming_event(
+                db,
+                IncomingGroupMessage(
+                    group_id="group-race",
+                    message_id="target-reply",
+                    sender_id="target-user",
+                    sender_display_name="Người cần trả lời",
+                    sent_at=datetime.now(UTC),
+                    content="dạ em gửi rồi ạ",
+                ),
+            )
+        return await _healthy_status()
+
+    async def record_send(*args, **_kwargs) -> dict[str, str]:
+        sends.append(args)
+        return {"message_id": "should-not-happen"}
+
+    monkeypatch.setattr(mention_scheduler, "SessionLocal", session_factory)
+    monkeypatch.setattr(mention_scheduler.zalo_gateway, "get_status", reply_then_healthy)
+    monkeypatch.setattr(mention_scheduler.zalo_gateway, "send_mention", record_send)
+
+    async with session_factory() as db:
+        followup = MentionFollowup(
+            automation_id=automation_id,
+            source_message_id="source-race",
+            target_user_ids=["target-user"],
+            target_display_names=["Người cần trả lời"],
+            due_at=datetime.now(UTC) - timedelta(minutes=1),
+            status=MentionFollowupStatus.PENDING,
+            created_at=datetime.now(UTC) - timedelta(minutes=5),
+        )
+        followup.evaluated_due_at = followup.due_at
+        db.add(followup)
+        await db.commit()
+        followup_id = followup.id
+
+    assert await mention_scheduler.claim_due_followups() == [followup_id]
+    await mention_scheduler.process_followup(followup_id)
+
+    assert sends == []
+    async with session_factory() as db:
+        current = await db.get(MentionFollowup, followup_id)
+        assert current.status != MentionFollowupStatus.PROCESSING
+        assert current.send_count == 0
+    await engine.dispose()

@@ -616,6 +616,8 @@ async def test_a_fresh_repoint_is_not_timed_out_using_the_original_created_at(
             due_at=now,
             status=MentionFollowupStatus.CLASSIFYING,
             created_at=now - timedelta(minutes=40),
+            # What the repoint writes: a new classification starts now.
+            classifying_since=now,
             claimed_at=None,
             repoint_count=1,
         )
@@ -645,6 +647,82 @@ async def test_a_fresh_repoint_is_not_timed_out_using_the_original_created_at(
         assert stored.claimed_at is not None
         assert stored.classification_error is None
 
+    await engine.dispose()
+
+
+async def test_a_recheck_whose_claim_a_new_message_cleared_is_not_stuck(
+    monkeypatch,
+) -> None:
+    """An old price follow-up being re-checked used to be dropped as stuck.
+
+    Any group message clears the claim of a CLASSIFYING row; with repoint_count 0
+    the watchdog then judged it by its original created_at and dropped a real
+    price question with a false MENTION_CLASSIFICATION_STUCK alert.
+    """
+    engine, sessions = await _price_database()
+    now = datetime.now(UTC)
+    async with sessions() as db:
+        automation = await db.scalar(select(MentionAutomation))
+        db.add(
+            MentionFollowup(
+                automation_id=automation.id,
+                source_message_id="old-price-rechecked",
+                trigger=MentionFollowupTrigger.PRICE_INQUIRY,
+                target_user_ids=["target-user"],
+                target_display_names=["Abcd"],
+                due_at=now,
+                status=MentionFollowupStatus.CLASSIFYING,
+                created_at=now - timedelta(minutes=40),
+                classifying_since=now - timedelta(seconds=5),
+                claimed_at=None,
+                repoint_count=0,
+            )
+        )
+        await db.commit()
+    alerts: list[str] = []
+
+    async def capture(code, _message, **_kwargs):
+        alerts.append(code)
+
+    monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
+    monkeypatch.setattr(mention_classifier, "report_async", capture)
+    assert await mention_classifier.release_overdue_classifications() == 0
+    assert alerts == []
+    await engine.dispose()
+
+
+async def test_a_classification_reclaimed_forever_while_ai_is_down_is_caught(
+    monkeypatch,
+) -> None:
+    """The 10-minute stale reset re-claimed it before the 15-minute deadline."""
+    engine, sessions = await _price_database()
+    now = datetime.now(UTC)
+    async with sessions() as db:
+        automation = await db.scalar(select(MentionAutomation))
+        db.add(
+            MentionFollowup(
+                automation_id=automation.id,
+                source_message_id="reclaimed-forever",
+                trigger=MentionFollowupTrigger.PRICE_INQUIRY,
+                target_user_ids=["target-user"],
+                target_display_names=["Abcd"],
+                due_at=now,
+                status=MentionFollowupStatus.CLASSIFYING,
+                created_at=now - timedelta(minutes=30),
+                classifying_since=now - timedelta(minutes=30),
+                claimed_at=now - timedelta(minutes=2),
+            )
+        )
+        await db.commit()
+    alerts: list[str] = []
+
+    async def capture(code, _message, **_kwargs):
+        alerts.append(code)
+
+    monkeypatch.setattr(mention_classifier, "SessionLocal", sessions)
+    monkeypatch.setattr(mention_classifier, "report_async", capture)
+    assert await mention_classifier.release_overdue_classifications() == 1
+    assert alerts == ["MENTION_CLASSIFICATION_STUCK"]
     await engine.dispose()
 
 
@@ -1314,4 +1392,16 @@ async def test_a_run_of_acknowledgements_stops_spending_model_calls(monkeypatch)
         assert followup.status == MentionFollowupStatus.SKIPPED
         assert followup.target_user_ids == []
     assert calls <= mention_classifier.MAX_REPOINTS + 1, f"goi model {calls} lan"
+    await engine.dispose()
+
+
+async def test_every_entry_into_classifying_stamps_classifying_since() -> None:
+    engine, sessions = await _database()
+    async with sessions() as db:
+        scheduled = await schedule_from_incoming_event(
+            db, _mention_event("stamp-me", "@Abcd xem giúp mình file này với")
+        )
+        followup = await db.get(MentionFollowup, scheduled.followup_id)
+        assert followup.status == MentionFollowupStatus.CLASSIFYING
+        assert followup.classifying_since is not None
     await engine.dispose()

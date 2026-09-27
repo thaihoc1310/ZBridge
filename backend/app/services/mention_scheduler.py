@@ -393,6 +393,19 @@ async def _record_failure(job: _FollowupJob, code: str, message: str) -> None:
     )
 
 
+async def _still_current(job: _FollowupJob) -> bool:
+    """Re-check, right before sending, that the claim and targets are unchanged.
+
+    "Events caught up" only means replies up to the readiness call are committed;
+    the snapshot in ``job`` was taken before that, so it has to be re-read.
+    """
+    async with SessionLocal() as db:
+        followup = await _reload_claim(db, job)
+        current = list(followup.target_user_ids) if followup is not None else None
+        await db.rollback()
+    return current is not None and current == [target["user_id"] for target in job.targets]
+
+
 async def process_followup(followup_id: uuid.UUID) -> None:
     job = await _prepare_job(followup_id)
     if job is None:
@@ -412,6 +425,12 @@ async def process_followup(followup_id: uuid.UUID) -> None:
             reason,
         )
         await _postpone(job, reason, EVENTS_BEHIND_DELAY, alert=False)
+        return
+    if not await _still_current(job):
+        # A reply or reaction committed while readiness was being checked. Its
+        # handler already moved the row on; sending the old snapshot would tag
+        # someone who just answered.
+        logger.info("MENTION_FOLLOWUP_SUPERSEDED followup_id=%s", job.followup_id)
         return
 
     try:
