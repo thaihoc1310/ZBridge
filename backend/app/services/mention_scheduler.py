@@ -389,6 +389,7 @@ async def _record_failure(job: _FollowupJob, code: str, message: str) -> None:
         severity=Severity.ERROR if exhausted else Severity.WARNING,
         service="celery-worker",
         context={**_alert_context(job), "Mã lỗi gốc": code},
+        dedup_key=f"MENTION_FOLLOWUP_FAILED:{job.followup_id}" if exhausted else None,
     )
 
 

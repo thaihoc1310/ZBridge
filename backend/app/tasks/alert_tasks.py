@@ -32,10 +32,13 @@ def _occurrence(dedup_key: str, window_seconds: int) -> int:
             settings.redis_url, socket_timeout=5, socket_connect_timeout=5
         )
         key = f"zbridge:alert:{dedup_key}"
-        count = int(client.incr(key))
-        if count == 1:
-            client.expire(key, window_seconds)
-        return count
+        # One round trip: a key incremented but never given its expiry would
+        # throttle this code to every 10th/100th report for good.
+        pipe = client.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, window_seconds, nx=True)
+        count, _ = pipe.execute()
+        return int(count)
     except Exception:
         logger.warning("ALERT_DEDUP_UNAVAILABLE dedup_key=%s", dedup_key)
         return 1
@@ -89,14 +92,13 @@ def _format(
     return "\n".join(lines)[:TELEGRAM_MAX_LENGTH]
 
 
-@celery_app.task(
-    name=ALERT_TASK_NAME,
-    ignore_result=True,
-    autoretry_for=(httpx.HTTPError,),
-    retry_backoff=True,
-    retry_kwargs={"max_retries": 3},
-)
+#: Telegram asks for this long at most on a 429; anything longer is capped.
+MAX_RETRY_AFTER_SECONDS = 60
+
+
+@celery_app.task(name=ALERT_TASK_NAME, bind=True, ignore_result=True, max_retries=3)
 def send_alert(
+    self,
     *,
     code: str,
     message: str,
@@ -106,6 +108,7 @@ def send_alert(
     dedup_key: str | None = None,
     notify_from: int = 1,
     window_seconds: int | None = None,
+    occurrence: int | None = None,
 ) -> None:
     if not meets_threshold(severity, settings.alert_min_severity):
         return
@@ -114,22 +117,33 @@ def send_alert(
         return
 
     window = window_seconds or settings.alert_dedup_window_seconds
-    occurrence = _occurrence(dedup_key or f"{service}:{code}", window)
-    if not should_notify(occurrence, notify_from=notify_from):
-        return
+    if occurrence is None:
+        # Counted once per alert, never per delivery attempt: a retry that counted
+        # itself again used to land on a silent occurrence and drop the alert.
+        occurrence = _occurrence(dedup_key or f"{service}:{code}", window)
+        if not should_notify(occurrence, notify_from=notify_from):
+            return
 
-    response = httpx.post(
-        f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage",
-        json={
-            "chat_id": settings.telegram_chat_id,
-            "text": _format(
-                code, message, severity, service, context or {}, occurrence, window
-            ),
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        },
-        timeout=settings.telegram_timeout_seconds,
-    )
+    backoff = 2 ** (self.request.retries + 1)
+    try:
+        response = httpx.post(
+            f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage",
+            json={
+                "chat_id": settings.telegram_chat_id,
+                "text": _format(
+                    code, message, severity, service, context or {}, occurrence, window
+                ),
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            },
+            timeout=settings.telegram_timeout_seconds,
+        )
+    except httpx.HTTPError as exc:
+        raise self.retry(
+            exc=exc,
+            kwargs={**self.request.kwargs, "occurrence": occurrence},
+            countdown=backoff,
+        ) from exc
     if response.is_error:
         # A 4xx means the token or chat id is wrong; retrying cannot fix that.
         if 400 <= response.status_code < 500 and response.status_code != 429:
@@ -137,7 +151,18 @@ def send_alert(
                 "ALERT_REJECTED status=%d body=%s", response.status_code, response.text[:300]
             )
             return
-        response.raise_for_status()
+        if response.status_code == 429:
+            try:
+                wait = response.json()["parameters"]["retry_after"]
+                backoff = min(MAX_RETRY_AFTER_SECONDS, max(1, int(wait)))
+            except (ValueError, KeyError, TypeError):
+                pass
+        logger.warning(
+            "ALERT_DELIVERY_RETRY status=%d code=%s", response.status_code, code
+        )
+        raise self.retry(
+            kwargs={**self.request.kwargs, "occurrence": occurrence}, countdown=backoff
+        )
     logger.info(
         "ALERT_SENT code=%s severity=%s occurrence=%d", code, severity, occurrence
     )
@@ -171,7 +196,7 @@ def heartbeat() -> None:
         response.raise_for_status()
         health = response.json()
     except Exception as exc:
-        send_alert(
+        send_alert.delay(
             code="BACKEND_UNREACHABLE",
             message=f"Backend không phản hồi health check: {exc}",
             severity="CRITICAL",
@@ -180,28 +205,28 @@ def heartbeat() -> None:
         return
 
     if health.get("database") != "UP":
-        send_alert(
+        send_alert.delay(
             code="DATABASE_DOWN",
             message="Backend không kết nối được cơ sở dữ liệu.",
             severity="CRITICAL",
             service="heartbeat",
         )
     if health.get("zalo_gateway") == "DOWN":
-        send_alert(
+        send_alert.delay(
             code="GATEWAY_DOWN",
             message="Backend không liên lạc được Zalo Gateway.",
             severity="ERROR",
             service="heartbeat",
         )
     elif health.get("zalo") != "CONNECTED":
-        send_alert(
+        send_alert.delay(
             code="ZALO_BOT_NOT_CONNECTED",
             message=f"Tài khoản bot Zalo đang ở trạng thái {health.get('zalo') or 'UNKNOWN'}.",
             severity="CRITICAL",
             service="heartbeat",
         )
     elif not health.get("events_healthy"):
-        send_alert(
+        send_alert.delay(
             code="ZALO_EVENTS_UNHEALTHY",
             message=(
                 "Kênh nhận phản hồi Zalo không khỏe; tag tự động đang tạm dừng. "
@@ -215,7 +240,7 @@ def heartbeat() -> None:
         # A healthy channel that is not draining. events_healthy no longer folds
         # the backlog in — an event in flight is normal — so a genuine stall
         # needs its own check rather than riding on that flag.
-        send_alert(
+        send_alert.delay(
             code="ZALO_EVENTS_BACKLOG_STALLED",
             message=(
                 f"Gateway còn {health.get('event_backlog') or 0} sự kiện Zalo chưa chuyển"

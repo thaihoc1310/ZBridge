@@ -1,5 +1,4 @@
 import httpx
-import pytest
 
 from app.core import alerts as alert_rules
 from app.core.errors import AppError, app_error_handler
@@ -122,16 +121,58 @@ def test_bad_token_is_not_retried_forever(monkeypatch) -> None:
     alert_tasks.send_alert(code="X", message="token sai", severity="ERROR")  # no raise
 
 
-def test_telegram_outage_is_retried(monkeypatch) -> None:
+def test_telegram_outage_is_retried_and_the_retry_still_delivers(monkeypatch) -> None:
+    """A retry used to count itself as a second occurrence and stay silent."""
+    _configure(monkeypatch)
+    counted: list[str] = []
+
+    def occurrence(key, _window):
+        counted.append(key)
+        return 1
+
+    monkeypatch.setattr(alert_tasks, "_occurrence", occurrence)
+    responses = [503, 429, 200]
+    sent: list[str] = []
+    countdowns: list[float] = []
+
+    def flaky(url, **kwargs):
+        status = responses.pop(0)
+        if status == 200:
+            sent.append(kwargs["json"]["text"])
+        body = {"parameters": {"retry_after": 7}} if status == 429 else {"ok": True}
+        return httpx.Response(status, json=body, request=httpx.Request("POST", url))
+
+    original_retry = alert_tasks.send_alert.retry
+
+    def spy_retry(*args, **kwargs):
+        countdowns.append(kwargs["countdown"])
+        return original_retry(*args, **kwargs)
+
+    monkeypatch.setattr(alert_tasks.httpx, "post", flaky)
+    monkeypatch.setattr(alert_tasks.send_alert, "retry", spy_retry)
+    alert_tasks.send_alert.apply(
+        kwargs={"code": "X", "message": "telegram sập", "severity": "ERROR"}
+    )
+    assert len(sent) == 1 and "telegram sập" in sent[0]
+    assert counted == ["backend:X"]
+    assert countdowns == [2, 7]
+
+
+def test_telegram_outage_gives_up_after_bounded_retries(monkeypatch) -> None:
     _configure(monkeypatch)
     monkeypatch.setattr(alert_tasks, "_occurrence", lambda *_: 1)
+    calls: list[int] = []
 
     def unavailable(url, **_kwargs):
-        return httpx.Response(503, request=httpx.Request("POST", url))
+        calls.append(1)
+        raise httpx.ConnectError("down", request=httpx.Request("POST", url))
 
     monkeypatch.setattr(alert_tasks.httpx, "post", unavailable)
-    with pytest.raises(httpx.HTTPStatusError):
-        alert_tasks.send_alert(code="X", message="telegram sập", severity="ERROR")
+    result = alert_tasks.send_alert.apply(
+        kwargs={"code": "X", "message": "telegram sập", "severity": "ERROR"}
+    )
+    assert result.failed()
+    assert len(calls) == 4
 
 
 class _FakeRequest:
