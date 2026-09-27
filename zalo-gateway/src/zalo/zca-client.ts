@@ -4,6 +4,7 @@ import {
   Reactions,
   ThreadType,
   Zalo,
+  ZaloApiError,
   type API,
   type Credentials,
   type LoginQRCallbackEvent,
@@ -12,6 +13,7 @@ import {
 } from "zca-js";
 import { reportGatewayError } from "../alerting.js";
 import { GatewayError } from "../errors.js";
+import { MessageCursor, missedMessages } from "../message-cursor.js";
 import { EncryptedSessionStore } from "./session.js";
 
 /** The per-group entry of getGroupInfo, taken from the library so it stays in step. */
@@ -40,6 +42,47 @@ type EventSink = (event: IncomingGroupEvent) => Promise<void>;
 const MAX_EVENT_CONTENT_LENGTH = 2_000;
 const MAX_EVENT_MENTIONS = 1_000;
 const LISTENER_RECOVERY_DELAYS_MS = [10_000, 30_000, 60_000, 120_000, 300_000];
+/** Restoring the saved session after a transient failure (DNS, Zalo 5xx, timeout). */
+const SESSION_RESTORE_DELAYS_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
+/** Matches IncomingMention.text on the backend; longer text failed validation. */
+const MAX_MENTION_TEXT_LENGTH = 255;
+/** Recently forwarded message IDs, so a backfill does not resend what arrived live. */
+const RECENTLY_FORWARDED_LIMIT = 2_000;
+
+/**
+ * zca-js raises exactly these when Zalo refuses the saved cookie. Anything else
+ * (a network error, a 5xx, a timeout) says nothing about the session, and used
+ * to wipe a valid one and force a QR rescan after a deploy-time blip.
+ */
+const SESSION_REJECTED_MESSAGES = new Set([
+  "Đăng nhập thất bại",
+  "Khởi tạo ngữ cảnh thất bại.",
+  "Missing required params",
+]);
+
+export function isSessionRejected(error: unknown): boolean {
+  return error instanceof ZaloApiError && SESSION_REJECTED_MESSAGES.has(error.message);
+}
+
+export function incomingMentions(
+  mentions: Array<{ uid: string; pos: number; len: number }>,
+  content: string,
+  normalizeId: (userId: string) => string = normalizeZaloMemberId,
+): Array<{ user_id: string; position: number; length: number; text: string }> {
+  // The backend rejects length < 1 and text over 255 with a 422; one such
+  // event used to stall its group's queue forever.
+  return mentions
+    .filter((mention) => mention.uid && Number(mention.len) >= 1 && Number(mention.pos) >= 0)
+    .slice(0, MAX_EVENT_MENTIONS)
+    .map((mention) => ({
+      user_id: normalizeId(mention.uid),
+      position: mention.pos,
+      length: mention.len,
+      text: content
+        .slice(mention.pos, mention.pos + mention.len)
+        .slice(0, MAX_MENTION_TEXT_LENGTH),
+    }));
+}
 
 function normalizeZaloMemberId(userId: string): string {
   return userId.endsWith("_0") ? userId.slice(0, -2) : userId;
@@ -124,6 +167,10 @@ export class ZcaJsClient implements ZaloClient {
   private listenerAttached = false;
   private recoveryTimer: NodeJS.Timeout | null = null;
   private recoveryAttempt = 0;
+  private restoreTimer: NodeJS.Timeout | null = null;
+  private restoreAttempt = 0;
+  private backfillSince: string | null = null;
+  private readonly recentlyForwarded = new Set<string>();
 
   constructor(
     private readonly sessions: EncryptedSessionStore,
@@ -134,37 +181,84 @@ export class ZcaJsClient implements ZaloClient {
       pending: 0,
       oldestPendingMs: null,
     }),
+    private readonly cursor: MessageCursor = new MessageCursor(null),
   ) {}
 
   async initialize(): Promise<void> {
+    await this.cursor.load();
+    await this.restoreSession(false);
+  }
+
+  /**
+   * Log in with the saved session. Only a real rejection needs a QR rescan; a
+   * transient failure keeps the session and retries, so a DNS or Zalo blip
+   * during a deploy no longer leaves the bot logged out until someone notices.
+   */
+  private async restoreSession(fromOperator: boolean): Promise<void> {
+    this.clearRestoreTimer();
     const credentials = await this.sessions.load();
     if (!credentials) {
       this.status = "AUTH_REQUIRED";
+      if (fromOperator) await this.connect();
       return;
     }
     try {
       this.status = "CONNECTING";
-      const zalo = new Zalo();
-      this.setApi(await zalo.login(credentials));
+      this.setApi(await new Zalo().login(credentials));
       await this.loadProfile();
       this.startListener();
       this.status = "CONNECTED";
-      console.info("BOT_CONNECTED restored_session=true");
+      this.lastError = null;
+      this.restoreAttempt = 0;
+      console.info("BOT_CONNECTED restored_session=true operator=%s", fromOperator);
     } catch (error) {
       this.setApi(null);
-      this.status = "AUTH_REQUIRED";
       this.lastError = this.safeError(error);
-      console.warn("BOT_AUTH_REQUIRED saved_session_invalid=true");
-      reportGatewayError(
-        "BOT_SESSION_INVALID",
-        `Session Zalo đã lưu không dùng được nữa, cần quét lại mã QR: ${this.lastError}`,
-        "CRITICAL",
+      if (isSessionRejected(error)) {
+        this.status = "AUTH_REQUIRED";
+        console.warn("BOT_AUTH_REQUIRED saved_session_invalid=true");
+        if (fromOperator) {
+          await this.sessions.clear();
+          await this.connect();
+          return;
+        }
+        reportGatewayError(
+          "BOT_SESSION_INVALID",
+          `Session Zalo đã lưu không dùng được nữa, cần quét lại mã QR: ${this.lastError}`,
+          "CRITICAL",
+        );
+        return;
+      }
+      // Not ready: the backend holds mention sends and the heartbeat alerts on it.
+      this.status = "DISCONNECTED";
+      const delayMs =
+        SESSION_RESTORE_DELAYS_MS[
+          Math.min(this.restoreAttempt, SESSION_RESTORE_DELAYS_MS.length - 1)
+        ] ?? 300_000;
+      this.restoreAttempt += 1;
+      console.warn(
+        "BOT_SESSION_RESTORE_RETRY attempt=%d delay_ms=%d error=%s",
+        this.restoreAttempt,
+        delayMs,
+        this.lastError,
       );
+      this.restoreTimer = setTimeout(() => {
+        this.restoreTimer = null;
+        void this.restoreSession(false);
+      }, delayMs);
     }
+  }
+
+  private clearRestoreTimer(): void {
+    if (!this.restoreTimer) return;
+    clearTimeout(this.restoreTimer);
+    this.restoreTimer = null;
   }
 
   async connect(): Promise<BotState> {
     if (this.status === "CONNECTED" || this.status === "CONNECTING") return this.getStatus();
+    // A pending restore would otherwise log the old session in over the QR one.
+    this.clearRestoreTimer();
     this.status = "CONNECTING";
     this.qrStatus = "PREPARING_QR";
     this.qrImage = null;
@@ -180,29 +274,13 @@ export class ZcaJsClient implements ZaloClient {
   async reconnect(): Promise<BotState> {
     this.stopListener();
     this.setApi(null);
-    const credentials = await this.sessions.load();
-    if (!credentials) {
-      this.status = "AUTH_REQUIRED";
-      return this.connect();
-    }
-    try {
-      this.status = "CONNECTING";
-      this.setApi(await new Zalo().login(credentials));
-      await this.loadProfile();
-      this.startListener();
-      this.status = "CONNECTED";
-      this.lastError = null;
-      console.info("BOT_CONNECTED reconnect=true");
-    } catch (error) {
-      this.status = "AUTH_REQUIRED";
-      this.lastError = this.safeError(error);
-      await this.sessions.clear();
-      return this.connect();
-    }
+    this.restoreAttempt = 0;
+    await this.restoreSession(true);
     return this.getStatus();
   }
 
   async disconnect(): Promise<BotState> {
+    this.clearRestoreTimer();
     this.stopListener();
     this.setApi(null);
     this.status = "DISCONNECTED";
@@ -629,6 +707,7 @@ export class ZcaJsClient implements ZaloClient {
         this.recoveryAttempt = 0;
         this.clearRecoveryTimer();
         console.info("ZALO_LISTENER_CONNECTED");
+        this.requestMissedMessages(api);
       });
       api.listener.on("disconnected", (code, reason) => {
         if (this.api !== api || code === CloseReason.ManualClosure) return;
@@ -644,6 +723,10 @@ export class ZcaJsClient implements ZaloClient {
         console.error("ZALO_LISTENER_ERROR", this.safeError(error));
       });
       api.listener.on("message", (message) => this.handleMessage(message));
+      api.listener.on("old_messages", (messages, type) => {
+        if (this.api !== api || type !== ThreadType.Group) return;
+        this.handleMissedMessages(messages);
+      });
       api.listener.on("reaction", (reaction) => this.handleReaction(reaction));
       this.listenerAttached = true;
     }
@@ -752,6 +835,43 @@ export class ZcaJsClient implements ZaloClient {
     return this.api;
   }
 
+  /**
+   * Ask Zalo for group messages sent while the listener was down. Runs on every
+   * (re)connect, including the first one after a restart or deploy.
+   */
+  private requestMissedMessages(api: API): void {
+    const since = this.cursor.get();
+    if (!since) return;
+    this.backfillSince = since;
+    try {
+      api.listener.requestOldMessages(ThreadType.Group, since);
+      console.info("ZALO_BACKFILL_REQUESTED since=%s", since);
+    } catch (error) {
+      console.warn("ZALO_BACKFILL_REQUEST_FAILED error=%s", this.safeError(error));
+    }
+  }
+
+  private handleMissedMessages(messages: Message[]): void {
+    const since = this.backfillSince;
+    if (!since) return;
+    const missed = missedMessages(messages, since, this.recentlyForwarded);
+    console.info(
+      "ZALO_BACKFILL_RECEIVED since=%s received=%d forwarded=%d",
+      since,
+      messages.length,
+      missed.length,
+    );
+    for (const message of missed) this.handleMessage(message);
+  }
+
+  private rememberForwarded(messageId: string): void {
+    this.recentlyForwarded.add(messageId);
+    if (this.recentlyForwarded.size > RECENTLY_FORWARDED_LIMIT) {
+      const oldest = this.recentlyForwarded.values().next().value;
+      if (oldest !== undefined) this.recentlyForwarded.delete(oldest);
+    }
+  }
+
   private handleMessage(message: Message): void {
     if (message.isSelf || message.type !== ThreadType.Group) return;
     const mentions = message.data.mentions ?? [];
@@ -775,14 +895,12 @@ export class ZcaJsClient implements ZaloClient {
       // Trimmed on purpose: an oversized body would be rejected by the backend
       // and the reply acknowledgement it carries would be lost for good.
       content: content.slice(0, MAX_EVENT_CONTENT_LENGTH),
-      mentions: mentions.slice(0, MAX_EVENT_MENTIONS).map((mention) => ({
-        user_id: this.normalizeMemberId(mention.uid),
-        position: mention.pos,
-        length: mention.len,
-        text: content.slice(mention.pos, mention.pos + mention.len),
-      })),
+      mentions: incomingMentions(mentions, content, (userId) => this.normalizeMemberId(userId)),
     };
     this.forwardEventInOrder(event);
+    const primaryId = String(message.data.msgId ?? "");
+    this.rememberForwarded(primaryId);
+    this.cursor.advance(primaryId);
   }
 
   private handleReaction(reaction: Reaction): void {

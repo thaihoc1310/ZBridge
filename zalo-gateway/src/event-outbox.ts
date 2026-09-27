@@ -19,6 +19,14 @@ type EncryptedRecord = {
 };
 
 const RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000, 300_000];
+const DEAD_LETTER_DIRECTORY = "dead-letter";
+
+/**
+ * The backend answered that this event can never be accepted (400/413/422).
+ * Retrying it forever froze its group's FIFO and, through the shared backlog,
+ * blocked mention sends in every group.
+ */
+export class PermanentDeliveryError extends Error {}
 
 /**
  * A small encrypted disk outbox for inbound Zalo events.
@@ -33,7 +41,10 @@ export class DurableEventOutbox {
   private readonly runningGroups = new Set<string>();
   private readonly retryTimers = new Map<string, NodeJS.Timeout>();
   private initialized = false;
-  private storageFailed = false;
+  /** Set by a corrupt file at startup: some event may be lost, so stay unhealthy. */
+  private storageCorrupt = false;
+  /** Set by a failed write; cleared by the next write that succeeds. */
+  private writeFailed = false;
   private nextSequence = Date.now() * 1_000;
   private enqueueTail: Promise<void> = Promise.resolve();
 
@@ -41,6 +52,8 @@ export class DurableEventOutbox {
     private readonly directory: string,
     secret: string,
     private readonly deliver: (event: IncomingGroupEvent) => Promise<void>,
+    private readonly onDeadLetter: (event: IncomingGroupEvent, reason: string) => void = () =>
+      undefined,
   ) {
     this.key = createHash("sha256").update(secret, "utf8").digest();
   }
@@ -55,7 +68,7 @@ export class DurableEventOutbox {
       try {
         records.push(this.decrypt(await readFile(join(this.directory, name), "utf8")));
       } catch (error) {
-        this.storageFailed = true;
+        this.storageCorrupt = true;
         console.error(
           "ZALO_EVENT_OUTBOX_CORRUPT file=%s error=%s",
           name,
@@ -92,8 +105,15 @@ export class DurableEventOutbox {
     try {
       await this.persist(record);
     } catch (error) {
-      this.storageFailed = true;
-      throw error;
+      // Still delivered from memory: a short disk-full moment must not drop the
+      // reply it carries. Unhealthy until a write succeeds, since a restart now
+      // would lose it.
+      this.writeFailed = true;
+      console.error(
+        "ZALO_EVENT_OUTBOX_WRITE_FAILED group_id=%s error=%s",
+        event.group_id,
+        error instanceof Error ? error.message : "unknown",
+      );
     }
     this.queue(record);
     this.pump(event.group_id);
@@ -120,7 +140,7 @@ export class DurableEventOutbox {
       }
     }
     return {
-      healthy: this.initialized && !this.storageFailed,
+      healthy: this.initialized && !this.storageCorrupt && !this.writeFailed,
       pending,
       oldestPendingMs: oldest === null ? null : Math.max(0, Date.now() - oldest),
     };
@@ -152,13 +172,21 @@ export class DurableEventOutbox {
       if (queue.length === 0) this.queues.delete(groupId);
       setImmediate(() => this.pump(groupId));
     } catch (error) {
+      if (error instanceof PermanentDeliveryError) {
+        await this.deadLetter(record, error.message);
+        queue.shift();
+        if (queue.length === 0) this.queues.delete(groupId);
+        setImmediate(() => this.pump(groupId));
+        return;
+      }
       record.attempts += 1;
       try {
         await this.persist(record);
       } catch (persistError) {
-        this.storageFailed = true;
-        console.error(
-          "ZALO_EVENT_OUTBOX_WRITE_FAILED group_id=%s error=%s",
+        // Only the attempt counter was being rewritten; the event itself is still
+        // on disk, so this is not a reason to call the transport unhealthy.
+        console.warn(
+          "ZALO_EVENT_OUTBOX_ATTEMPT_WRITE_FAILED group_id=%s error=%s",
           groupId,
           persistError instanceof Error ? persistError.message : "unknown",
         );
@@ -179,6 +207,31 @@ export class DurableEventOutbox {
     }
   }
 
+  /** Kept encrypted beside the outbox for inspection; never retried again. */
+  private async deadLetter(record: StoredEvent, reason: string): Promise<void> {
+    console.error(
+      "ZALO_EVENT_DEAD_LETTERED group_id=%s record=%s reason=%s",
+      record.event.group_id,
+      record.id,
+      reason,
+    );
+    try {
+      const directory = join(this.directory, DEAD_LETTER_DIRECTORY);
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      await writeFile(join(directory, `${record.id}.event`), this.encrypt(record), {
+        mode: 0o600,
+      });
+      await rm(this.path(record), { force: true });
+    } catch (error) {
+      console.error(
+        "ZALO_EVENT_DEAD_LETTER_WRITE_FAILED record=%s error=%s",
+        record.id,
+        error instanceof Error ? error.message : "unknown",
+      );
+    }
+    this.onDeadLetter(record.event, reason);
+  }
+
   private path(record: StoredEvent): string {
     return join(this.directory, `${record.id}.event`);
   }
@@ -189,6 +242,7 @@ export class DurableEventOutbox {
     await writeFile(temporary, this.encrypt(record), { mode: 0o600 });
     await rename(temporary, target);
     await chmod(target, 0o600);
+    this.writeFailed = false;
   }
 
   private encrypt(record: StoredEvent): string {

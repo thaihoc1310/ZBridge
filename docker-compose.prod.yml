@@ -71,6 +71,7 @@ services:
       ZALO_SESSION_PATH: /data/zalo-session/session.enc
       ZALO_EVENT_OUTBOX_PATH: /data/zalo-session/event-outbox
       ZALO_SEND_RECEIPT_PATH: /data/zalo-session/send-receipts.json
+      ZALO_MESSAGE_CURSOR_PATH: /data/zalo-session/last-message-id
       ZALO_SESSION_SECRET: ${ZALO_SESSION_SECRET:?ZALO_SESSION_SECRET is required}
       ZALO_MOCK: "false"
       ZALO_SEND_INTERVAL_MS: ${ZALO_SEND_INTERVAL_MS:-1000}

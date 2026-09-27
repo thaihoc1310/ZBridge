@@ -5,7 +5,8 @@ import { z } from "zod";
 import { reportGatewayError } from "./alerting.js";
 import { config } from "./config.js";
 import { GatewayError } from "./errors.js";
-import { DurableEventOutbox } from "./event-outbox.js";
+import { DurableEventOutbox, PermanentDeliveryError } from "./event-outbox.js";
+import { MessageCursor } from "./message-cursor.js";
 import { SendIdempotencyStore } from "./send-idempotency.js";
 import { MockZaloClient } from "./zalo/mock-client.js";
 import { EncryptedSessionStore } from "./zalo/session.js";
@@ -44,7 +45,11 @@ async function postGroupEvent(event: IncomingGroupEvent): Promise<void> {
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) {
-    throw new Error(`Backend rejected Zalo event with status ${response.status}`);
+    const message = `Backend rejected Zalo event with status ${response.status}`;
+    // The request itself is unacceptable; retrying the same bytes cannot help.
+    // Auth (401/403) and not-found stay retryable: those are deploy/config states.
+    if ([400, 413, 422].includes(response.status)) throw new PermanentDeliveryError(message);
+    throw new Error(message);
   }
 }
 
@@ -52,6 +57,14 @@ const eventOutbox = new DurableEventOutbox(
   config.eventOutboxPath,
   config.sessionSecret,
   postGroupEvent,
+  (event, reason) =>
+    reportGatewayError(
+      "ZALO_EVENT_DEAD_LETTERED",
+      "Backend từ chối vĩnh viễn một sự kiện Zalo; đã tách riêng để hàng đợi chạy tiếp."
+        + " Nếu đó là phản hồi của khách, bot có thể tag lại người đã trả lời.",
+      "CRITICAL",
+      { group_id: event.group_id, event_type: event.event_type, reason },
+    ),
 );
 const sendReceipts = new SendIdempotencyStore(config.sendReceiptPath);
 const client: ZaloClient = config.mock
@@ -61,6 +74,7 @@ const client: ZaloClient = config.mock
       (event) => eventOutbox.enqueue(event),
       config.sendIntervalMs,
       () => eventOutbox.status(),
+      new MessageCursor(config.messageCursorPath),
     );
 
 /** Set once the outbox and the receipt store have been read off disk. */

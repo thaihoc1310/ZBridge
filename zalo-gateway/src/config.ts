@@ -13,6 +13,8 @@ export const config = {
     process.env.ZALO_EVENT_OUTBOX_PATH ?? "/data/zalo-session/event-outbox",
   sendReceiptPath:
     process.env.ZALO_SEND_RECEIPT_PATH ?? "/data/zalo-session/send-receipts.json",
+  messageCursorPath:
+    process.env.ZALO_MESSAGE_CURSOR_PATH ?? "/data/zalo-session/last-message-id",
   mock: process.env.ZALO_MOCK === "true",
   sendIntervalMs: Math.max(0, Number(process.env.ZALO_SEND_INTERVAL_MS ?? 1000)),
 };
