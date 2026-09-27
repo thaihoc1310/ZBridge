@@ -75,20 +75,31 @@ if [ -n "$PASSPHRASE" ]; then
   SUFFIX=".gpg"
   encrypt() { gpg --batch --quiet --symmetric --cipher-algo AES256 \
                   --passphrase-fd 3 --output "$1" 3<<<"$PASSPHRASE"; }
+  decrypt() { gpg --batch --quiet --decrypt --passphrase-fd 3 "$1" 3<<<"$PASSPHRASE"; }
 else
   log "WARNING: BACKUP_PASSPHRASE trống — backup sẽ KHÔNG được mã hoá"
   encrypt() { cat > "$1"; }
+  decrypt() { cat "$1"; }
 fi
 
 # ── Database ─────────────────────────────────────────────────────────────────
 DUMP="$DEST_ABS/postgres-$STAMP.sql.gz$SUFFIX"
 log "dumping database $DB_NAME"
-compose exec -T postgres pg_dump -U "$DB_USER" -d "$DB_NAME" | gzip | encrypt "$DUMP" \
-  || fail "pg_dump không chạy được"
+# Written under a .partial name and renamed only once verified: a pg_dump that
+# died midway used to leave a truncated file named like a good backup, which a
+# restore picking "the latest" would load as a partial database.
+PARTIAL="$DUMP.partial"
+compose exec -T postgres pg_dump -U "$DB_USER" -d "$DB_NAME" | gzip | encrypt "$PARTIAL" \
+  || { rm -f "$PARTIAL"; fail "pg_dump không chạy được"; }
 
-SIZE="$(stat -c %s "$DUMP")"
-[ "$SIZE" -ge "$MIN_DUMP_BYTES" ] || { rm -f "$DUMP"; fail "dump chỉ có ${SIZE} bytes, nghi ngờ lỗi"; }
-log "database dump ok (${SIZE} bytes)"
+SIZE="$(stat -c %s "$PARTIAL")"
+[ "$SIZE" -ge "$MIN_DUMP_BYTES" ] || { rm -f "$PARTIAL"; fail "dump chỉ có ${SIZE} bytes, nghi ngờ lỗi"; }
+# pg_dump writes this trailer last, so its presence proves the dump is whole and
+# that the file decrypts and decompresses.
+decrypt "$PARTIAL" | gunzip | tail -n 5 | grep -q "PostgreSQL database dump complete" \
+  || { rm -f "$PARTIAL"; fail "dump không đầy đủ (thiếu dòng kết thúc của pg_dump)"; }
+mv "$PARTIAL" "$DUMP"
+log "database dump ok and verified (${SIZE} bytes)"
 
 # ── Zalo session ─────────────────────────────────────────────────────────────
 # Read it through the gateway service so the compose volume prefix never has to
@@ -98,13 +109,19 @@ SESSION="$DEST_ABS/zalo-session-$STAMP.tgz$SUFFIX"
 # produces a ~170 byte archive, which would look like a real backup.
 if compose run --rm --no-deps -T zalo-gateway \
      test -f /data/zalo-session/session.enc >/dev/null 2>&1; then
-  if compose run --rm --no-deps -T zalo-gateway \
-       tar czf - -C /data/zalo-session . 2>/dev/null | encrypt "$SESSION"; then
+  # tar exits 1 when a file changed while being read, which the live event
+  # outbox does during business hours; that archive is still usable. Treating
+  # it as a failure silently skipped the session backup.
+  if compose run --rm --no-deps -T zalo-gateway sh -c \
+       'tar czf - --warning=no-file-changed -C /data/zalo-session .; [ $? -le 1 ]' \
+       | encrypt "$SESSION"; then
     log "zalo session archived ($(stat -c %s "$SESSION") bytes)"
   else
-    # Only costs a QR re-scan, so never fail the whole backup over it.
+    # Losing it costs a QR re-scan and any queued events: report, but keep the
+    # database backup and the upload going.
     rm -f "$SESSION"
     log "WARNING: không đọc được session Zalo — bỏ qua"
+    notify_failure "Backup session Zalo thất bại (backup database vẫn chạy tiếp)."
   fi
 else
   log "chưa có session Zalo (bot chưa liên kết) — bỏ qua"
@@ -113,7 +130,11 @@ fi
 # ── Off-site copy ────────────────────────────────────────────────────────────
 if [ -n "$REMOTE" ]; then
   log "uploading to $REMOTE"
-  docker run --rm --env-file "$ENV_FILE" -v "$DEST_ABS":/data rclone/rclone \
+  # Only the rclone settings: the whole env file used to hand every production
+  # secret (JWT, session key, backup passphrase, DB password) to this container.
+  # Pinned to the digest of v1.75.0, the version this ran with before pinning.
+  docker run --rm --env-file <(grep -E '^RCLONE_' "$ENV_FILE") -v "$DEST_ABS":/data \
+    rclone/rclone@sha256:b06aed988cf5967de7c25be5925240983981c757f4ed1ac9d2fa659d51d60548 \
     copy /data "$REMOTE" --include "*-$STAMP.*" --s3-no-check-bucket \
     || fail "không upload được lên $REMOTE"
   log "upload ok"

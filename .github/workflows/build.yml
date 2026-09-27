@@ -12,6 +12,18 @@ jobs:
   # reach the registry the VPS pulls from.
   test:
     runs-on: ubuntu-latest
+    services:
+      # Migrations only ever run against Postgres; the unit tests use SQLite.
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: zbridge
+          POSTGRES_PASSWORD: zbridge
+          POSTGRES_DB: zbridge
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U zbridge -d zbridge"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -24,6 +36,15 @@ jobs:
         run: |
           ruff check .
           pytest -q
+      - name: Migrations match the models on Postgres
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://zbridge:zbridge@localhost:5432/zbridge
+        run: |
+          alembic upgrade head
+          python scripts/check_schema_drift.py
+          alembic downgrade -1
+          alembic upgrade head
 
       - uses: actions/setup-node@v4
         with:
