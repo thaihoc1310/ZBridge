@@ -141,6 +141,16 @@ async def test_dashboard_returns_debt_split_and_sent_messages_by_local_hour(
                     content="Khách đã thanh toán",
                     matched_phrase="đã thanh toán",
                     message_sent_at=second_sent,
+                    applied_at=second_sent,
+                ),
+                # Still notifying the group: the customer is not paid yet.
+                DebtPaymentConfirmation(
+                    customer_id=customers[1].id,
+                    source_message_id="paid-dashboard-pending",
+                    sender_id="employee-1",
+                    content="Khách đã thanh toán",
+                    matched_phrase="đã thanh toán",
+                    message_sent_at=second_sent,
                 ),
             ]
         )

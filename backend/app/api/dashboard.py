@@ -302,9 +302,10 @@ async def dashboard(
             .join(Customer, Customer.id == DebtPaymentConfirmation.customer_id)
             .join(ZaloGroup, ZaloGroup.id == Customer.zalo_group_id)
             .where(
+                DebtPaymentConfirmation.applied_at.is_not(None),
                 DebtPaymentConfirmation.created_at
                 >= datetime.now(UTC)
-                - timedelta(days=DEBT_PAYMENT_CONFIRMATION_RETENTION_DAYS)
+                - timedelta(days=DEBT_PAYMENT_CONFIRMATION_RETENTION_DAYS),
             )
             .order_by(DebtPaymentConfirmation.message_sent_at.desc())
         )

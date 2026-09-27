@@ -369,6 +369,13 @@ class DebtPaymentConfirmation(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     matched_phrase: Mapped[str] = mapped_column(String(100), nullable=False)
     message_sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Set once Zalo accepts each acknowledgement, so a retry skips what already went out.
+    reply_message_id: Mapped[str | None] = mapped_column(String(128))
+    link_message_id: Mapped[str | None] = mapped_column(String(128))
+    # Null in both while notifying: the customer is switched to paid only once
+    # every message went out (applied), or never if retries ran out (failed).
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -661,6 +668,10 @@ class DebtReminderRun(TimestampMixin, Base):
     sheet_url: Mapped[str | None] = mapped_column(Text)
     image_message_id: Mapped[str | None] = mapped_column(String(128))
     link_message_id: Mapped[str | None] = mapped_column(String(128))
+    # Null in both while notifying: the customer is switched to paid only once
+    # every message went out (applied), or never if retries ran out (failed).
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     text_message_id: Mapped[str | None] = mapped_column(String(128))
     error_code: Mapped[str | None] = mapped_column(String(64))
     error_message: Mapped[str | None] = mapped_column(Text)

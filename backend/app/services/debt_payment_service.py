@@ -1,10 +1,14 @@
+import asyncio
 import logging
-from datetime import UTC, datetime
+import uuid
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.celery_app import celery_app
+from app.core.alerts import Severity
 from app.models import (
     Customer,
     DebtPaymentConfirmation,
@@ -17,6 +21,7 @@ from app.schemas.api import (
     DebtPaymentSettingsUpdate,
     IncomingGroupMessage,
 )
+from app.services.alerting import customer_link, report_async
 from app.services.debt_reminder_service import sync_debt_reminder_state
 from app.services.delivery_service import add_delivery_log
 from app.services.mention_rules import normalize_phrase
@@ -25,6 +30,10 @@ from app.services.zalo_gateway_client import GatewayError, zalo_gateway
 logger = logging.getLogger("zbridge.debt_payment")
 GLOBAL_SETTINGS_ID = 1
 DEFAULT_PHRASES = ["đã thanh toán", "đã tt", "da thanh toan"]
+REPLY_TASK = "zbridge.debt_payments.send_reply"
+#: Seconds before each retry of the group notice; the inline attempt comes first.
+REPLY_RETRY_DELAYS = (60, 300, 900, 1800)
+PENDING_STALE_AFTER = timedelta(hours=2)
 
 
 def _response(settings: DebtPaymentSettings) -> DebtPaymentSettingsResponse:
@@ -103,7 +112,11 @@ def _matched_phrase(content: str, phrases: list[str]) -> str | None:
 async def apply_payment_confirmation(
     db: AsyncSession, event: IncomingGroupMessage
 ) -> bool:
-    """Apply the same paid transition as the customer switch, then audit it."""
+    """Record a trusted "đã thanh toán" message and start notifying the group.
+
+    The customer switches to paid in :func:`process_confirmation` only after the
+    notice went out, so a failed notice leaves the debt open for staff to see.
+    """
     settings = await db.get(DebtPaymentSettings, GLOBAL_SETTINGS_ID)
     if settings is None or not event.sender_id:
         return False
@@ -141,10 +154,20 @@ async def apply_payment_confirmation(
     )
     if customer is None:
         return False
+    # One in-flight confirmation per customer: a second "đã thanh toán" while the
+    # first is still notifying must not post the notice twice. A pending row older
+    # than the whole retry schedule lost its task and must not block forever.
     duplicate = await db.scalar(
         select(DebtPaymentConfirmation.id).where(
             DebtPaymentConfirmation.customer_id == customer.id,
-            DebtPaymentConfirmation.source_message_id == event.message_id,
+            or_(
+                DebtPaymentConfirmation.source_message_id == event.message_id,
+                (
+                    DebtPaymentConfirmation.applied_at.is_(None)
+                    & DebtPaymentConfirmation.failed_at.is_(None)
+                    & (DebtPaymentConfirmation.created_at >= now - PENDING_STALE_AFTER)
+                ),
+            ),
         )
     )
     last_paid_at = customer.last_debt_paid_at
@@ -166,83 +189,218 @@ async def apply_payment_confirmation(
         or str(member.get("display_name") or "")
         or event.sender_id
     )
-    customer.has_debt = False
-    customer.last_debt_paid_at = sent_at
-    db.add(
-        DebtPaymentConfirmation(
-            customer_id=customer.id,
-            source_message_id=event.message_id,
-            sender_id=event.sender_id,
-            sender_display_name=display_name,
-            content=event.content,
-            matched_phrase=phrase,
-            message_sent_at=sent_at,
-        )
+    confirmation = DebtPaymentConfirmation(
+        customer_id=customer.id,
+        source_message_id=event.message_id,
+        sender_id=event.sender_id,
+        sender_display_name=display_name,
+        content=event.content,
+        matched_phrase=phrase,
+        message_sent_at=sent_at,
     )
-    await sync_debt_reminder_state(
-        db,
-        customer,
-        now=now,
-        inactive_reason="Khách hàng đã được tự động đánh dấu thanh toán từ tin nhắn Zalo.",
-    )
-    # The acknowledgement must never get ahead of the source-of-truth state.
+    db.add(confirmation)
     await db.commit()
-    if settings.notification_targets:
-        parts: list[dict[str, str]] = [
-            {"type": "text", "text": "Hệ thống đã xác nhận thanh toán, vui lòng "}
-        ]
-        for index, target in enumerate(settings.notification_targets):
-            if index:
-                parts.append({"type": "text", "text": ", "})
-            parts.append(
-                {
-                    "type": "mention",
-                    "user_id": str(target["user_id"]),
-                    "display_name": str(target["display_name"]),
-                }
-            )
-        parts.append({"type": "text", "text": " vào chỉnh sửa công nợ."})
-        key = f"debt-payment-confirmation:{customer.id}:{event.message_id}"
-        # The link goes out on its own so Zalo renders its preview card cleanly.
-        sends = [lambda: zalo_gateway.send_rich_text(event.group_id, parts, idempotency_key=key)]
-        if customer.debt_file_url:
-            link = customer.debt_file_url
-            sends.append(
-                lambda: zalo_gateway.send_link(
-                    event.group_id, link, idempotency_key=f"{key}:link"
-                )
-            )
-        for send in sends:
-            try:
-                result = await send()
-            except GatewayError as exc:
-                await add_delivery_log(
-                    db,
-                    customer.id,
-                    DeliveryType.DEBT_PAYMENT_CONFIRMATION,
-                    DeliveryStatus.FAILED,
-                    error_code=exc.code,
-                    error_message=exc.message,
-                )
-                logger.warning(
-                    "DEBT_PAYMENT_CONFIRMATION_REPLY_FAILED customer_id=%s code=%s",
-                    customer.id,
-                    exc.code,
-                )
-                break
-            await add_delivery_log(
-                db,
-                customer.id,
-                DeliveryType.DEBT_PAYMENT_CONFIRMATION,
-                DeliveryStatus.SENT,
-                zalo_message_id=str(result.get("message_id") or "") or None,
-            )
-        await db.commit()
     logger.info(
-        "DEBT_PAYMENT_AUTO_CONFIRMED customer_id=%s group_id=%s sender_id=%s message_id=%s",
+        "DEBT_PAYMENT_CONFIRMATION_MATCHED customer_id=%s group_id=%s sender_id=%s message_id=%s",
         customer.id,
         event.group_id,
         event.sender_id,
         event.message_id,
     )
+    if not await process_confirmation(db, confirmation.id):
+        await _schedule_retry(db, confirmation)
     return True
+
+
+def _reply_parts(targets: list[dict[str, object]]) -> list[dict[str, str]]:
+    parts = [{"type": "text", "text": "Hệ thống đã xác nhận thanh toán, vui lòng "}]
+    for index, target in enumerate(targets):
+        if index:
+            parts.append({"type": "text", "text": ", "})
+        parts.append(
+            {
+                "type": "mention",
+                "user_id": str(target["user_id"]),
+                "display_name": str(target["display_name"]),
+            }
+        )
+    parts.append({"type": "text", "text": " vào chỉnh sửa công nợ."})
+    return parts
+
+
+async def process_confirmation(
+    db: AsyncSession, confirmation_id: uuid.UUID, *, final: bool = False
+) -> bool:
+    """Notify the group, then mark the customer paid; False means retry later.
+
+    The paid switch waits for both messages so staff are always told when a debt
+    closes. Safe to re-run: a message already accepted by Zalo is skipped by its
+    stored ID, and the stable idempotency keys make the gateway answer from its
+    receipt when only the response to an earlier attempt was lost.
+    """
+    settings = await db.get(DebtPaymentSettings, GLOBAL_SETTINGS_ID)
+    confirmation = await db.scalar(
+        select(DebtPaymentConfirmation)
+        .options(
+            selectinload(DebtPaymentConfirmation.customer).selectinload(Customer.group)
+        )
+        .where(DebtPaymentConfirmation.id == confirmation_id)
+    )
+    if (
+        confirmation is None
+        or confirmation.applied_at is not None
+        or confirmation.failed_at is not None
+    ):
+        return True
+    customer = confirmation.customer
+    group_id = customer.group.zalo_group_id
+    key = f"debt-payment-confirmation:{customer.id}:{confirmation.source_message_id}"
+    targets = settings.notification_targets if settings else []
+    parts = _reply_parts(targets)
+    # The link goes out on its own so Zalo renders its preview card cleanly.
+    steps = []
+    if targets:
+        steps.append(
+            (
+                "reply_message_id",
+                lambda: zalo_gateway.send_rich_text(group_id, parts, idempotency_key=key),
+            )
+        )
+    if targets and customer.debt_file_url:
+        link = customer.debt_file_url
+        steps.append(
+            (
+                "link_message_id",
+                lambda: zalo_gateway.send_link(
+                    group_id, link, idempotency_key=f"{key}:link"
+                ),
+            )
+        )
+    for field, send in steps:
+        if getattr(confirmation, field):
+            continue
+        try:
+            result = await send()
+        except GatewayError as exc:
+            await add_delivery_log(
+                db,
+                customer.id,
+                DeliveryType.DEBT_PAYMENT_CONFIRMATION,
+                DeliveryStatus.FAILED,
+                error_code=exc.code,
+                error_message=exc.message,
+            )
+            await db.commit()
+            logger.warning(
+                "DEBT_PAYMENT_CONFIRMATION_REPLY_FAILED confirmation_id=%s code=%s final=%s",
+                confirmation.id,
+                exc.code,
+                final,
+            )
+            if final:
+                confirmation.failed_at = datetime.now(UTC)
+                await db.commit()
+            await _report_failure(confirmation, exc.code, exc.message, final=final)
+            return False
+        message_id = str(result.get("message_id") or "") or None
+        setattr(confirmation, field, message_id or "confirmed")
+        await add_delivery_log(
+            db,
+            customer.id,
+            DeliveryType.DEBT_PAYMENT_CONFIRMATION,
+            DeliveryStatus.SENT,
+            zalo_message_id=message_id,
+        )
+        await db.commit()
+
+    locked = await db.scalar(
+        select(Customer)
+        .options(selectinload(Customer.group))
+        .where(Customer.id == customer.id)
+        .with_for_update(of=Customer)
+        .execution_options(populate_existing=True)
+    )
+    await db.refresh(confirmation)
+    if confirmation.applied_at is not None or locked is None:
+        return True
+    last_paid_at = locked.last_debt_paid_at
+    if last_paid_at is not None and last_paid_at.tzinfo is None:
+        last_paid_at = last_paid_at.replace(tzinfo=UTC)
+    sent_at = confirmation.message_sent_at
+    if sent_at.tzinfo is None:
+        sent_at = sent_at.replace(tzinfo=UTC)
+    # Staff may have switched the customer by hand while the notice was retrying.
+    if locked.has_debt and (last_paid_at is None or sent_at > last_paid_at):
+        locked.has_debt = False
+        locked.last_debt_paid_at = sent_at
+        await sync_debt_reminder_state(
+            db,
+            locked,
+            inactive_reason="Khách hàng đã được tự động đánh dấu thanh toán từ tin nhắn Zalo.",
+        )
+    confirmation.applied_at = datetime.now(UTC)
+    await db.commit()
+    logger.info(
+        "DEBT_PAYMENT_AUTO_CONFIRMED customer_id=%s confirmation_id=%s",
+        locked.id,
+        confirmation.id,
+    )
+    return True
+
+
+async def _schedule_retry(
+    db: AsyncSession, confirmation: DebtPaymentConfirmation
+) -> None:
+    try:
+        await asyncio.to_thread(
+            celery_app.send_task,
+            REPLY_TASK,
+            args=[str(confirmation.id)],
+            countdown=REPLY_RETRY_DELAYS[0],
+            retry=False,
+        )
+    except Exception as exc:
+        # Nothing will retry it, so close it now: the debt stays open and the next
+        # "đã thanh toán" message is free to start over.
+        confirmation.failed_at = datetime.now(UTC)
+        await db.commit()
+        logger.exception(
+            "DEBT_PAYMENT_CONFIRMATION_RETRY_ENQUEUE_FAILED confirmation_id=%s",
+            confirmation.id,
+        )
+        await _report_failure(
+            confirmation,
+            "DEBT_PAYMENT_CONFIRMATION_RETRY_ENQUEUE_FAILED",
+            f"Không xếp được lịch gửi lại: {exc}",
+            final=True,
+        )
+
+
+async def _report_failure(
+    confirmation: DebtPaymentConfirmation, code: str, message: str, *, final: bool
+) -> None:
+    customer = confirmation.customer
+    alert_code = (
+        "DEBT_PAYMENT_CONFIRMATION_FAILED" if final else "DEBT_PAYMENT_CONFIRMATION_RETRY"
+    )
+    await report_async(
+        alert_code,
+        (
+            "Không gửi được tin báo thanh toán vào nhóm, khách CHƯA được chuyển sang "
+            f"đã thanh toán, cần xử lý tay: {message}"
+            if final
+            else "Gửi tin báo thanh toán lỗi, sẽ thử lại; khách chưa được chuyển sang "
+            f"đã thanh toán: {message}"
+        ),
+        severity=Severity.ERROR if final else Severity.WARNING,
+        service="backend",
+        context={
+            "Khách hàng": customer.group.name,
+            "Xem tại": customer_link(customer.id),
+            "Tin nhắn": confirmation.content,
+            "Mã lỗi gốc": code,
+        },
+        # Per confirmation: another customer failing in the same window must still
+        # page, while one incident sends a single retry warning and a single error.
+        dedup_key=f"{alert_code}:{confirmation.id}",
+    )
