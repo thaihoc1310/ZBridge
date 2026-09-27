@@ -31,8 +31,9 @@ logger = logging.getLogger("zbridge.debt_payment")
 GLOBAL_SETTINGS_ID = 1
 DEFAULT_PHRASES = ["đã thanh toán", "đã tt", "da thanh toan"]
 REPLY_TASK = "zbridge.debt_payments.send_reply"
-#: Seconds before each retry of the group notice; the inline attempt comes first.
+#: Seconds before each retry of the group notice; the first attempt is immediate.
 REPLY_RETRY_DELAYS = (60, 300, 900, 1800)
+REPLY_ATTEMPTS = len(REPLY_RETRY_DELAYS) + 1
 PENDING_STALE_AFTER = timedelta(hours=2)
 
 
@@ -207,8 +208,7 @@ async def apply_payment_confirmation(
         event.sender_id,
         event.message_id,
     )
-    if not await process_confirmation(db, confirmation.id):
-        await _schedule_retry(db, confirmation)
+    await _start_delivery(db, confirmation)
     return True
 
 
@@ -229,7 +229,11 @@ def _reply_parts(targets: list[dict[str, object]]) -> list[dict[str, str]]:
 
 
 async def process_confirmation(
-    db: AsyncSession, confirmation_id: uuid.UUID, *, final: bool = False
+    db: AsyncSession,
+    confirmation_id: uuid.UUID,
+    *,
+    final: bool = False,
+    attempt: int = 0,
 ) -> bool:
     """Notify the group, then mark the customer paid; False means retry later.
 
@@ -300,7 +304,9 @@ async def process_confirmation(
             if final:
                 confirmation.failed_at = datetime.now(UTC)
                 await db.commit()
-            await _report_failure(confirmation, exc.code, exc.message, final=final)
+            await _report_failure(
+                confirmation, exc.code, exc.message, final=final, attempt=attempt
+            )
             return False
         message_id = str(result.get("message_id") or "") or None
         setattr(confirmation, field, message_id or "confirmed")
@@ -348,36 +354,79 @@ async def process_confirmation(
     return True
 
 
-async def _schedule_retry(
+async def _start_delivery(
     db: AsyncSession, confirmation: DebtPaymentConfirmation
 ) -> None:
+    """Hand the notice to Celery so the event request never waits on Zalo.
+
+    Sending inline used to hold the gateway's event POST (10s timeout) behind the
+    shared 1-message-per-second send queue; a timeout made the gateway resend the
+    event and let the next one overtake it.
+    """
     try:
         await asyncio.to_thread(
-            celery_app.send_task,
-            REPLY_TASK,
-            args=[str(confirmation.id)],
-            countdown=REPLY_RETRY_DELAYS[0],
-            retry=False,
+            celery_app.send_task, REPLY_TASK, args=[str(confirmation.id)], retry=False
         )
-    except Exception as exc:
-        # Nothing will retry it, so close it now: the debt stays open and the next
-        # "đã thanh toán" message is free to start over.
-        confirmation.failed_at = datetime.now(UTC)
-        await db.commit()
+        return
+    except Exception:
         logger.exception(
-            "DEBT_PAYMENT_CONFIRMATION_RETRY_ENQUEUE_FAILED confirmation_id=%s",
+            "DEBT_PAYMENT_CONFIRMATION_ENQUEUE_FAILED confirmation_id=%s",
             confirmation.id,
+        )
+    # The queue is down, so nothing would retry: one attempt here, and a failure
+    # closes the confirmation (debt stays open) and alerts.
+    await process_confirmation(db, confirmation.id, final=True)
+
+
+async def expire_stuck_confirmations(db: AsyncSession) -> int:
+    """Close pending confirmations the retry task lost, so none rots silently.
+
+    The whole retry schedule takes under an hour; a row still pending well past
+    that had its task dropped (worker killed, broker lost it). Its debt is still
+    open, so staff must hear about it.
+    """
+    stuck = list(
+        (
+            await db.scalars(
+                select(DebtPaymentConfirmation)
+                .options(
+                    selectinload(DebtPaymentConfirmation.customer).selectinload(
+                        Customer.group
+                    )
+                )
+                .where(
+                    DebtPaymentConfirmation.applied_at.is_(None),
+                    DebtPaymentConfirmation.failed_at.is_(None),
+                    DebtPaymentConfirmation.created_at
+                    < datetime.now(UTC) - PENDING_STALE_AFTER,
+                )
+                .with_for_update(skip_locked=True)
+            )
+        ).all()
+    )
+    for confirmation in stuck:
+        confirmation.failed_at = datetime.now(UTC)
+    await db.commit()
+    for confirmation in stuck:
+        logger.error(
+            "DEBT_PAYMENT_CONFIRMATION_STUCK confirmation_id=%s", confirmation.id
         )
         await _report_failure(
             confirmation,
-            "DEBT_PAYMENT_CONFIRMATION_RETRY_ENQUEUE_FAILED",
-            f"Không xếp được lịch gửi lại: {exc}",
+            "DEBT_PAYMENT_CONFIRMATION_STUCK",
+            "tác vụ gửi tin đã bị mất (quá 2 giờ vẫn chưa xong)",
             final=True,
         )
+    return len(stuck)
 
 
 async def _report_failure(
-    confirmation: DebtPaymentConfirmation, code: str, message: str, *, final: bool
+    confirmation: DebtPaymentConfirmation,
+    code: str,
+    message: str,
+    *,
+    final: bool,
+    attempt: int = 0,
 ) -> None:
     customer = confirmation.customer
     alert_code = (
@@ -389,18 +438,18 @@ async def _report_failure(
             "Không gửi được tin báo thanh toán vào nhóm, khách CHƯA được chuyển sang "
             f"đã thanh toán, cần xử lý tay: {message}"
             if final
-            else "Gửi tin báo thanh toán lỗi, sẽ thử lại; khách chưa được chuyển sang "
-            f"đã thanh toán: {message}"
+            else f"Gửi tin báo thanh toán lỗi (lần {attempt + 1}/{REPLY_ATTEMPTS}), sẽ thử"
+            f" lại; khách chưa được chuyển sang đã thanh toán: {message}"
         ),
         severity=Severity.ERROR if final else Severity.WARNING,
-        service="backend",
+        service="celery-worker",
         context={
             "Khách hàng": customer.group.name,
             "Xem tại": customer_link(customer.id),
             "Tin nhắn": confirmation.content,
             "Mã lỗi gốc": code,
         },
-        # Per confirmation: another customer failing in the same window must still
-        # page, while one incident sends a single retry warning and a single error.
-        dedup_key=f"{alert_code}:{confirmation.id}",
+        # Per attempt: every failure reaches Telegram, and another customer failing
+        # in the same window is still named. Bounded by REPLY_ATTEMPTS per payment.
+        dedup_key=f"{alert_code}:{confirmation.id}:{attempt}",
     )
