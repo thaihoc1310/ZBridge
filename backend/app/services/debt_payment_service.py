@@ -201,37 +201,41 @@ async def apply_payment_confirmation(
                     "display_name": str(target["display_name"]),
                 }
             )
-        suffix = " vào chỉnh sửa công nợ"
-        suffix += f": {customer.debt_file_url}" if customer.debt_file_url else "."
-        parts.append({"type": "text", "text": suffix})
-        try:
-            result = await zalo_gateway.send_rich_text(
-                event.group_id,
-                parts,
-                idempotency_key=(
-                    f"debt-payment-confirmation:{customer.id}:{event.message_id}"
-                ),
+        parts.append({"type": "text", "text": " vào chỉnh sửa công nợ."})
+        key = f"debt-payment-confirmation:{customer.id}:{event.message_id}"
+        # The link goes out on its own so Zalo renders its preview card cleanly.
+        sends = [lambda: zalo_gateway.send_rich_text(event.group_id, parts, idempotency_key=key)]
+        if customer.debt_file_url:
+            link = customer.debt_file_url
+            sends.append(
+                lambda: zalo_gateway.send_link(
+                    event.group_id, link, idempotency_key=f"{key}:link"
+                )
             )
+        for send in sends:
+            try:
+                result = await send()
+            except GatewayError as exc:
+                await add_delivery_log(
+                    db,
+                    customer.id,
+                    DeliveryType.DEBT_PAYMENT_CONFIRMATION,
+                    DeliveryStatus.FAILED,
+                    error_code=exc.code,
+                    error_message=exc.message,
+                )
+                logger.warning(
+                    "DEBT_PAYMENT_CONFIRMATION_REPLY_FAILED customer_id=%s code=%s",
+                    customer.id,
+                    exc.code,
+                )
+                break
             await add_delivery_log(
                 db,
                 customer.id,
                 DeliveryType.DEBT_PAYMENT_CONFIRMATION,
                 DeliveryStatus.SENT,
                 zalo_message_id=str(result.get("message_id") or "") or None,
-            )
-        except GatewayError as exc:
-            await add_delivery_log(
-                db,
-                customer.id,
-                DeliveryType.DEBT_PAYMENT_CONFIRMATION,
-                DeliveryStatus.FAILED,
-                error_code=exc.code,
-                error_message=exc.message,
-            )
-            logger.warning(
-                "DEBT_PAYMENT_CONFIRMATION_REPLY_FAILED customer_id=%s code=%s",
-                customer.id,
-                exc.code,
             )
         await db.commit()
     logger.info(

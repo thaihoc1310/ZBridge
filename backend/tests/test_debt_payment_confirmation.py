@@ -99,9 +99,13 @@ async def test_trusted_message_marks_paid_without_prior_sent_reminder() -> None:
             return {"message_id": "payment-reply-1"}
 
         send_reply = AsyncMock(side_effect=send_after_payment_commit)
+        send_link = AsyncMock(return_value={"message_id": "payment-link-1"})
         with patch(
             "app.services.debt_payment_service.zalo_gateway.send_rich_text",
             send_reply,
+        ), patch(
+            "app.services.debt_payment_service.zalo_gateway.send_link",
+            send_link,
         ), patch.object(db, "commit", commit):
             assert await apply_payment_confirmation(db, event) is True
         assert commit.await_count == 2
@@ -114,11 +118,13 @@ async def test_trusted_message_marks_paid_without_prior_sent_reminder() -> None:
         assert automation.next_run_at is None
         assert run.status == DebtReminderStatus.CANCELLED
         assert await db.scalar(select(func.count()).select_from(DebtPaymentConfirmation)) == 1
-        delivery = await db.scalar(select(BotDeliveryLog))
-        assert delivery is not None
-        assert delivery.type == DeliveryType.DEBT_PAYMENT_CONFIRMATION
-        assert delivery.status == DeliveryStatus.SENT
-        assert delivery.zalo_message_id == "payment-reply-1"
+        deliveries = (await db.scalars(select(BotDeliveryLog))).all()
+        assert {d.type for d in deliveries} == {DeliveryType.DEBT_PAYMENT_CONFIRMATION}
+        assert {d.status for d in deliveries} == {DeliveryStatus.SENT}
+        assert {d.zalo_message_id for d in deliveries} == {
+            "payment-reply-1",
+            "payment-link-1",
+        }
         send_reply.assert_awaited_once_with(
             group.zalo_group_id,
             [
@@ -131,15 +137,14 @@ async def test_trusted_message_marks_paid_without_prior_sent_reminder() -> None:
                     "user_id": "accountant-1",
                     "display_name": "Kế toán",
                 },
-                {
-                    "type": "text",
-                    "text": (
-                        " vào chỉnh sửa công nợ: "
-                        "https://docs.google.com/spreadsheets/d/debt-sheet"
-                    ),
-                },
+                {"type": "text", "text": " vào chỉnh sửa công nợ."},
             ],
             idempotency_key=f"debt-payment-confirmation:{customer.id}:paid-message-1",
+        )
+        send_link.assert_awaited_once_with(
+            group.zalo_group_id,
+            "https://docs.google.com/spreadsheets/d/debt-sheet",
+            idempotency_key=f"debt-payment-confirmation:{customer.id}:paid-message-1:link",
         )
 
         # A replayed outbox event must not close a later debt cycle again.
