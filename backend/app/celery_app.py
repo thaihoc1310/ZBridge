@@ -35,22 +35,29 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="Asia/Ho_Chi_Minh",
     enable_utc=True,
+    # A tick that could not start before the next one is redundant: without
+    # `expires`, a busy or stopped worker came back to hundreds of queued
+    # dispatchers standing in front of real sends.
     beat_schedule={
         "dispatch-mention-classifications": {
             "task": "zbridge.mentions.dispatch_classifications",
             "schedule": settings.mention_classifier_interval_seconds,
+            "options": {"expires": settings.mention_classifier_interval_seconds},
         },
         "dispatch-due-mention-followups": {
             "task": "zbridge.mentions.dispatch_due",
             "schedule": settings.mention_scheduler_interval_seconds,
+            "options": {"expires": settings.mention_scheduler_interval_seconds},
         },
         "dispatch-due-debt-reminders": {
             "task": "zbridge.debt_reminders.dispatch_due",
             "schedule": settings.debt_reminder_scheduler_interval_seconds,
+            "options": {"expires": settings.debt_reminder_scheduler_interval_seconds},
         },
         "alert-heartbeat": {
             "task": "zbridge.alerts.heartbeat",
             "schedule": settings.alert_heartbeat_interval_seconds,
+            "options": {"expires": settings.alert_heartbeat_interval_seconds},
         },
         "purge-expired-delivery-logs": {
             "task": "zbridge.maintenance.purge_expired_delivery_logs",
