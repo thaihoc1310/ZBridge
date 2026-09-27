@@ -1030,3 +1030,286 @@ async def test_debt_reminder_config_and_three_required_deliveries(monkeypatch) -
         )
 
     await engine.dispose()
+
+
+async def test_paying_mid_send_finishes_a_started_reminder_but_drops_an_unstarted_one(
+    monkeypatch,
+) -> None:
+    """Marking paid used to cancel the text after the image and link went out."""
+    from app.schemas.api import CustomerUpdate
+    from app.services.customer_service import update_customer
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 9, 25, 8, 17, tzinfo=UTC)
+
+    run_ids: dict[str, uuid.UUID] = {}
+    customer_ids: dict[str, uuid.UUID] = {}
+    async with sessions() as db:
+        account = ZaloAccount(status=BotStatus.CONNECTED)
+        db.add(account)
+        await db.flush()
+        for name, image_message_id in (("started", "image-message"), ("unstarted", None)):
+            group = ZaloGroup(
+                zalo_account_id=account.id,
+                zalo_group_id=f"{name}-group",
+                name=name,
+                member_count=2,
+                is_available=True,
+                last_synced_at=now,
+            )
+            db.add(group)
+            await db.flush()
+            customer = Customer(
+                zalo_group_id=group.id,
+                has_debt=True,
+                debt_file_url="https://docs.google.com/spreadsheets/d/sheet-1/edit",
+            )
+            db.add(customer)
+            await db.flush()
+            automation = DebtReminderAutomation(
+                customer_id=customer.id,
+                message_parts=[{"type": "text", "text": "Nhắc công nợ"}],
+            )
+            db.add(automation)
+            await db.flush()
+            run = DebtReminderRun(
+                automation_id=automation.id,
+                scheduled_for=now,
+                retry_at=now,
+                status=DebtReminderStatus.PROCESSING,
+                attempt_count=1,
+                claimed_at=now,
+                is_manual=True,
+                image_message_id=image_message_id,
+                sheet_url="https://docs.google.com/spreadsheets/d/sheet-1/edit",
+            )
+            db.add(run)
+            await db.flush()
+            run_ids[name] = run.id
+            customer_ids[name] = customer.id
+        await db.commit()
+
+        # The operator switches both customers to paid while the runs are in flight.
+        for customer_id in customer_ids.values():
+            await update_customer(db, customer_id, CustomerUpdate(has_debt=False))
+
+    async with sessions() as db:
+        started = await db.get(DebtReminderRun, run_ids["started"])
+        unstarted = await db.get(DebtReminderRun, run_ids["unstarted"])
+        assert started.status == DebtReminderStatus.PROCESSING
+        assert unstarted.status == DebtReminderStatus.CANCELLED
+
+    calls: list[str] = []
+
+    async def get_status():
+        return {"status": "CONNECTED"}
+
+    async def send_link(_group_id: str, _link: str, **_kwargs):
+        calls.append("link")
+        return {"message_id": "link-message"}
+
+    async def send_rich_text(_group_id: str, _parts, **_kwargs):
+        calls.append("text")
+        return {"message_id": "text-message"}
+
+    monkeypatch.setattr(debt_reminder_scheduler, "SessionLocal", sessions)
+    monkeypatch.setattr(debt_reminder_scheduler.zalo_gateway, "get_status", get_status)
+    monkeypatch.setattr(debt_reminder_scheduler.zalo_gateway, "send_link", send_link)
+    monkeypatch.setattr(
+        debt_reminder_scheduler.zalo_gateway, "send_rich_text", send_rich_text
+    )
+
+    await process_debt_reminder(run_ids["started"])
+    await process_debt_reminder(run_ids["unstarted"])
+
+    async with sessions() as db:
+        started = await db.get(DebtReminderRun, run_ids["started"])
+        unstarted = await db.get(DebtReminderRun, run_ids["unstarted"])
+        assert calls == ["link", "text"]
+        assert started.status == DebtReminderStatus.SENT
+        assert started.link_message_id == "link-message"
+        assert started.text_message_id == "text-message"
+        assert unstarted.status == DebtReminderStatus.CANCELLED
+        for customer_id in customer_ids.values():
+            assert (await db.get(Customer, customer_id)).has_debt is False
+    await engine.dispose()
+
+
+async def _one_debt_customer(sessions, *, now, run_kwargs=None):
+    async with sessions() as db:
+        account = ZaloAccount(status=BotStatus.CONNECTED)
+        db.add(account)
+        await db.flush()
+        group = ZaloGroup(
+            zalo_account_id=account.id,
+            zalo_group_id="one-debt-group",
+            name="Khách một",
+            member_count=2,
+            is_available=True,
+            last_synced_at=now,
+        )
+        db.add(group)
+        await db.flush()
+        customer = Customer(
+            zalo_group_id=group.id,
+            has_debt=True,
+            debt_file_url="https://docs.google.com/spreadsheets/d/sheet-1/edit",
+        )
+        db.add(customer)
+        await db.flush()
+        automation = DebtReminderAutomation(
+            customer_id=customer.id,
+            message_parts=[{"type": "text", "text": "Nhắc công nợ"}],
+        )
+        db.add(automation)
+        await db.flush()
+        run_id = None
+        if run_kwargs is not None:
+            run = DebtReminderRun(
+                automation_id=automation.id,
+                scheduled_for=now,
+                retry_at=now,
+                **run_kwargs,
+            )
+            db.add(run)
+            await db.flush()
+            run_id = run.id
+        await db.commit()
+        return customer.id, automation.id, run_id
+
+
+async def _memory_sessions():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    return engine, async_sessionmaker(engine, expire_on_commit=False)
+
+
+async def test_a_run_whose_worker_keeps_dying_fails_and_alerts_instead_of_looping(
+    monkeypatch,
+) -> None:
+    engine, sessions = await _memory_sessions()
+    now = datetime.now(UTC)
+    stale = now - timedelta(minutes=25)
+    _customer_id, _automation_id, run_id = await _one_debt_customer(
+        sessions,
+        now=now,
+        run_kwargs={
+            "status": DebtReminderStatus.PROCESSING,
+            "attempt_count": 5,
+            "claimed_at": stale,
+            "image_message_id": "image-message",
+        },
+    )
+    alerts: list[tuple[str, str | None]] = []
+
+    async def capture(code, _message, **kwargs):
+        alerts.append((code, kwargs.get("dedup_key")))
+
+    monkeypatch.setattr(debt_reminder_scheduler, "SessionLocal", sessions)
+    monkeypatch.setattr(debt_reminder_scheduler, "report_async", capture)
+
+    assert run_id not in await claim_due_debt_reminders()
+    async with sessions() as db:
+        run = await db.get(DebtReminderRun, run_id)
+        assert run.status == DebtReminderStatus.FAILED
+        assert run.error_code == "DEBT_REMINDER_WORKER_LOST"
+    assert alerts == [("DEBT_REMINDER_FAILED", f"DEBT_REMINDER_FAILED:{run_id}")]
+
+    # Below the cap a stale claim is still handed back for another attempt.
+    async with sessions() as db:
+        run = await db.get(DebtReminderRun, run_id)
+        run.status = DebtReminderStatus.PROCESSING
+        run.attempt_count = 2
+        run.claimed_at = stale
+        await db.commit()
+    assert run_id in await claim_due_debt_reminders()
+    await engine.dispose()
+
+
+async def test_saving_the_config_mid_send_lets_the_started_run_finish() -> None:
+    engine, sessions = await _memory_sessions()
+    now = datetime(2026, 9, 25, 8, 17, tzinfo=UTC)
+    customer_id, _automation_id, run_id = await _one_debt_customer(
+        sessions,
+        now=now,
+        run_kwargs={
+            "status": DebtReminderStatus.PENDING,
+            "attempt_count": 1,
+            "image_message_id": "image-message",
+        },
+    )
+    config = DebtReminderUpdate(
+        day_of_month=25,
+        send_time="09:00",
+        message_parts=[{"type": "text", "text": "Nội dung mới"}],
+    )
+    async with sessions() as db:
+        await save_debt_reminder(db, customer_id, config, now=now)
+        run = await db.get(DebtReminderRun, run_id)
+        await db.refresh(run)
+        assert run.status == DebtReminderStatus.PENDING
+    await engine.dispose()
+
+
+async def test_paid_with_the_sheet_removed_cancels_even_a_started_run() -> None:
+    from app.schemas.api import CustomerUpdate
+    from app.services.customer_service import update_customer
+
+    engine, sessions = await _memory_sessions()
+    now = datetime(2026, 9, 25, 8, 17, tzinfo=UTC)
+    customer_id, _automation_id, run_id = await _one_debt_customer(
+        sessions,
+        now=now,
+        run_kwargs={
+            "status": DebtReminderStatus.PENDING,
+            "attempt_count": 1,
+            "image_message_id": "image-message",
+        },
+    )
+    async with sessions() as db:
+        await update_customer(
+            db, customer_id, CustomerUpdate(has_debt=False, debt_file_url=None)
+        )
+        run = await db.get(DebtReminderRun, run_id)
+        await db.refresh(run)
+        assert run.status == DebtReminderStatus.CANCELLED
+    await engine.dispose()
+
+
+async def test_a_new_debt_does_not_resume_the_repeat_chain_of_a_paid_one() -> None:
+    engine, sessions = await _memory_sessions()
+    last_sent_at = datetime(2026, 10, 5, 2, tzinfo=UTC)
+    customer_id, automation_id, _run_id = await _one_debt_customer(
+        sessions,
+        now=last_sent_at,
+        run_kwargs={
+            "status": DebtReminderStatus.SENT,
+            "attempt_count": 1,
+            "processed_at": last_sent_at,
+        },
+    )
+    now = datetime(2026, 10, 21, 3, tzinfo=UTC)
+    async with sessions() as db:
+        customer = await db.get(Customer, customer_id)
+        # Paid after that reminder, then a new debt was opened.
+        customer.last_debt_paid_at = datetime(2026, 10, 10, 2, tzinfo=UTC)
+        await db.commit()
+        config = DebtReminderUpdate(
+            day_of_month=25,
+            send_time="09:00",
+            repeat_enabled=True,
+            repeat_interval_days=3,
+            message_parts=[{"type": "text", "text": "Nhắc"}],
+        )
+        response = await save_debt_reminder(db, customer_id, config, now=now)
+        # The closed debt's chain (10-05 + 3 days, overdue) would have fired now.
+        assert response.next_run_at.replace(tzinfo=UTC) == datetime(
+            2026, 10, 25, 2, tzinfo=UTC
+        )
+        automation = await db.get(DebtReminderAutomation, automation_id)
+        assert automation.next_run_at is not None
+    await engine.dispose()

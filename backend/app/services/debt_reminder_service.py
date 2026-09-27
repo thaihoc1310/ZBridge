@@ -135,19 +135,65 @@ async def _latest_run(
     )
 
 
-async def _latest_sent_run(
-    db: AsyncSession, automation_id: uuid.UUID
+async def latest_sent_run(
+    db: AsyncSession, automation_id: uuid.UUID, *, paid_at: datetime | None
 ) -> DebtReminderRun | None:
+    """The automatic reminder a repeat interval is anchored on.
+
+    One sent before the customer last paid belongs to a debt that is already
+    closed, so a new debt starts its own chain instead of being due at once.
+    """
+    conditions = [
+        DebtReminderRun.automation_id == automation_id,
+        DebtReminderRun.status == DebtReminderStatus.SENT,
+        DebtReminderRun.is_manual.is_(False),
+    ]
+    if paid_at is not None:
+        conditions.append(DebtReminderRun.scheduled_for >= _as_utc(paid_at))
     return await db.scalar(
         select(DebtReminderRun)
-        .where(
-            DebtReminderRun.automation_id == automation_id,
-            DebtReminderRun.status == DebtReminderStatus.SENT,
-            DebtReminderRun.is_manual.is_(False),
-        )
+        .where(*conditions)
         .order_by(DebtReminderRun.scheduled_for.desc())
         .limit(1)
     )
+
+
+async def cancel_active_runs(
+    db: AsyncSession,
+    automation_id: uuid.UUID,
+    *,
+    reason: str,
+    now: datetime,
+    keep_started: bool,
+) -> int:
+    """Cancel queued or in-flight runs; ``keep_started`` spares partial ones.
+
+    A run that already delivered a part must finish all three, or the group is
+    left with an image and a link but no message (and the next run repeats them).
+    """
+    conditions = [
+        DebtReminderRun.automation_id == automation_id,
+        DebtReminderRun.status.in_(
+            [DebtReminderStatus.PENDING, DebtReminderStatus.PROCESSING]
+        ),
+    ]
+    if keep_started:
+        conditions += [
+            DebtReminderRun.image_message_id.is_(None),
+            DebtReminderRun.link_message_id.is_(None),
+            DebtReminderRun.text_message_id.is_(None),
+        ]
+    result = await db.execute(
+        update(DebtReminderRun)
+        .where(*conditions)
+        .values(
+            status=DebtReminderStatus.CANCELLED,
+            claimed_at=None,
+            processed_at=_as_utc(now),
+            error_message=reason,
+        )
+    )
+    return result.rowcount or 0
 
 
 async def _response(
@@ -362,20 +408,14 @@ async def sync_debt_reminder_state(
         return automation
 
     automation.next_run_at = None
-    await db.execute(
-        update(DebtReminderRun)
-        .where(
-            DebtReminderRun.automation_id == automation.id,
-            DebtReminderRun.status.in_(
-                [DebtReminderStatus.PENDING, DebtReminderStatus.PROCESSING]
-            ),
-        )
-        .values(
-            status=DebtReminderStatus.CANCELLED,
-            claimed_at=None,
-            processed_at=_as_utc(now or datetime.now(UTC)),
-            error_message=inactive_reason,
-        )
+    await cancel_active_runs(
+        db,
+        automation.id,
+        reason=inactive_reason,
+        now=now or datetime.now(UTC),
+        # Paid mid-send still finishes, but only while it can: without the Sheet
+        # or the group the remaining parts would just fail five times and alert.
+        keep_started=bool(customer.debt_file_url) and customer.group.is_available,
     )
     return automation
 
@@ -419,27 +459,21 @@ async def save_debt_reminder(
     automation.repeat_interval_days = data.repeat_interval_days
     automation.send_time = parsed_time
     automation.message_parts = parts
-    await db.execute(
-        update(DebtReminderRun)
-        .where(
-            DebtReminderRun.automation_id == automation.id,
-            DebtReminderRun.status.in_(
-                [DebtReminderStatus.PENDING, DebtReminderStatus.PROCESSING]
-            ),
-        )
-        .values(
-            status=DebtReminderStatus.CANCELLED,
-            claimed_at=None,
-            processed_at=now or datetime.now(UTC),
-            error_message="Cấu hình nhắc công nợ đã thay đổi.",
-        )
+    await cancel_active_runs(
+        db,
+        automation.id,
+        reason="Cấu hình nhắc công nợ đã thay đổi.",
+        now=now or datetime.now(UTC),
+        keep_started=True,
     )
     effective_now = _as_utc(now or datetime.now(UTC))
     if customer.has_debt and customer.group.is_available:
         next_run_at = next_monthly_run(
             data.day_of_month, parsed_time, now=effective_now
         )
-        last_sent = await _latest_sent_run(db, automation.id)
+        last_sent = await latest_sent_run(
+            db, automation.id, paid_at=customer.last_debt_paid_at
+        )
         if last_sent is not None and data.repeat_enabled:
             repeated_run = defer_debt_reminder(
                 _as_utc(last_sent.scheduled_for)

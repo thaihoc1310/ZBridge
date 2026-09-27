@@ -115,7 +115,8 @@ async def test_active_followups_are_grouped_and_cancelled_atomically() -> None:
     await engine.dispose()
 
 
-async def test_bulk_debt_schedule_preserves_message_and_cancels_old_run() -> None:
+@pytest.mark.parametrize("started", [True, False])
+async def test_bulk_debt_schedule_preserves_message_and_cancels_old_run(started) -> None:
     engine, sessions, customer_id, _followup_id, run_id = await _database()
     schedule = DebtReminderBulkSchedule(
         day_of_month=28,
@@ -124,6 +125,10 @@ async def test_bulk_debt_schedule_preserves_message_and_cancels_old_run() -> Non
         send_time="10:30",
     )
     async with sessions() as db:
+        if not started:
+            # Nothing posted yet, so the old schedule's run is safe to drop.
+            (await db.get(DebtReminderRun, run_id)).image_message_id = None
+            await db.commit()
         preview = await preview_bulk_debt_reminders(db, schedule)
         assert preview.rows[0].will_change is True
         result = await apply_bulk_debt_reminders(
@@ -131,7 +136,7 @@ async def test_bulk_debt_schedule_preserves_message_and_cancels_old_run() -> Non
             DebtReminderBulkApply(**schedule.model_dump(), customer_ids=[customer_id]),
         )
         assert result.updated == 1
-        assert result.cancelled_runs == 1
+        assert result.cancelled_runs == (0 if started else 1)
 
     async with sessions() as db:
         automation = await db.scalar(
@@ -144,9 +149,15 @@ async def test_bulk_debt_schedule_preserves_message_and_cancels_old_run() -> Non
         assert automation.repeat_enabled is False
         assert automation.repeat_interval_days == 5
         assert automation.send_time == time(10, 30)
+        # A run that already posted its image finishes under the new schedule
+        # instead of leaving the group with half a reminder.
         old_run = await db.get(DebtReminderRun, run_id)
-        assert old_run.status == DebtReminderStatus.CANCELLED
-        assert old_run.claimed_at is None
+        await db.refresh(old_run)
+        if started:
+            assert old_run.status == DebtReminderStatus.PROCESSING
+        else:
+            assert old_run.status == DebtReminderStatus.CANCELLED
+            assert old_run.claimed_at is None
     await engine.dispose()
 
 

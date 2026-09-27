@@ -31,14 +31,80 @@ logger = logging.getLogger("zbridge.debt_reminder_scheduler")
 MAX_ATTEMPTS = 5
 
 
+STALE_CLAIM_AFTER = timedelta(minutes=20)
+WORKER_LOST_MESSAGE = (
+    "Tác vụ gửi bị dừng giữa chừng quá nhiều lần (worker khởi động lại hoặc treo)."
+)
+
+
+async def _fail_abandoned_runs(db: AsyncSession, now: datetime) -> list[uuid.UUID]:
+    """Stop reclaiming a run whose worker keeps dying before it can record why.
+
+    _fail_run is never reached when the process is killed (OOM, restart), so
+    without this cap such a run cycles every 20 minutes forever, and while it
+    exists the customer's later reminders and manual sends are all blocked.
+    """
+    result = await db.execute(
+        update(DebtReminderRun)
+        .where(
+            DebtReminderRun.status == DebtReminderStatus.PROCESSING,
+            DebtReminderRun.claimed_at < now - STALE_CLAIM_AFTER,
+            DebtReminderRun.attempt_count >= MAX_ATTEMPTS,
+        )
+        .values(
+            status=DebtReminderStatus.FAILED,
+            claimed_at=None,
+            processed_at=now,
+            error_code="DEBT_REMINDER_WORKER_LOST",
+            error_message=WORKER_LOST_MESSAGE,
+        )
+        .returning(DebtReminderRun.id)
+    )
+    return list(result.scalars().all())
+
+
+async def _report_abandoned_runs(run_ids: list[uuid.UUID]) -> None:
+    if not run_ids:
+        return
+    async with SessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(DebtReminderRun.id, Customer.id, ZaloGroup.name)
+                .join(
+                    DebtReminderAutomation,
+                    DebtReminderAutomation.id == DebtReminderRun.automation_id,
+                )
+                .join(Customer, Customer.id == DebtReminderAutomation.customer_id)
+                .join(ZaloGroup, ZaloGroup.id == Customer.zalo_group_id)
+                .where(DebtReminderRun.id.in_(run_ids))
+            )
+        ).all()
+    for run_id, customer_id, customer_name in rows:
+        logger.error("DEBT_REMINDER_FAILED run_id=%s code=DEBT_REMINDER_WORKER_LOST", run_id)
+        await report_async(
+            "DEBT_REMINDER_FAILED",
+            f"Không nhắc được công nợ sau {MAX_ATTEMPTS} lần thử, khách sẽ không nhận"
+            f" được nhắc: {WORKER_LOST_MESSAGE}",
+            severity=Severity.ERROR,
+            service="celery-worker",
+            context={
+                "Khách hàng": customer_name,
+                "Xem tại": customer_link(customer_id),
+                "Mã lỗi gốc": "DEBT_REMINDER_WORKER_LOST",
+            },
+            dedup_key=f"DEBT_REMINDER_FAILED:{run_id}",
+        )
+
+
 async def claim_due_debt_reminders() -> list[uuid.UUID]:
     now = datetime.now(UTC)
     async with SessionLocal() as db:
+        abandoned = await _fail_abandoned_runs(db, now)
         await db.execute(
             update(DebtReminderRun)
             .where(
                 DebtReminderRun.status == DebtReminderStatus.PROCESSING,
-                DebtReminderRun.claimed_at < now - timedelta(minutes=20),
+                DebtReminderRun.claimed_at < now - STALE_CLAIM_AFTER,
             )
             .values(
                 status=DebtReminderStatus.PENDING,
@@ -179,7 +245,8 @@ async def claim_due_debt_reminders() -> list[uuid.UUID]:
             job.claimed_at = now
             job.attempt_count += 1
         await db.commit()
-        return [job.id for job in jobs]
+    await _report_abandoned_runs(abandoned)
+    return [job.id for job in jobs]
 
 
 #: The one order in which every debt-reminder writer takes its row locks.
@@ -195,8 +262,13 @@ _LOCK_ORDER = ("customers", "debt_reminder_automations", "debt_reminder_runs")
 
 async def _lock_customer(db: AsyncSession, customer_id: uuid.UUID) -> Customer | None:
     """First lock in :data:`_LOCK_ORDER`."""
+    # populate_existing: a row already in this session's identity map would
+    # otherwise keep the values read before the lock was granted.
     return await db.scalar(
-        select(Customer).where(Customer.id == customer_id).with_for_update()
+        select(Customer)
+        .where(Customer.id == customer_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
 
 
@@ -208,14 +280,23 @@ async def _lock_automation(
         select(DebtReminderAutomation)
         .where(DebtReminderAutomation.id == automation_id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
 
 
 async def _lock_run(db: AsyncSession, run_id: uuid.UUID) -> DebtReminderRun | None:
     """Last lock in :data:`_LOCK_ORDER`."""
     return await db.scalar(
-        select(DebtReminderRun).where(DebtReminderRun.id == run_id).with_for_update()
+        select(DebtReminderRun)
+        .where(DebtReminderRun.id == run_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
+
+
+def _started(run: DebtReminderRun) -> bool:
+    """A run that delivered any part finishes all three, even if paid meanwhile."""
+    return bool(run.image_message_id or run.link_message_id or run.text_message_id)
 
 
 def _current_delivery_type(run: DebtReminderRun) -> DeliveryType:
@@ -298,6 +379,9 @@ async def _fail_run(
             "Mã lỗi gốc": code,
             "Lần thử": str(attempts),
         },
+        # A customer who will not be reminded is named, even when others fail in
+        # the same window; retries still share one key so an outage stays quiet.
+        dedup_key=f"DEBT_REMINDER_FAILED:{run.id}" if exhausted else None,
     )
 
 
@@ -341,8 +425,9 @@ async def _send_step_if_current(
     """Lock business state across one external send.
 
     Customer/config mutations take the same locks in the same order. Therefore
-    either a paid change commits first and this step stays silent, or
-    this send finishes before the mutation returns to the operator.
+    either a paid change commits first and a run that has sent nothing stays
+    silent, or this send finishes before the mutation returns to the operator.
+    Once a part is out, the paid switch no longer stops the remaining parts.
     """
     async with SessionLocal() as db:
         snapshot = await db.get(DebtReminderRun, run_id)
@@ -363,7 +448,7 @@ async def _send_step_if_current(
             or run.status != DebtReminderStatus.PROCESSING
             or _as_utc(run.claimed_at) != _as_utc(claimed_at)
             or customer is None
-            or not customer.has_debt
+            or (not customer.has_debt and not _started(run))
         ):
             return False, None
         existing = getattr(run, field_name)
@@ -404,7 +489,7 @@ async def process_debt_reminder(run_id: uuid.UUID) -> None:
         group_id = customer.group.zalo_group_id
         parts = automation.message_parts
         debt_file_url = customer.debt_file_url
-        if not customer.has_debt:
+        if not customer.has_debt and not _started(run):
             await _finish_without_sending(
                 run.id,
                 run.claimed_at,

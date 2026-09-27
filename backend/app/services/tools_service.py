@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import UTC, datetime, time
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -32,6 +32,8 @@ from app.schemas.api import (
     DebtReminderRunStepResponse,
 )
 from app.services.debt_reminder_service import (
+    cancel_active_runs,
+    latest_sent_run,
     next_debt_reminder_run,
     next_monthly_run,
 )
@@ -273,37 +275,21 @@ async def apply_bulk_debt_reminders(
         if schedule_unchanged and state_unchanged:
             unchanged += 1
             continue
-        result = await db.execute(
-            update(DebtReminderRun)
-            .where(
-                DebtReminderRun.automation_id == automation.id,
-                DebtReminderRun.status.in_(
-                    [DebtReminderStatus.PENDING, DebtReminderStatus.PROCESSING]
-                ),
-            )
-            .values(
-                status=DebtReminderStatus.CANCELLED,
-                claimed_at=None,
-                processed_at=now,
-                error_message="Lịch nhắc công nợ đã được thay đổi hàng loạt.",
-            )
+        cancelled += await cancel_active_runs(
+            db,
+            automation.id,
+            reason="Lịch nhắc công nợ đã được thay đổi hàng loạt.",
+            now=now,
+            keep_started=True,
         )
-        cancelled += result.rowcount or 0
         automation.day_of_month = data.day_of_month
         automation.repeat_enabled = data.repeat_enabled
         automation.repeat_interval_days = data.repeat_interval_days
         automation.send_time = parsed_time
         if runnable:
             next_run_at = next_monthly_run(data.day_of_month, parsed_time, now=now)
-            last_sent = await db.scalar(
-                select(DebtReminderRun)
-                .where(
-                    DebtReminderRun.automation_id == automation.id,
-                    DebtReminderRun.status == DebtReminderStatus.SENT,
-                    DebtReminderRun.is_manual.is_(False),
-                )
-                .order_by(DebtReminderRun.scheduled_for.desc())
-                .limit(1)
+            last_sent = await latest_sent_run(
+                db, automation.id, paid_at=customer.last_debt_paid_at
             )
             if last_sent is not None:
                 next_run_at = next_debt_reminder_run(
