@@ -77,7 +77,11 @@ class MentionFollowupTrigger(enum.StrEnum):
 
 class PaymentConfirmationStatus(enum.StrEnum):
     """PENDING (AI deciding) -> CONFIRMED -> SENDING -> SENT, or a terminal
-    SKIPPED (not an affirmative payment), DUPLICATE (already told today), FAILED."""
+    SKIPPED (not an affirmative payment, or no debt sheet) or FAILED.
+
+    DUPLICATE is no longer produced (a once-a-day limit was dropped) and is kept
+    only so any row written under it still loads.
+    """
 
     PENDING = "PENDING"
     CONFIRMED = "CONFIRMED"

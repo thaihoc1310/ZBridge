@@ -255,70 +255,26 @@ async def test_a_question_or_an_unsure_verdict_posts_nothing() -> None:
     await engine.dispose()
 
 
-async def test_a_second_confirmation_the_same_day_is_not_announced_again() -> None:
+async def test_every_confirmed_message_is_announced_even_several_a_day() -> None:
+    """A customer can pay several times; each confirmation reaches the accountant."""
     engine, sessions, _group_id, _customer_id, _run_id = await _setup()
     ok = AsyncMock(return_value={"message_id": "zalo-msg"})
     async with sessions() as db:
         with patch(f"{SERVICE}.zalo_gateway.send_rich_text", ok), patch(
             f"{SERVICE}.zalo_gateway.send_link", ok
         ):
-            # A question first must not use up the day's notice.
-            asked = await _record_and_classify(
-                db, _event("ask", "đã thanh toán chưa anh?"), _verdict(False, 0.9)
-            )
-            assert asked.status == PaymentConfirmationStatus.SKIPPED
-            first = await _record_and_classify(
-                db, _event("pay-10m", "Đã thanh toán 10.000.000"), _verdict(True, 0.95)
-            )
-            assert await process_confirmation(db, first.id) is True
-            second = await _record_and_classify(
-                db,
-                _event(
-                    "pay-12m",
-                    "đã nhận thanh toán 12.000.000",
-                    sent_at=SENT_AT + timedelta(hours=3),
-                ),
-                _verdict(True, 0.95),
-            )
-            assert await process_confirmation(db, second.id) is True
-            assert ok.await_count == 2
-            assert (await _confirmation(db, "pay-10m")).status == PaymentConfirmationStatus.SENT
-            assert (await _confirmation(db, "pay-12m")).status == (
-                PaymentConfirmationStatus.DUPLICATE
-            )
-
-            # The next day (Vietnam time) is a new notice.
-            tomorrow = await _record_and_classify(
-                db,
-                _event("pay-next-day", "Đã thanh toán", sent_at=SENT_AT + timedelta(days=1)),
-                _verdict(True, 0.95),
-            )
-            assert await process_confirmation(db, tomorrow.id) is True
-            assert ok.await_count == 4
-            assert (await _confirmation(db, "pay-next-day")).status == (
-                PaymentConfirmationStatus.SENT
-            )
-    await engine.dispose()
-
-
-async def test_the_day_boundary_is_vietnam_midnight_not_utc() -> None:
-    engine, sessions, _group_id, _customer_id, _run_id = await _setup()
-    ok = AsyncMock(return_value={"message_id": "zalo-msg"})
-    # 23:30 and 00:30 Vietnam time: the same UTC day, two different local days.
-    late = datetime(2026, 9, 28, 16, 30, tzinfo=UTC)
-    async with sessions() as db:
-        with patch(f"{SERVICE}.zalo_gateway.send_rich_text", ok), patch(
-            f"{SERVICE}.zalo_gateway.send_link", ok
-        ):
-            moments = (("late", late), ("after-midnight", late + timedelta(hours=1)))
-            for message_id, sent_at in moments:
+            for message_id, text, delay in (
+                ("pay-10m", "Đã thanh toán 10.000.000", timedelta(0)),
+                ("pay-12m", "đã nhận thanh toán 12.000.000", timedelta(minutes=5)),
+            ):
                 row = await _record_and_classify(
-                    db, _event(message_id, "Đã thanh toán", sent_at=sent_at), _verdict(True, 0.9)
+                    db, _event(message_id, text, sent_at=SENT_AT + delay), _verdict(True, 0.95)
                 )
                 assert await process_confirmation(db, row.id) is True
                 assert (await _confirmation(db, message_id)).status == (
                     PaymentConfirmationStatus.SENT
                 )
+        assert ok.await_count == 4
     await engine.dispose()
 
 
@@ -372,7 +328,7 @@ async def test_a_failed_notice_alerts_and_resumes_where_it_stopped() -> None:
     await engine.dispose()
 
 
-async def test_an_exhausted_notice_fails_and_frees_the_day_for_another_try() -> None:
+async def test_an_exhausted_notice_fails_and_a_later_confirmation_still_sends() -> None:
     engine, sessions, _group_id, _customer_id, _run_id = await _setup()
     down = AsyncMock(side_effect=GatewayError("ZALO_GATEWAY_UNAVAILABLE", "down", 503))
     ok = AsyncMock(return_value={"message_id": "zalo-msg"})
@@ -385,7 +341,6 @@ async def test_an_exhausted_notice_fails_and_frees_the_day_for_another_try() -> 
         ):
             assert await process_confirmation(db, first.id, attempt=4, final=True) is False
         assert (await _confirmation(db, "pay-1")).status == PaymentConfirmationStatus.FAILED
-        # Staff were never told, so a later confirmation the same day is not a duplicate.
         second = await _record_and_classify(
             db, _event("pay-2", "đã tt", sent_at=SENT_AT + timedelta(hours=1)), _verdict(True, 0.9)
         )

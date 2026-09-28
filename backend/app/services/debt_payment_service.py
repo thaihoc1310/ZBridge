@@ -1,8 +1,7 @@
 import asyncio
 import logging
 import uuid
-from datetime import UTC, datetime, time, timedelta
-from zoneinfo import ZoneInfo
+from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -42,7 +41,6 @@ from app.services.zalo_gateway_client import GatewayError, zalo_gateway
 logger = logging.getLogger("zbridge.debt_payment")
 GLOBAL_SETTINGS_ID = 1
 DEFAULT_PHRASES = ["đã thanh toán", "đã tt", "da thanh toan"]
-LOCAL_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 CLASSIFY_TASK = "zbridge.debt_payments.classify"
 REPLY_TASK = "zbridge.debt_payments.send_reply"
 #: Seconds before each retry of the AI check; the first attempt is immediate.
@@ -445,60 +443,28 @@ def _reply_parts(targets: list[dict[str, object]], page_url: str) -> list[dict[s
     return parts
 
 
-def _local_day_bounds(moment: datetime) -> tuple[datetime, datetime]:
-    day = _as_utc(moment).astimezone(LOCAL_TIMEZONE).date()
-    start = datetime.combine(day, time.min, tzinfo=LOCAL_TIMEZONE).astimezone(UTC)
-    return start, start + timedelta(days=1)
-
-
 async def _claim_send(db: AsyncSession, confirmation: DebtPaymentConfirmation) -> bool:
-    """Take the right to notify, or mark it a duplicate of today's notice.
+    """Take the right to notify for this confirmed message.
 
-    Owners often confirm twice for one customer ("đã thanh toán 10.000.000", then
-    "đã nhận thanh toán 12.000.000"); staff need to hear it once a day. The
-    customer row lock serialises two confirmations finishing at the same time.
+    Every confirmed message is announced: a customer can pay several times. Only
+    the same message is never announced twice (see the source_message_id check).
     """
-    await db.scalar(
-        select(Customer.id).where(Customer.id == confirmation.customer_id).with_for_update()
-    )
     await db.refresh(confirmation)
     if confirmation.status == PaymentConfirmationStatus.SENDING:
         return True
     if confirmation.status != PaymentConfirmationStatus.CONFIRMED:
-        await db.commit()
         return False
     debt_file_url = await db.scalar(
         select(Customer.debt_file_url).where(Customer.id == confirmation.customer_id)
     )
-    if not debt_file_url:
-        # The sheet was removed while the AI was deciding.
-        confirmation.status = PaymentConfirmationStatus.SKIPPED
-        confirmation.ai_reason = NO_SHEET_REASON
-        await db.commit()
-        return False
-    start, end = _local_day_bounds(confirmation.message_sent_at)
-    earlier = await db.scalar(
-        select(DebtPaymentConfirmation.id).where(
-            DebtPaymentConfirmation.customer_id == confirmation.customer_id,
-            DebtPaymentConfirmation.id != confirmation.id,
-            DebtPaymentConfirmation.status.in_(
-                [PaymentConfirmationStatus.SENDING, PaymentConfirmationStatus.SENT]
-            ),
-            DebtPaymentConfirmation.message_sent_at >= start,
-            DebtPaymentConfirmation.message_sent_at < end,
-        )
-    )
+    # The sheet may have been removed while the AI was deciding.
     confirmation.status = (
-        PaymentConfirmationStatus.DUPLICATE if earlier else PaymentConfirmationStatus.SENDING
+        PaymentConfirmationStatus.SENDING if debt_file_url else PaymentConfirmationStatus.SKIPPED
     )
+    if not debt_file_url:
+        confirmation.ai_reason = NO_SHEET_REASON
     await db.commit()
-    if earlier:
-        logger.info(
-            "DEBT_PAYMENT_CONFIRMATION_DUPLICATE confirmation_id=%s already_notified=%s",
-            confirmation.id,
-            earlier,
-        )
-    return not earlier
+    return bool(debt_file_url)
 
 
 async def process_confirmation(
