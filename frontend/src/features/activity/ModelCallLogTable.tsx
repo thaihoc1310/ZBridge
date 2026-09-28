@@ -159,7 +159,7 @@ function FinalTagDecision({ decision, showTarget, payment = false }: { decision:
   if (typeof decision.skipped !== "boolean") return null;
   const label = decision.target_display_name || "Target";
   const verdict = payment
-    ? decision.skipped ? "Không báo" : "Đạt ngưỡng báo"
+    ? decision.skipped ? "Không báo" : "Sẽ báo"
     : decision.skipped ? "Không giữ tag" : "Giữ tag";
   return <span className={`inline-flex max-w-full items-center rounded-full px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide ${decision.skipped ? "bg-muted text-muted-foreground" : "bg-success-bg text-success-fg"}`} title={showTarget ? label : undefined}>
     <span className="truncate">{showTarget ? `${label} · ` : ""}{verdict}</span>
