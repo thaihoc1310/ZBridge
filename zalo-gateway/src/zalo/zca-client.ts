@@ -142,13 +142,36 @@ export function incomingReactionEvent(
   };
 }
 
-/** Preserve the semantic presence of an image without forwarding its large payload. */
+const IMAGE_MARKER = "[image]";
+
+/** A photo's caption lives in `title`; `description`/`params` hold metadata. */
+function photoCaption(content: unknown): string {
+  if (!content || typeof content !== "object") return "";
+  const title = (content as { title?: unknown }).title;
+  return typeof title === "string" ? title.trim() : "";
+}
+
+/**
+ * Preserve the semantic presence of an image without forwarding its large
+ * payload, plus its caption: a transfer screenshot captioned "đã thanh toán"
+ * used to reach the backend as a bare "[image]" and was never recognised.
+ */
 export function incomingMessageContent(data: {
   msgType: string;
   content: unknown;
 }): string {
-  if (data.msgType === "chat.photo") return "[image]";
+  if (data.msgType === "chat.photo") {
+    const caption = photoCaption(data.content);
+    return caption ? `${IMAGE_MARKER} ${caption}` : IMAGE_MARKER;
+  }
   return typeof data.content === "string" ? data.content : "";
+}
+
+/** Where the caption starts inside the forwarded content (mentions index into it). */
+function mentionOffset(data: { msgType: string; content: unknown }): number {
+  return data.msgType === "chat.photo" && photoCaption(data.content)
+    ? IMAGE_MARKER.length + 1
+    : 0;
 }
 
 export class ZcaJsClient implements ZaloClient {
@@ -895,12 +918,26 @@ export class ZcaJsClient implements ZaloClient {
       // Trimmed on purpose: an oversized body would be rejected by the backend
       // and the reply acknowledgement it carries would be lost for good.
       content: content.slice(0, MAX_EVENT_CONTENT_LENGTH),
-      mentions: incomingMentions(mentions, content, (userId) => this.normalizeMemberId(userId)),
+      mentions: this.captionAwareMentions(mentions, message.data, content),
     };
     this.forwardEventInOrder(event);
     const primaryId = String(message.data.msgId ?? "");
     this.rememberForwarded(primaryId);
     this.cursor.advance(primaryId);
+  }
+
+  private captionAwareMentions(
+    mentions: Array<{ uid: string; pos: number; len: number }>,
+    data: { msgType: string; content: unknown },
+    content: string,
+  ) {
+    const offset = mentionOffset(data);
+    // Zalo positions a photo caption's mentions within the caption itself.
+    return incomingMentions(
+      mentions,
+      offset ? content.slice(offset) : content,
+      (userId) => this.normalizeMemberId(userId),
+    ).map((mention) => ({ ...mention, position: mention.position + offset }));
   }
 
   private handleReaction(reaction: Reaction): void {

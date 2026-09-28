@@ -326,3 +326,37 @@ test("an operator reconnect during a network blip does not wipe the session", as
   assert.equal(state.cleared, 0);
   (client as unknown as RestoreInternals).clearRestoreTimer();
 });
+
+test("a photo caption's mentions still point at the right text", async () => {
+  const events: IncomingGroupEvent[] = [];
+  const client = new ZcaJsClient({} as EncryptedSessionStore, async (event) => {
+    events.push(event);
+  }, 0);
+  const listener = new FakeListener();
+  const internals = client as unknown as { setApi(api: unknown): void; startListener(): void };
+  internals.setApi({ listener });
+  internals.startListener();
+  listener.emit("message", {
+    type: ThreadType.Group,
+    isSelf: false,
+    threadId: "group-1",
+    data: {
+      msgId: "300",
+      cliMsgId: "c300",
+      uidFrom: "owner",
+      dName: "Owner",
+      ts: String(Date.now()),
+      msgType: "chat.photo",
+      content: { title: "@Anh Tâm đã thanh toán", href: "https://photo" },
+      mentions: [{ uid: "target-1", pos: 0, len: 8 }],
+    },
+  });
+  await eventually(() => events.length === 1);
+  const event = events[0]!;
+  assert.equal(event.event_type, "message");
+  if (event.event_type !== "message") return;
+  assert.equal(event.content, "[image] @Anh Tâm đã thanh toán");
+  assert.deepEqual(event.mentions, [
+    { user_id: "target-1", position: 8, length: 8, text: "@Anh Tâm" },
+  ]);
+});
