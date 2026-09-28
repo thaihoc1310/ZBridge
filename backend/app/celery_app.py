@@ -28,6 +28,7 @@ celery_app.conf.update(
     task_routes={
         "zbridge.alerts.*": {"queue": "alerts"},
         "zbridge.mentions.classify": {"queue": "ai"},
+        "zbridge.debt_payments.classify": {"queue": "ai"},
         "zbridge.drive.*": {"queue": "drive"},
     },
     task_ignore_result=True,

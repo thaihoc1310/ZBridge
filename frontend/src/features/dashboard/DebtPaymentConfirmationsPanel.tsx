@@ -19,7 +19,7 @@ export function DebtPaymentConfirmationsPanel({
             Tự động ghi nhận thanh toán
           </span>
           <span className="mt-1 block text-xs text-muted-foreground">
-            Các khách hàng được chuyển sang đã thanh toán trong 45 ngày gần đây.
+            Các lần bot đã báo kế toán cập nhật công nợ trong 45 ngày gần đây.
           </span>
         </span>
         <span className="rounded-full bg-success-bg px-3 py-1 text-xs font-semibold text-success-fg">
@@ -30,7 +30,7 @@ export function DebtPaymentConfirmationsPanel({
       <div className="app-scrollbar max-h-[60vh] overflow-y-auto sm:max-h-[28rem]">
         {items.length === 0 ? (
           <p className="px-5 py-10 text-center text-sm text-muted-foreground">
-            Chưa có khách hàng nào được tự động chuyển trạng thái.
+            Chưa có lần xác nhận thanh toán nào.
           </p>
         ) : (
           <div className="divide-y divide-border">
@@ -52,7 +52,7 @@ export function DebtPaymentConfirmationsPanel({
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <strong className="text-sm">{item.customer_name}</strong>
                       <span className="rounded-full bg-success-bg px-2 py-0.5 text-[11px] font-semibold text-success-fg">
-                        Đã chuyển sang thanh toán
+                        Đã báo kế toán
                       </span>
                     </span>
                     <span className="mt-1 block text-xs text-muted-foreground">

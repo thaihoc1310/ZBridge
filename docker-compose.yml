@@ -157,6 +157,9 @@ services:
       FPTAI_API_KEY: ${FPTAI_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       MENTION_CONTEXT_MESSAGES: ${MENTION_CONTEXT_MESSAGES:-15}
+      # Alert links point at the customer page.
+      APP_URL: ${APP_URL:-http://localhost:5173}
+      ALERT_LINK_BASE_URL: ${ALERT_LINK_BASE_URL:-}
     depends_on:
       migrate:
         condition: service_completed_successfully

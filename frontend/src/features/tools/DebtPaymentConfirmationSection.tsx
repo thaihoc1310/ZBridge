@@ -137,8 +137,9 @@ export function DebtPaymentConfirmationSection() {
           <div>
             <h3 className="font-display text-xl">Người được theo dõi</h3>
             <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-              Chỉ tin nhắn của những người này mới được phép tự động chuyển công
-              nợ sang đã thanh toán.
+              Chỉ tin nhắn của những người này mới được xét. AI kiểm tra tin có phải
+              câu khẳng định đã thanh toán không (câu hỏi như "đã thanh toán chưa?"
+              bị bỏ qua) rồi mới báo; trạng thái công nợ do kế toán tự chuyển.
             </p>
           </div>
           <button
@@ -156,7 +157,7 @@ export function DebtPaymentConfirmationSection() {
         {renderPicker("tracked")}
         <SelectedMembers
           members={members}
-          empty="Chưa chọn người nào nên tính năng chưa thể tự chuyển trạng thái."
+          empty="Chưa chọn người nào nên tính năng chưa hoạt động."
           onChange={setMembers}
         />
       </section>
@@ -166,8 +167,8 @@ export function DebtPaymentConfirmationSection() {
           <div>
             <h3 className="font-display text-xl">Người được tag cập nhật công nợ</h3>
             <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-              Sau khi xác nhận thanh toán, bot tag những người này và gửi kèm link
-              công nợ của khách hàng.
+              Khi AI xác nhận, bot tag những người này kèm link trang khách hàng trên
+              ZBridge, rồi gửi link công nợ. Mỗi khách chỉ báo một lần mỗi ngày.
             </p>
           </div>
           <button

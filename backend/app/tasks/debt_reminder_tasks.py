@@ -4,8 +4,11 @@ import uuid
 from app.celery_app import celery_app
 from app.db.database import SessionLocal
 from app.services.debt_payment_service import (
+    CLASSIFY_RETRY_DELAYS,
+    CLASSIFY_TASK,
     REPLY_RETRY_DELAYS,
     REPLY_TASK,
+    classify_confirmation,
     expire_stuck_confirmations,
     process_confirmation,
 )
@@ -34,6 +37,35 @@ async def _deliver_reply(confirmation_id: uuid.UUID, final: bool, attempt: int) 
     async with SessionLocal() as db:
         return await process_confirmation(
             db, confirmation_id, final=final, attempt=attempt
+        )
+
+
+async def _classify(confirmation_id: uuid.UUID, final: bool, attempt: int) -> bool:
+    async with SessionLocal() as db:
+        return await classify_confirmation(
+            db, confirmation_id, final=final, attempt=attempt
+        )
+
+
+@celery_app.task(name=CLASSIFY_TASK, bind=True, ignore_result=True)
+def classify_payment_confirmation(self, confirmation_id: str) -> None:
+    """Runs on the `ai` queue, the only worker holding the model API key."""
+    attempt = self.request.retries
+    final = attempt >= len(CLASSIFY_RETRY_DELAYS)
+    try:
+        done = run_async(_classify(uuid.UUID(confirmation_id), final, attempt))
+    except Exception:
+        if final:
+            raise
+        logger.exception(
+            "DEBT_PAYMENT_CONFIRMATION_CLASSIFY_ERROR confirmation_id=%s attempt=%d",
+            confirmation_id,
+            attempt,
+        )
+        done = False
+    if not done and not final:
+        raise self.retry(
+            countdown=CLASSIFY_RETRY_DELAYS[attempt], max_retries=len(CLASSIFY_RETRY_DELAYS)
         )
 
 

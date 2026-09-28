@@ -563,12 +563,23 @@ def _provider_profile() -> _ProviderProfile:
     )
 
 
-async def classify_payload(
+@dataclass(frozen=True)
+class StructuredCompletion:
+    parsed: BaseModel
+    input_tokens: int | None
+    output_tokens: int | None
+    latency_ms: int
+
+
+async def complete_structured(
     payload: dict[str, object],
     *,
+    prompt: str,
+    schema: type[BaseModel],
     model: str | None = None,
-    prompt: str = CLASSIFIER_PROMPT,
-) -> _ModelResult:
+) -> StructuredCompletion:
+    """One schema-constrained call to the configured provider, shared by every
+    classifier so prompts differ but transport, timeouts and quirks do not."""
     profile = _provider_profile()
     if not profile.api_key:
         raise RuntimeError(f"No API key configured for LLM_PROVIDER={settings.llm_provider}")
@@ -579,7 +590,7 @@ async def classify_payload(
             {"role": "system", "content": prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],
-        response_format=MentionClassificationResult,
+        response_format=schema,
         extra_body=profile.extra_body,
         **profile.request_kwargs,
     )
@@ -591,15 +602,34 @@ async def classify_payload(
         # failing every classification until somebody notices.
         raw = getattr(message, "reasoning_content", None)
         if raw:
-            parsed = MentionClassificationResult.model_validate_json(raw)
+            parsed = schema.model_validate_json(raw)
     if parsed is None:
         raise RuntimeError("Model returned no parsed classification")
     usage = completion.usage
-    return _ModelResult(
-        decisions=parsed.decisions,
+    return StructuredCompletion(
+        parsed=parsed,
         input_tokens=getattr(usage, "prompt_tokens", None),
         output_tokens=getattr(usage, "completion_tokens", None),
         latency_ms=round((perf_counter() - started) * 1000),
+    )
+
+
+async def classify_payload(
+    payload: dict[str, object],
+    *,
+    model: str | None = None,
+    prompt: str = CLASSIFIER_PROMPT,
+) -> _ModelResult:
+    result = await complete_structured(
+        payload, prompt=prompt, schema=MentionClassificationResult, model=model
+    )
+    parsed = result.parsed
+    assert isinstance(parsed, MentionClassificationResult)
+    return _ModelResult(
+        decisions=parsed.decisions,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        latency_ms=result.latency_ms,
         response_payload=parsed.model_dump(mode="json"),
     )
 

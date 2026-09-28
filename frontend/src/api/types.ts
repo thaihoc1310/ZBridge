@@ -121,7 +121,7 @@ export type ModelCallLog = {
   id: string;
   customer_id: string | null;
   customer_name: string;
-  trigger: "MENTION" | "PRICE_INQUIRY";
+  trigger: "MENTION" | "PRICE_INQUIRY" | "PAYMENT_CONFIRMATION";
   provider: string;
   model: string;
   request_payload: Record<string, unknown>;

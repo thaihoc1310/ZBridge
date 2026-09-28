@@ -11,6 +11,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -70,6 +71,21 @@ class MentionFollowupTrigger(enum.StrEnum):
 
     MENTION = "MENTION"
     PRICE_INQUIRY = "PRICE_INQUIRY"
+    #: Only ever on a ModelCallLog: the AI check behind a payment notice.
+    PAYMENT_CONFIRMATION = "PAYMENT_CONFIRMATION"
+
+
+class PaymentConfirmationStatus(enum.StrEnum):
+    """PENDING (AI deciding) -> CONFIRMED -> SENDING -> SENT, or a terminal
+    SKIPPED (not an affirmative payment), DUPLICATE (already told today), FAILED."""
+
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    SENDING = "SENDING"
+    SENT = "SENT"
+    SKIPPED = "SKIPPED"
+    DUPLICATE = "DUPLICATE"
+    FAILED = "FAILED"
 
 
 class MentionFollowupStatus(enum.StrEnum):
@@ -349,7 +365,10 @@ class DebtPaymentSettings(TimestampMixin, Base):
 
 
 class DebtPaymentConfirmation(Base):
-    """Durable evidence for one automatic paid-status change."""
+    """One trusted "đã thanh toán" message and the group notice it led to.
+
+    The debt state itself is left to staff: a customer can pay several times.
+    """
 
     __tablename__ = "debt_payment_confirmations"
     __table_args__ = (
@@ -357,6 +376,7 @@ class DebtPaymentConfirmation(Base):
             "customer_id", "source_message_id", name="uq_debt_payment_confirmation_message"
         ),
         Index("ix_debt_payment_confirmations_created", "created_at"),
+        Index("ix_debt_payment_confirmations_customer_status", "customer_id", "status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -369,11 +389,18 @@ class DebtPaymentConfirmation(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     matched_phrase: Mapped[str] = mapped_column(String(100), nullable=False)
     message_sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[PaymentConfirmationStatus] = mapped_column(
+        Enum(PaymentConfirmationStatus, native_enum=False, length=16),
+        default=PaymentConfirmationStatus.PENDING,
+        nullable=False,
+    )
+    ai_confidence: Mapped[float | None] = mapped_column(Float)
+    ai_reason: Mapped[str | None] = mapped_column(Text)
+    classified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Set once Zalo accepts each acknowledgement, so a retry skips what already went out.
     reply_message_id: Mapped[str | None] = mapped_column(String(128))
     link_message_id: Mapped[str | None] = mapped_column(String(128))
-    # Null in both while notifying: the customer is switched to paid only once
-    # every message went out (applied), or never if retries ran out (failed).
+    # applied_at: when every notice went out. failed_at: when it was given up.
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(

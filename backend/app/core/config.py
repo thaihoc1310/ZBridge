@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # are calibrated against different costs: a wrong skip loses a task, a wrong
     # price tag spams the customer's group.
     llm_price_confidence: float = 0.65
+    # A wrong "đã xác nhận thanh toán" is posted in front of the customer, so the
+    # bar sits above the tagging ones.
+    llm_payment_confidence: float = 0.75
     fptai_api_key: str = ""
     openai_api_key: str = ""
     mention_context_messages: int = 15
