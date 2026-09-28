@@ -168,7 +168,8 @@ export function DebtPaymentConfirmationSection() {
             <h3 className="font-display text-xl">Người được tag cập nhật công nợ</h3>
             <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
               Khi AI xác nhận, bot tag những người này kèm link trang khách hàng trên
-              ZBridge, rồi gửi link công nợ. Mỗi khách chỉ báo một lần mỗi ngày.
+              ZBridge, rồi gửi link công nợ. Mỗi khách chỉ báo một lần mỗi ngày;
+              khách chưa có file công nợ thì không báo.
             </p>
           </div>
           <button

@@ -397,6 +397,48 @@ async def test_an_exhausted_notice_fails_and_frees_the_day_for_another_try() -> 
     await engine.dispose()
 
 
+async def test_a_customer_without_a_sheet_gets_no_notice_and_no_ai_call() -> None:
+    engine, sessions, _group_id, customer_id, _run_id = await _setup()
+    enqueue = MagicMock()
+    verdict = _verdict(True, 0.99)
+    send = AsyncMock(return_value={"message_id": "zalo-msg"})
+    async with sessions() as db:
+        customer = await db.get(Customer, customer_id)
+        customer.debt_file_url = None
+        await db.commit()
+        with patch(f"{SERVICE}.celery_app.send_task", enqueue), patch(
+            f"{SERVICE}.complete_structured", verdict
+        ), patch(f"{SERVICE}.zalo_gateway.send_rich_text", send):
+            assert await apply_payment_confirmation(db, _event("pay-1", "Đã thanh toán")) is True
+        enqueue.assert_not_called()
+        verdict.assert_not_awaited()
+        send.assert_not_awaited()
+        skipped = await _confirmation(db, "pay-1")
+        assert skipped.status == PaymentConfirmationStatus.SKIPPED
+        assert skipped.ai_reason == debt_payment_service.NO_SHEET_REASON
+    await engine.dispose()
+
+
+async def test_a_sheet_removed_while_the_ai_decided_stops_the_notice() -> None:
+    engine, sessions, _group_id, customer_id, _run_id = await _setup()
+    send = AsyncMock(return_value={"message_id": "zalo-msg"})
+    async with sessions() as db:
+        confirmation = await _record_and_classify(
+            db, _event("pay-1", "Đã thanh toán"), _verdict(True, 0.95)
+        )
+        assert confirmation.status == PaymentConfirmationStatus.CONFIRMED
+        customer = await db.get(Customer, customer_id)
+        customer.debt_file_url = None
+        await db.commit()
+        with patch(f"{SERVICE}.zalo_gateway.send_rich_text", send), patch(
+            f"{SERVICE}.zalo_gateway.send_link", send
+        ):
+            assert await process_confirmation(db, confirmation.id) is True
+        send.assert_not_awaited()
+        assert (await _confirmation(db, "pay-1")).status == PaymentConfirmationStatus.SKIPPED
+    await engine.dispose()
+
+
 async def test_untracked_senders_and_unmatched_text_are_ignored() -> None:
     engine, sessions, _group_id, _customer_id, _run_id = await _setup()
     enqueue = MagicMock()

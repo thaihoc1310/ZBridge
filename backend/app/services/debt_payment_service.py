@@ -56,6 +56,7 @@ PENDING_STALE_AFTER = timedelta(hours=2)
 #: usually posts the transfer screenshot just before "đã thanh toán".
 CONTEXT_MESSAGES = 6
 CONTEXT_WINDOW = timedelta(minutes=30)
+NO_SHEET_REASON = "Không gửi: khách hàng chưa có file công nợ."
 IN_FLIGHT = (
     PaymentConfirmationStatus.PENDING,
     PaymentConfirmationStatus.CONFIRMED,
@@ -196,13 +197,16 @@ async def apply_payment_confirmation(
     if member is None or phrase is None:
         return False
 
-    customer_id = await db.scalar(
-        select(Customer.id)
-        .join(ZaloGroup, ZaloGroup.id == Customer.zalo_group_id)
-        .where(ZaloGroup.zalo_group_id == event.group_id)
-    )
-    if customer_id is None:
+    customer_row = (
+        await db.execute(
+            select(Customer.id, Customer.debt_file_url)
+            .join(ZaloGroup, ZaloGroup.id == Customer.zalo_group_id)
+            .where(ZaloGroup.zalo_group_id == event.group_id)
+        )
+    ).first()
+    if customer_row is None:
         return False
+    customer_id, debt_file_url = customer_row
     # A replayed or backfilled event must not start a second check.
     duplicate = await db.scalar(
         select(DebtPaymentConfirmation.id).where(
@@ -228,6 +232,19 @@ async def apply_payment_confirmation(
         message_sent_at=sent_at,
         status=PaymentConfirmationStatus.PENDING,
     )
+    if not debt_file_url:
+        # Nothing for the accountant to update, so no notice and no AI call; the
+        # row stays so "why did the bot say nothing?" has an answer.
+        confirmation.status = PaymentConfirmationStatus.SKIPPED
+        confirmation.ai_reason = NO_SHEET_REASON
+        db.add(confirmation)
+        await db.commit()
+        logger.info(
+            "DEBT_PAYMENT_CONFIRMATION_NO_SHEET customer_id=%s message_id=%s",
+            customer_id,
+            event.message_id,
+        )
+        return True
     db.add(confirmation)
     await db.commit()
     logger.info(
@@ -450,6 +467,15 @@ async def _claim_send(db: AsyncSession, confirmation: DebtPaymentConfirmation) -
     if confirmation.status != PaymentConfirmationStatus.CONFIRMED:
         await db.commit()
         return False
+    debt_file_url = await db.scalar(
+        select(Customer.debt_file_url).where(Customer.id == confirmation.customer_id)
+    )
+    if not debt_file_url:
+        # The sheet was removed while the AI was deciding.
+        confirmation.status = PaymentConfirmationStatus.SKIPPED
+        confirmation.ai_reason = NO_SHEET_REASON
+        await db.commit()
+        return False
     start, end = _local_day_bounds(confirmation.message_sent_at)
     earlier = await db.scalar(
         select(DebtPaymentConfirmation.id).where(
@@ -497,21 +523,19 @@ async def process_confirmation(
     key = f"debt-payment-confirmation:{customer.id}:{confirmation.source_message_id}"
     targets = settings.notification_targets if settings else []
     parts = _reply_parts(targets, customer_link(customer.id))
+    # _claim_send only lets a customer with a sheet through. The sheet goes out
+    # on its own so Zalo renders its preview card cleanly.
+    link = customer.debt_file_url
     steps = [
         (
             "reply_message_id",
             lambda: zalo_gateway.send_rich_text(group_id, parts, idempotency_key=key),
-        )
+        ),
+        (
+            "link_message_id",
+            lambda: zalo_gateway.send_link(group_id, link, idempotency_key=f"{key}:link"),
+        ),
     ]
-    if customer.debt_file_url:
-        link = customer.debt_file_url
-        # The sheet goes out on its own so Zalo renders its preview card cleanly.
-        steps.append(
-            (
-                "link_message_id",
-                lambda: zalo_gateway.send_link(group_id, link, idempotency_key=f"{key}:link"),
-            )
-        )
     for field, send in steps:
         if getattr(confirmation, field):
             continue
