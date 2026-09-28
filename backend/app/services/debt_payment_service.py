@@ -4,7 +4,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -55,6 +56,10 @@ PENDING_STALE_AFTER = timedelta(hours=2)
 CONTEXT_MESSAGES = 6
 CONTEXT_WINDOW = timedelta(minutes=30)
 NO_SHEET_REASON = "Không gửi: khách hàng chưa có file công nợ."
+NO_TARGETS_REASON = "Không gửi: chưa chọn người được tag cập nhật công nợ."
+#: A ModelCallLog still PROCESSING this long had its worker killed mid-call
+#: (timeout is 30s with one client retry).
+MODEL_CALL_ABANDONED_AFTER = timedelta(minutes=10)
 IN_FLIGHT = (
     PaymentConfirmationStatus.PENDING,
     PaymentConfirmationStatus.CONFIRMED,
@@ -87,7 +92,7 @@ Rules:
 - Judge only current_message. Earlier messages are context: an [image] just before it
   is usually the transfer receipt and supports a confirmation, but earlier text never
   turns a question into a confirmation.
-- confidence is your probability (0 to 1) that current_message confirms a payment.
+- confidence (0 to 1) is how sure you are of your is_payment_confirmation answer.
 - When unsure return false with low confidence: a wrong confirmation is posted in
   front of the customer.
 - reason: one short Vietnamese sentence.
@@ -97,7 +102,9 @@ Rules:
 class PaymentConfirmationVerdict(BaseModel):
     is_payment_confirmation: bool
     confidence: float = Field(ge=0, le=1)
-    reason: str = Field(default="", max_length=300)
+    # No max_length: a provider that does not enforce it would fail validation
+    # and lose a correct confirmation. Trimmed when stored instead.
+    reason: str = ""
 
 
 def _response(settings: DebtPaymentSettings) -> DebtPaymentSettingsResponse:
@@ -230,21 +237,27 @@ async def apply_payment_confirmation(
         message_sent_at=sent_at,
         status=PaymentConfirmationStatus.PENDING,
     )
-    if not debt_file_url:
-        # Nothing for the accountant to update, so no notice and no AI call; the
-        # row stays so "why did the bot say nothing?" has an answer.
+    skip_reason = _skip_reason(debt_file_url, settings.notification_targets)
+    if skip_reason:
+        # Nothing for anyone to act on, so no notice and no AI call; the row
+        # stays so "why did the bot say nothing?" has an answer.
         confirmation.status = PaymentConfirmationStatus.SKIPPED
-        confirmation.ai_reason = NO_SHEET_REASON
-        db.add(confirmation)
+        confirmation.ai_reason = skip_reason
+    db.add(confirmation)
+    try:
         await db.commit()
+    except IntegrityError:
+        # The gateway retried a slow POST and the first request won the insert.
+        await db.rollback()
+        return False
+    if skip_reason:
         logger.info(
-            "DEBT_PAYMENT_CONFIRMATION_NO_SHEET customer_id=%s message_id=%s",
+            "DEBT_PAYMENT_CONFIRMATION_SKIPPED customer_id=%s message_id=%s reason=%s",
             customer_id,
             event.message_id,
+            skip_reason,
         )
         return True
-    db.add(confirmation)
-    await db.commit()
     logger.info(
         "DEBT_PAYMENT_CONFIRMATION_MATCHED customer_id=%s group_id=%s sender_id=%s message_id=%s",
         customer_id,
@@ -254,6 +267,48 @@ async def apply_payment_confirmation(
     )
     await _enqueue(db, confirmation, CLASSIFY_TASK)
     return True
+
+
+def _skip_reason(debt_file_url: str | None, targets: list[dict[str, object]]) -> str | None:
+    if not debt_file_url:
+        return NO_SHEET_REASON
+    if not targets:
+        return NO_TARGETS_REASON
+    return None
+
+
+async def _transition(
+    db: AsyncSession,
+    confirmation: DebtPaymentConfirmation,
+    expected: tuple[PaymentConfirmationStatus, ...],
+    status: PaymentConfirmationStatus,
+    **values: object,
+) -> bool:
+    """Compare-and-set the status; False means another writer moved it first.
+
+    The AI task, the reply task (and any duplicate of it) and the stuck sweep
+    all write this row. Guarding every transition on the state it expects means
+    a notice can never go out after the sweep told staff to handle it by hand,
+    and two copies of the reply task cannot both send.
+    """
+    result = await db.execute(
+        update(DebtPaymentConfirmation)
+        .where(
+            DebtPaymentConfirmation.id == confirmation.id,
+            DebtPaymentConfirmation.status.in_(expected),
+        )
+        .values(status=status, **values)
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
+    await db.refresh(confirmation)
+    return result.rowcount == 1
+
+
+def _customer_page_url(customer_id: object) -> str:
+    """The link posted in the customer's group: the public app, never the alert host."""
+    base = app_settings.app_url.split(",")[0].strip().rstrip("/")
+    return f"{base}/customers/{customer_id}"
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -276,11 +331,15 @@ async def _enqueue(
             task,
         )
         reason = f"không xếp được tác vụ ({type(exc).__name__})"
-    confirmation.status = PaymentConfirmationStatus.FAILED
-    confirmation.failed_at = datetime.now(UTC)
-    await db.commit()
+    moved = await _transition(
+        db,
+        confirmation,
+        (PaymentConfirmationStatus.PENDING, PaymentConfirmationStatus.CONFIRMED),
+        PaymentConfirmationStatus.FAILED,
+        failed_at=datetime.now(UTC),
+    )
     loaded = await _load(db, confirmation.id)
-    if loaded is not None:
+    if moved and loaded is not None:
         await _report_failure(
             loaded, "DEBT_PAYMENT_CONFIRMATION_ENQUEUE_FAILED", reason, final=True
         )
@@ -367,6 +426,37 @@ async def classify_confirmation(
     db.add(log)
     await db.commit()
     try:
+        return await _classify_with_log(
+            db, confirmation, log, payload, attempt=attempt, final=final
+        )
+    except BaseException:
+        # Whatever went wrong after the call started, never leave the log saying
+        # "waiting for the model" for its whole retention.
+        await db.rollback()
+        await db.execute(
+            update(ModelCallLog)
+            .where(ModelCallLog.id == log.id, ModelCallLog.status == ModelCallStatus.PROCESSING)
+            .values(
+                status=ModelCallStatus.FAILED,
+                outcome="INTERNAL_ERROR",
+                error_type="InternalError",
+                finished_at=datetime.now(UTC),
+            )
+        )
+        await db.commit()
+        raise
+
+
+async def _classify_with_log(
+    db: AsyncSession,
+    confirmation: DebtPaymentConfirmation,
+    log: ModelCallLog,
+    payload: dict[str, object],
+    *,
+    attempt: int,
+    final: bool,
+) -> bool:
+    try:
         result = await complete_structured(
             payload, prompt=PAYMENT_CONFIRMATION_PROMPT, schema=PaymentConfirmationVerdict
         )
@@ -376,10 +466,15 @@ async def classify_confirmation(
         log.error_type = type(exc).__name__
         log.error_message = str(exc)[:500]
         log.finished_at = datetime.now(UTC)
-        if final:
-            confirmation.status = PaymentConfirmationStatus.FAILED
-            confirmation.failed_at = datetime.now(UTC)
         await db.commit()
+        if final and not await _transition(
+            db,
+            confirmation,
+            (PaymentConfirmationStatus.PENDING,),
+            PaymentConfirmationStatus.FAILED,
+            failed_at=datetime.now(UTC),
+        ):
+            return True  # the sweep already closed and reported it
         logger.warning(
             "DEBT_PAYMENT_CONFIRMATION_AI_FAILED confirmation_id=%s error=%s final=%s",
             confirmation.id,
@@ -393,6 +488,7 @@ async def classify_confirmation(
             final=final,
             attempt=attempt,
             attempts=CLASSIFY_ATTEMPTS,
+            service="celery-ai",
         )
         return False
 
@@ -402,12 +498,6 @@ async def classify_confirmation(
         verdict.is_payment_confirmation
         and verdict.confidence >= app_settings.llm_payment_confidence
     )
-    confirmation.ai_confidence = verdict.confidence
-    confirmation.ai_reason = verdict.reason
-    confirmation.classified_at = datetime.now(UTC)
-    confirmation.status = (
-        PaymentConfirmationStatus.CONFIRMED if confirmed else PaymentConfirmationStatus.SKIPPED
-    )
     log.status = ModelCallStatus.SUCCEEDED
     log.outcome = "SCHEDULED" if confirmed else "SKIPPED"
     log.response_payload = verdict.model_dump(mode="json")
@@ -416,13 +506,24 @@ async def classify_confirmation(
     log.latency_ms = result.latency_ms
     log.finished_at = datetime.now(UTC)
     await db.commit()
+    moved = await _transition(
+        db,
+        confirmation,
+        (PaymentConfirmationStatus.PENDING,),
+        PaymentConfirmationStatus.CONFIRMED if confirmed else PaymentConfirmationStatus.SKIPPED,
+        ai_confidence=verdict.confidence,
+        ai_reason=verdict.reason[:300],
+        classified_at=datetime.now(UTC),
+    )
     logger.info(
-        "DEBT_PAYMENT_CONFIRMATION_CLASSIFIED confirmation_id=%s confirmed=%s confidence=%.2f",
+        "DEBT_PAYMENT_CONFIRMATION_CLASSIFIED confirmation_id=%s confirmed=%s confidence=%.2f"
+        " applied=%s",
         confirmation.id,
         confirmed,
         verdict.confidence,
+        moved,
     )
-    if confirmed:
+    if confirmed and moved:
         await _enqueue(db, confirmation, REPLY_TASK)
     return True
 
@@ -443,28 +544,39 @@ def _reply_parts(targets: list[dict[str, object]], page_url: str) -> list[dict[s
     return parts
 
 
-async def _claim_send(db: AsyncSession, confirmation: DebtPaymentConfirmation) -> bool:
+async def _claim_send(
+    db: AsyncSession, confirmation: DebtPaymentConfirmation, *, attempt: int
+) -> bool:
     """Take the right to notify for this confirmed message.
 
     Every confirmed message is announced: a customer can pay several times. Only
-    the same message is never announced twice (see the source_message_id check).
+    the same message is never announced twice: the first attempt must move the
+    row CONFIRMED -> SENDING itself, so a duplicate copy of the task stops here,
+    while this task's own retries find it SENDING and resume.
     """
     await db.refresh(confirmation)
     if confirmation.status == PaymentConfirmationStatus.SENDING:
-        return True
+        return attempt > 0
     if confirmation.status != PaymentConfirmationStatus.CONFIRMED:
         return False
     debt_file_url = await db.scalar(
         select(Customer.debt_file_url).where(Customer.id == confirmation.customer_id)
     )
-    # The sheet may have been removed while the AI was deciding.
-    confirmation.status = (
-        PaymentConfirmationStatus.SENDING if debt_file_url else PaymentConfirmationStatus.SKIPPED
+    settings = await db.get(DebtPaymentSettings, GLOBAL_SETTINGS_ID)
+    # The sheet or the targets may have been removed while the AI was deciding.
+    skip_reason = _skip_reason(debt_file_url, settings.notification_targets if settings else [])
+    if skip_reason:
+        await _transition(
+            db,
+            confirmation,
+            (PaymentConfirmationStatus.CONFIRMED,),
+            PaymentConfirmationStatus.SKIPPED,
+            ai_reason=skip_reason,
+        )
+        return False
+    return await _transition(
+        db, confirmation, (PaymentConfirmationStatus.CONFIRMED,), PaymentConfirmationStatus.SENDING
     )
-    if not debt_file_url:
-        confirmation.ai_reason = NO_SHEET_REASON
-    await db.commit()
-    return bool(debt_file_url)
 
 
 async def process_confirmation(
@@ -481,14 +593,14 @@ async def process_confirmation(
     answer from its receipt when only the response to an earlier attempt was lost.
     """
     confirmation = await _load(db, confirmation_id)
-    if confirmation is None or not await _claim_send(db, confirmation):
+    if confirmation is None or not await _claim_send(db, confirmation, attempt=attempt):
         return True
     settings = await db.get(DebtPaymentSettings, GLOBAL_SETTINGS_ID)
     customer = confirmation.customer
     group_id = customer.group.zalo_group_id
     key = f"debt-payment-confirmation:{customer.id}:{confirmation.source_message_id}"
     targets = settings.notification_targets if settings else []
-    parts = _reply_parts(targets, customer_link(customer.id))
+    parts = _reply_parts(targets, _customer_page_url(customer.id))
     # _claim_send only lets a customer with a sheet through. The sheet goes out
     # on its own so Zalo renders its preview card cleanly.
     link = customer.debt_file_url
@@ -516,10 +628,15 @@ async def process_confirmation(
                 error_code=exc.code,
                 error_message=exc.message,
             )
-            if final:
-                confirmation.status = PaymentConfirmationStatus.FAILED
-                confirmation.failed_at = datetime.now(UTC)
             await db.commit()
+            if final:
+                await _transition(
+                    db,
+                    confirmation,
+                    (PaymentConfirmationStatus.SENDING,),
+                    PaymentConfirmationStatus.FAILED,
+                    failed_at=datetime.now(UTC),
+                )
             logger.warning(
                 "DEBT_PAYMENT_CONFIRMATION_REPLY_FAILED confirmation_id=%s code=%s final=%s",
                 confirmation.id,
@@ -546,9 +663,13 @@ async def process_confirmation(
         )
         await db.commit()
 
-    confirmation.status = PaymentConfirmationStatus.SENT
-    confirmation.applied_at = datetime.now(UTC)
-    await db.commit()
+    await _transition(
+        db,
+        confirmation,
+        (PaymentConfirmationStatus.SENDING,),
+        PaymentConfirmationStatus.SENT,
+        applied_at=datetime.now(UTC),
+    )
     logger.info(
         "DEBT_PAYMENT_CONFIRMATION_SENT customer_id=%s confirmation_id=%s",
         customer.id,
@@ -574,7 +695,12 @@ async def expire_stuck_confirmations(db: AsyncSession) -> int:
                 )
                 .where(
                     DebtPaymentConfirmation.status.in_(IN_FLIGHT),
-                    DebtPaymentConfirmation.created_at
+                    # From the AI verdict once there is one: a slow AI queue must
+                    # not eat into the reply task's own retry schedule.
+                    func.coalesce(
+                        DebtPaymentConfirmation.classified_at,
+                        DebtPaymentConfirmation.created_at,
+                    )
                     < datetime.now(UTC) - PENDING_STALE_AFTER,
                 )
                 .with_for_update(skip_locked=True)
@@ -598,6 +724,48 @@ async def expire_stuck_confirmations(db: AsyncSession) -> int:
     return len(stuck)
 
 
+async def close_abandoned_model_calls(db: AsyncSession) -> int:
+    """Close model-call logs whose worker died mid-call (OOM, deploy, kill).
+
+    Covers every trigger; otherwise such a row reads "waiting for the model"
+    for its whole retention.
+    """
+    result = await db.execute(
+        update(ModelCallLog)
+        .where(
+            ModelCallLog.status == ModelCallStatus.PROCESSING,
+            ModelCallLog.created_at < datetime.now(UTC) - MODEL_CALL_ABANDONED_AFTER,
+        )
+        .values(
+            status=ModelCallStatus.FAILED,
+            outcome="ABANDONED",
+            error_type="WorkerLost",
+            error_message="Tác vụ gọi model bị dừng giữa chừng.",
+            finished_at=datetime.now(UTC),
+        )
+    )
+    await db.commit()
+    return result.rowcount or 0
+
+
+async def report_task_error(
+    db: AsyncSession, confirmation_id: uuid.UUID, stage: str, exc: BaseException, attempt: int
+) -> None:
+    """Alert an unexpected (non-model, non-gateway) error the task will retry."""
+    confirmation = await _load(db, confirmation_id)
+    if confirmation is None:
+        return
+    await _report_failure(
+        confirmation,
+        f"DEBT_PAYMENT_CONFIRMATION_{stage}_ERROR",
+        f"lỗi hệ thống ({type(exc).__name__})",
+        final=False,
+        attempt=attempt,
+        attempts=CLASSIFY_ATTEMPTS if stage == "CLASSIFY" else REPLY_ATTEMPTS,
+        service="celery-ai" if stage == "CLASSIFY" else "celery-worker",
+    )
+
+
 async def _report_failure(
     confirmation: DebtPaymentConfirmation,
     code: str,
@@ -606,6 +774,7 @@ async def _report_failure(
     final: bool,
     attempt: int = 0,
     attempts: int = REPLY_ATTEMPTS,
+    service: str = "celery-worker",
 ) -> None:
     customer = confirmation.customer
     alert_code = (
@@ -614,13 +783,18 @@ async def _report_failure(
     await report_async(
         alert_code,
         (
-            f"Tin \"đã thanh toán\" chưa được báo cho kế toán, cần xử lý tay: {message}"
+            (
+                "Đã gửi tin tag kế toán nhưng chưa gửi được link công nợ, cần gửi tay: "
+                if confirmation.reply_message_id
+                else "Tin \"đã thanh toán\" chưa được báo cho kế toán, cần xử lý tay: "
+            )
+            + message
             if final
             else f"Xử lý tin \"đã thanh toán\" lỗi (lần {attempt + 1}/{attempts}), sẽ thử"
             f" lại: {message}"
         ),
         severity=Severity.ERROR if final else Severity.WARNING,
-        service="celery-worker",
+        service=service,
         context={
             "Khách hàng": customer.group.name,
             "Xem tại": customer_link(customer.id),

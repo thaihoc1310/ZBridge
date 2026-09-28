@@ -1,3 +1,4 @@
+import logging
 import secrets
 
 from fastapi import APIRouter, Depends, Header
@@ -19,6 +20,7 @@ from app.services.mention_automation_service import (
     schedule_from_incoming_event,
 )
 
+logger = logging.getLogger("zbridge.internal_events")
 router = APIRouter(prefix="/internal/zalo", tags=["internal"])
 
 
@@ -39,7 +41,20 @@ async def receive_zalo_event(
         raise AppError("UNAUTHORIZED", "Invalid event secret.", 401)
     if isinstance(event, IncomingGroupReaction):
         return await acknowledge_from_reaction(db, event)
-    await apply_payment_confirmation(db, event)
+    try:
+        await apply_payment_confirmation(db, event)
+    except Exception as exc:
+        # Isolated on purpose: a payment-feature error used to fail the whole
+        # event, so the gateway retried it forever and the group's replies and
+        # reactions (and with them every mention send) stayed blocked.
+        await db.rollback()
+        logger.exception("DEBT_PAYMENT_CONFIRMATION_HOOK_FAILED message_id=%s", event.message_id)
+        await report_async(
+            "DEBT_PAYMENT_CONFIRMATION_HOOK_FAILED",
+            f"Không xử lý được tin \"đã thanh toán\" ({type(exc).__name__}); tag tên vẫn chạy.",
+            service="backend",
+            context={"group_id": event.group_id, "message_id": event.message_id},
+        )
     return await schedule_from_incoming_event(db, event)
 
 
