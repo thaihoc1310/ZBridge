@@ -253,7 +253,7 @@ export function MentionSettingsPage() {
       <Modal
         open={panel === "debt-payment"}
         onClose={() => setPanel(null)}
-        className="max-w-3xl"
+        className="max-w-6xl"
         title="Báo xác nhận thanh toán"
         description="AI chỉ tính câu khẳng định đã thanh toán, rồi bot tag kế toán kèm link trang khách và link công nợ. Trạng thái công nợ do kế toán tự chuyển."
       >

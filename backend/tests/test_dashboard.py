@@ -56,11 +56,12 @@ def _model_call(
     latency_ms: int,
     created_at: datetime,
     status: ModelCallStatus = ModelCallStatus.SUCCEEDED,
+    trigger: MentionFollowupTrigger = MentionFollowupTrigger.MENTION,
 ) -> ModelCallLog:
     return ModelCallLog(
         customer_id=customer.id,
         customer_name="Khach",
-        trigger=MentionFollowupTrigger.MENTION,
+        trigger=trigger,
         provider="fptcloud",
         model="DeepSeek-V4-Flash",
         request_payload={},
@@ -271,7 +272,12 @@ async def test_todays_messages_are_broken_down_by_feature(monkeypatch) -> None:
         await db.commit()
         result = await dashboard(db=db, _actor=None)  # type: ignore[arg-type]
 
-    assert result.messages_by_type_today == {"debt": 3, "mention": 1, "manual": 1}
+    assert result.messages_by_type_today == {
+        "debt": 3,
+        "mention": 1,
+        "payment": 0,
+        "manual": 1,
+    }
     assert result.messages_today == 5
     assert result.failed_today == 1
     await engine.dispose()
@@ -473,6 +479,14 @@ async def test_ai_stats_summarise_todays_classifier_spend(monkeypatch) -> None:
                 # Yesterday: out of scope entirely.
                 _model_call(
                     customer, outcome="SKIPPED", latency_ms=50, created_at=_local_at(-1, 9)
+                ),
+                # A payment check skipping "đã thanh toán chưa?" did not block a tag.
+                _model_call(
+                    customer,
+                    outcome="SKIPPED",
+                    latency_ms=7000,
+                    created_at=_local_at(0, 13),
+                    trigger=MentionFollowupTrigger.PAYMENT_CONFIRMATION,
                 ),
                 # A bad producer clock must not leak tomorrow into today's card.
                 _model_call(

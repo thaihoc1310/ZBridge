@@ -241,6 +241,7 @@ function FeatureBreakdown({ data }: { data?: Dashboard }) {
   const chips = [
     { key: "debt", label: "Nhắc nợ", value: byType?.debt ?? 0 },
     { key: "mention", label: "Tag tên", value: byType?.mention ?? 0 },
+    { key: "payment", label: "Báo thanh toán", value: byType?.payment ?? 0 },
     { key: "manual", label: "Thủ công", value: byType?.manual ?? 0 },
   ];
   if (chips.every(({ value }) => value === 0)) return null;

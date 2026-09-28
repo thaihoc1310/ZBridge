@@ -29,6 +29,7 @@ from app.models.entities import (
     DeliveryStatus,
     DeliveryType,
     MentionFollowupStatus,
+    MentionFollowupTrigger,
     ModelCallStatus,
 )
 from app.schemas.api import (
@@ -58,7 +59,10 @@ _DELIVERY_FEATURE = {
     DeliveryType.DEBT_REMINDER_MESSAGE: "debt",
     DeliveryType.MENTION_AUTOMATION: "mention",
     DeliveryType.MANUAL_MESSAGE: "manual",
+    DeliveryType.DEBT_PAYMENT_CONFIRMATION: "payment",
 }
+#: The AI card is about tag decisions; payment checks have their own log view.
+_TAG_TRIGGERS = (MentionFollowupTrigger.MENTION, MentionFollowupTrigger.PRICE_INQUIRY)
 
 _ACTIVE_FOLLOWUP_STATUSES = (
     MentionFollowupStatus.CLASSIFYING,
@@ -149,7 +153,7 @@ async def dashboard(
 
     messages_by_hour = [0] * 24
     by_day: dict[date, dict[str, int]] = defaultdict(lambda: {"sent": 0, "failed": 0})
-    by_type_today: dict[str, int] = {"debt": 0, "mention": 0, "manual": 0}
+    by_type_today: dict[str, int] = {"debt": 0, "mention": 0, "payment": 0, "manual": 0}
     messages_today = failed_today = messages_yesterday = 0
 
     for created_at, status, delivery_type in delivery_rows:
@@ -266,6 +270,7 @@ async def dashboard(
             ).where(
                 ModelCallLog.created_at >= today_start,
                 ModelCallLog.created_at < tomorrow_start,
+                ModelCallLog.trigger.in_(_TAG_TRIGGERS),
             )
         )
     ).one()
@@ -276,6 +281,7 @@ async def dashboard(
             .where(
                 ModelCallLog.created_at >= today_start,
                 ModelCallLog.created_at < tomorrow_start,
+                ModelCallLog.trigger.in_(_TAG_TRIGGERS),
                 ModelCallLog.outcome == "SKIPPED",
             )
         )
@@ -285,6 +291,7 @@ async def dashboard(
         select(func.avg(ModelCallLog.latency_ms)).where(
             ModelCallLog.created_at >= today_start,
             ModelCallLog.created_at < tomorrow_start,
+            ModelCallLog.trigger.in_(_TAG_TRIGGERS),
             ModelCallLog.status == ModelCallStatus.SUCCEEDED,
             ModelCallLog.latency_ms.is_not(None),
         )

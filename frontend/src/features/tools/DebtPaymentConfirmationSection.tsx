@@ -132,82 +132,87 @@ export function DebtPaymentConfirmationSection() {
         </p>
       )}
 
-      <section>
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h3 className="font-display text-xl">Người được theo dõi</h3>
-            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-              Chỉ tin nhắn của những người này mới được xét. AI kiểm tra tin có phải
-              câu khẳng định đã thanh toán không (câu hỏi như "đã thanh toán chưa?"
-              bị bỏ qua) rồi mới báo; trạng thái công nợ do kế toán tự chuyển.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() =>
-              setPicking((value) => (value === "tracked" ? null : "tracked"))
-            }
-            className="inline-flex shrink-0 items-center gap-1.5 text-sm font-medium text-accent"
-          >
-            <Plus className="h-4 w-4" />
-            {picking === "tracked" ? "Đóng" : "Thêm người"}
-          </button>
+      {/* Two columns on a desktop: who is involved on the left, what they say on the
+          right. A phone keeps the single stacked column. */}
+      <div className="grid gap-6 lg:grid-cols-2 lg:gap-8">
+        <div className="space-y-6">
+          <section>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="font-display text-xl">Người được theo dõi</h3>
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                  Chỉ tin nhắn của những người này mới được xét. AI kiểm tra tin có phải
+                  câu khẳng định đã thanh toán không (câu hỏi như "đã thanh toán chưa?"
+                  bị bỏ qua) rồi mới báo; trạng thái công nợ do kế toán tự chuyển.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setPicking((value) => (value === "tracked" ? null : "tracked"))
+                }
+                className="inline-flex shrink-0 items-center gap-1.5 text-sm font-medium text-accent"
+              >
+                <Plus className="h-4 w-4" />
+                {picking === "tracked" ? "Đóng" : "Thêm người"}
+              </button>
+            </div>
+
+            {renderPicker("tracked")}
+            <SelectedMembers
+              members={members}
+              empty="Chưa chọn người nào nên tính năng chưa hoạt động."
+              onChange={setMembers}
+            />
+          </section>
+
+          <section className="border-t border-border pt-6">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="font-display text-xl">Người được tag cập nhật công nợ</h3>
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                  Khi AI xác nhận, bot tag những người này kèm link trang khách hàng trên
+                  ZBridge, rồi gửi link công nợ. Khách chưa có file công nợ thì không
+                  báo.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setPicking((value) =>
+                    value === "notification" ? null : "notification",
+                  )
+                }
+                className="inline-flex shrink-0 items-center gap-1.5 text-sm font-medium text-accent"
+              >
+                <Plus className="h-4 w-4" />
+                {picking === "notification" ? "Đóng" : "Thêm người"}
+              </button>
+            </div>
+            {renderPicker("notification")}
+            <SelectedMembers
+              members={notificationTargets}
+              empty="Chưa chọn người nhận nên bot sẽ không gửi thông báo sau khi xác nhận."
+              onChange={setNotificationTargets}
+            />
+          </section>
         </div>
-
-        {renderPicker("tracked")}
-        <SelectedMembers
-          members={members}
-          empty="Chưa chọn người nào nên tính năng chưa hoạt động."
-          onChange={setMembers}
-        />
-      </section>
-
-      <section className="border-t border-border pt-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h3 className="font-display text-xl">Người được tag cập nhật công nợ</h3>
-            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-              Khi AI xác nhận, bot tag những người này kèm link trang khách hàng trên
-              ZBridge, rồi gửi link công nợ. Khách chưa có file công nợ thì không
-              báo.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() =>
-              setPicking((value) =>
-                value === "notification" ? null : "notification",
-              )
-            }
-            className="inline-flex shrink-0 items-center gap-1.5 text-sm font-medium text-accent"
-          >
-            <Plus className="h-4 w-4" />
-            {picking === "notification" ? "Đóng" : "Thêm người"}
-          </button>
-        </div>
-        {renderPicker("notification")}
-        <SelectedMembers
-          members={notificationTargets}
-          empty="Chưa chọn người nhận nên bot sẽ không gửi thông báo sau khi xác nhận."
-          onChange={setNotificationTargets}
-        />
-      </section>
-
-      <section className="border-t border-border pt-6">
-        <h3 className="font-display text-xl">Câu xác nhận thanh toán</h3>
-        <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-          Mỗi dòng một câu. Hệ thống tìm câu này bên trong tin nhắn, không phân
-          biệt chữ hoa/thường, dấu câu hoặc khoảng trắng; dấu tiếng Việt vẫn được
-          phân biệt.
-        </p>
-        <textarea
-          className="mt-4 min-h-52 w-full resize-y rounded-xl border border-border bg-muted/30 p-4 text-sm leading-7 outline-none focus:border-accent focus:ring-2 focus:ring-accent/15"
-          value={phrases}
-          onChange={(event) => setPhrases(event.target.value)}
-          placeholder={"đã thanh toán\nđã tt\nda thanh toan"}
-          aria-label="Các câu xác nhận thanh toán"
-        />
-      </section>
+        <section className="border-t border-border pt-6 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
+          <h3 className="font-display text-xl">Câu xác nhận thanh toán</h3>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+            Mỗi dòng một câu. Hệ thống tìm câu này bên trong tin nhắn, không phân
+            biệt chữ hoa/thường, dấu câu hoặc khoảng trắng; dấu tiếng Việt vẫn được
+            phân biệt.
+          </p>
+          <textarea
+            className="mt-4 min-h-52 w-full resize-y lg:min-h-[22rem] rounded-xl border border-border bg-muted/30 p-4 text-sm leading-7 outline-none focus:border-accent focus:ring-2 focus:ring-accent/15"
+            value={phrases}
+            onChange={(event) => setPhrases(event.target.value)}
+            placeholder={"đã thanh toán\nđã tt\nda thanh toan"}
+            aria-label="Các câu xác nhận thanh toán"
+          />
+        </section>
+      </div>
 
       <div className="flex justify-end border-t border-border pt-5">
         <Button
