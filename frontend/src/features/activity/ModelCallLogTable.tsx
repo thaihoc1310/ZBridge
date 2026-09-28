@@ -35,12 +35,34 @@ function records(value: unknown): Array<Record<string, unknown>> {
     : [];
 }
 
+const isPayment = (entry: ModelCallLog) => entry.trigger === "PAYMENT_CONFIRMATION";
+
 function conversation(entry: ModelCallLog): ConversationMessage[] {
+  if (isPayment(entry)) {
+    // Payment checks send the message being judged plus a few earlier ones.
+    const current = entry.request_payload.current_message;
+    return [
+      ...records(entry.request_payload.earlier_messages),
+      ...(current && typeof current === "object" ? [current as Record<string, unknown>] : []),
+    ] as ConversationMessage[];
+  }
   return records(entry.request_payload.conversation) as ConversationMessage[];
 }
 
 function decisions(entry: ModelCallLog): Decision[] {
-  return records(entry.response_payload?.decisions) as Decision[];
+  const response = entry.response_payload;
+  if (isPayment(entry)) {
+    if (!response || typeof response.is_payment_confirmation !== "boolean") return [];
+    return [{
+      target_display_name: "Tin nhắn",
+      classification: response.is_payment_confirmation ? "Xác nhận đã thanh toán" : "Không phải xác nhận",
+      confidence: typeof response.confidence === "number" ? response.confidence : undefined,
+      reason_code: typeof response.reason === "string" ? response.reason : undefined,
+      // The threshold, not just the boolean, decided whether a notice went out.
+      skipped: entry.outcome === "SKIPPED",
+    }];
+  }
+  return records(response?.decisions) as Decision[];
 }
 
 function prettyJson(value: unknown): string {
@@ -133,17 +155,20 @@ function RequestPayloadCell({
   );
 }
 
-function FinalTagDecision({ decision, showTarget }: { decision: Decision; showTarget: boolean }) {
+function FinalTagDecision({ decision, showTarget, payment = false }: { decision: Decision; showTarget: boolean; payment?: boolean }) {
   if (typeof decision.skipped !== "boolean") return null;
   const label = decision.target_display_name || "Target";
+  const verdict = payment
+    ? decision.skipped ? "Không báo" : "Đã báo kế toán"
+    : decision.skipped ? "Không giữ tag" : "Giữ tag";
   return <span className={`inline-flex max-w-full items-center rounded-full px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide ${decision.skipped ? "bg-muted text-muted-foreground" : "bg-success-bg text-success-fg"}`} title={showTarget ? label : undefined}>
-    <span className="truncate">{showTarget ? `${label} · ` : ""}{decision.skipped ? "Không giữ tag" : "Giữ tag"}</span>
+    <span className="truncate">{showTarget ? `${label} · ` : ""}{verdict}</span>
   </span>;
 }
 
 function FinalTagDecisions({ entry, decisions: items }: { entry: ModelCallLog; decisions: Decision[] }) {
   const decided = items.filter((decision) => typeof decision.skipped === "boolean");
-  if (decided.length) return <div className="mt-2 flex max-w-56 flex-col items-start gap-1.5">{decided.map((decision, index) => <FinalTagDecision key={`${decision.target_user_id}-${index}`} decision={decision} showTarget={decided.length > 1} />)}</div>;
+  if (decided.length) return <div className="mt-2 flex max-w-56 flex-col items-start gap-1.5">{decided.map((decision, index) => <FinalTagDecision key={`${decision.target_user_id}-${index}`} decision={decision} showTarget={decided.length > 1} payment={isPayment(entry)} />)}</div>;
   if (entry.outcome === "SAFE_FALLBACK_TAG" || entry.outcome === "SAFE_FALLBACK_SKIP") {
     return <div className="mt-2"><FinalTagDecision decision={{ skipped: entry.outcome === "SAFE_FALLBACK_SKIP" }} showTarget={false} /></div>;
   }
@@ -170,7 +195,8 @@ export function ModelCallLogTable({ data, loading, page, onPageChange }: Props) 
             const messages = conversation(entry);
             const modelDecisions = decisions(entry);
             const currentMessageId = entry.request_payload.current_message_id;
-            const currentText = messages.find((message) => message.message_id === currentMessageId)?.text
+            const currentText = (isPayment(entry) ? messages[messages.length - 1]?.text : undefined)
+              || messages.find((message) => message.message_id === currentMessageId)?.text
               || messages[messages.length - 1]?.text
               || "Không có text";
             return <tr key={entry.id} className="border-b border-border align-top last:border-0 hover:bg-accent-soft/50">
@@ -186,7 +212,7 @@ export function ModelCallLogTable({ data, loading, page, onPageChange }: Props) 
           })}
         </tbody>
       </table>
-      {!loading && data?.items.length === 0 && <div className="flex flex-col items-center px-6 py-16 text-center"><span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-muted"><CheckCircle2 className="h-7 w-7 text-muted-foreground" /></span><h3 className="mt-5 font-semibold">Chưa có lượt gọi model phù hợp</h3><p className="mt-1 text-sm text-muted-foreground">Nhật ký xuất hiện khi AI phân loại tin tag tên hoặc câu hỏi báo giá.</p></div>}
+      {!loading && data?.items.length === 0 && <div className="flex flex-col items-center px-6 py-16 text-center"><span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-muted"><CheckCircle2 className="h-7 w-7 text-muted-foreground" /></span><h3 className="mt-5 font-semibold">Chưa có lượt gọi model phù hợp</h3><p className="mt-1 text-sm text-muted-foreground">Nhật ký xuất hiện khi AI phân loại tin tag tên, câu hỏi báo giá hoặc tin xác nhận thanh toán.</p></div>}
     </div>
     <footer className="flex flex-col gap-3 border-t border-border px-5 py-4 text-sm sm:flex-row sm:items-center sm:justify-between"><p className="text-muted-foreground"><strong className="text-foreground">{data?.total ?? 0}</strong> lượt gọi model · giữ 7 ngày</p><div className="flex items-center gap-2"><Button variant="secondary" className="h-10 min-h-10 w-10 p-0" disabled={page <= 1} onClick={() => onPageChange(page - 1)}><ChevronLeft className="h-4 w-4" /></Button><span className="min-w-24 text-center text-xs">Trang {page} / {data?.pages ?? 1}</span><Button variant="secondary" className="h-10 min-h-10 w-10 p-0" disabled={page >= (data?.pages ?? 1)} onClick={() => onPageChange(page + 1)}><ChevronRight className="h-4 w-4" /></Button></div></footer>
   </>;
