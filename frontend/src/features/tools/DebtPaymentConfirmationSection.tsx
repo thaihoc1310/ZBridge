@@ -128,7 +128,7 @@ export function DebtPaymentConfirmationSection() {
       )}
       {save.isSuccess && (
         <p className="rounded-xl border border-success-border bg-success-bg p-4 text-sm text-success-fg">
-          Đã lưu cấu hình tự động ghi nhận thanh toán.
+          Đã lưu cấu hình báo xác nhận thanh toán.
         </p>
       )}
 

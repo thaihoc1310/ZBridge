@@ -154,16 +154,6 @@ export type DashboardUpcomingReminder = {
   customer_name: string;
   next_run_at: string;
 };
-export type DashboardDebtPaymentConfirmation = {
-  id: string;
-  customer_id: string;
-  customer_name: string;
-  customer_avatar_url: string | null;
-  sender_display_name: string | null;
-  content: string;
-  matched_phrase: string;
-  message_sent_at: string;
-};
 export type Dashboard = {
   bot_status: BotStatus;
   customer_count: number;
@@ -195,7 +185,6 @@ export type Dashboard = {
   ai_blocked_today: number;
   ai_avg_latency_ms: number | null;
   ai_tokens_today: Record<string, number>;
-  debt_payment_confirmations: DashboardDebtPaymentConfirmation[];
 };
 
 export type GroupMember = {

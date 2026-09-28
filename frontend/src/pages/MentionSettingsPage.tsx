@@ -170,8 +170,8 @@ export function MentionSettingsPage() {
               <PanelCard
                 icon={BadgeCheck}
                 tone="emerald"
-                title="Tự động ghi nhận thanh toán"
-                description="Chọn người và câu nhắn được phép tự chuyển khách hàng sang đã thanh toán."
+                title="Báo xác nhận thanh toán"
+                description="Khi người được theo dõi khẳng định đã thanh toán, bot tag kế toán kèm link công nợ."
                 summary={
                   debtPayment.isLoading
                     ? "Đang tải..."
@@ -254,8 +254,8 @@ export function MentionSettingsPage() {
         open={panel === "debt-payment"}
         onClose={() => setPanel(null)}
         className="max-w-3xl"
-        title="Tự động ghi nhận thanh toán"
-        description="Tin nhắn hợp lệ sẽ xử lý giống thao tác chuyển công nợ sang Đã thanh toán trên giao diện."
+        title="Báo xác nhận thanh toán"
+        description="AI chỉ tính câu khẳng định đã thanh toán, rồi bot tag kế toán kèm link trang khách và link công nợ. Trạng thái công nợ do kế toán tự chuyển."
       >
         <DebtPaymentConfirmationSection />
       </Modal>

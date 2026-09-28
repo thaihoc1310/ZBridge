@@ -244,17 +244,6 @@ class DashboardUpcomingReminder(BaseModel):
     next_run_at: datetime
 
 
-class DashboardDebtPaymentConfirmation(BaseModel):
-    id: uuid.UUID
-    customer_id: uuid.UUID
-    customer_name: str
-    customer_avatar_url: str | None = None
-    sender_display_name: str | None = None
-    content: str
-    matched_phrase: str
-    message_sent_at: datetime
-
-
 class DashboardResponse(BaseModel):
     bot_status: BotStatus
     customer_count: int
@@ -297,9 +286,6 @@ class DashboardResponse(BaseModel):
     ai_blocked_today: int = 0
     ai_avg_latency_ms: int | None = None
     ai_tokens_today: dict[str, int] = Field(default_factory=dict)
-    debt_payment_confirmations: list[DashboardDebtPaymentConfirmation] = Field(
-        default_factory=list
-    )
 
 
 class HealthResponse(BaseModel):
