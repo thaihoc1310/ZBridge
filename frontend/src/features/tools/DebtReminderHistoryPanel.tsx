@@ -37,17 +37,29 @@ const stepNames = {
   MESSAGE: "Nội dung nhắc",
 };
 
+/** The months a 45-day retention can still hold runs for: this one and the two before. */
+function retainedMonths(): Array<{ value: string; label: string }> {
+  const now = new Date();
+  return [0, 1, 2].map((back) => {
+    const date = new Date(now.getFullYear(), now.getMonth() - back, 1);
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    return { value: `${date.getFullYear()}-${month}`, label: `Tháng ${month}/${date.getFullYear()}` };
+  });
+}
+
 export function DebtReminderHistoryPanel() {
   const [search, setSearch] = useState("");
+  // Empty = everything still retained. The current month alone left the list
+  // nearly empty at the start of every month.
+  const [month, setMonth] = useState("");
   const [status, setStatus] = useState("");
   const [direction, setDirection] = useState("desc");
   const [page, setPage] = useState(1);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const now = new Date();
-  const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   const query = useQuery({
     queryKey: [
       "debt-reminder-history",
+      month,
       search,
       status,
       direction,
@@ -55,7 +67,6 @@ export function DebtReminderHistoryPanel() {
     ],
     queryFn: () => {
       const params = new URLSearchParams({
-        month,
         search,
         sort: "scheduled",
         direction,
@@ -63,6 +74,7 @@ export function DebtReminderHistoryPanel() {
         limit: "50",
       });
       if (status) params.set("status", status);
+      if (month) params.set("month", month);
       return api<DebtReminderRunList>(
         `/tools/debt-reminders/history?${params.toString()}`,
       );
@@ -96,7 +108,10 @@ export function DebtReminderHistoryPanel() {
         ))}
       </div>
       <p className="text-xs text-muted-foreground">
-        Hiển thị lượt trong tháng hiện tại còn tồn tại. Dữ liệu được lưu 45 ngày.
+        {month
+          ? "Chỉ hiển thị các lượt của tháng đã chọn."
+          : "Hiển thị mọi lượt còn lưu trong 45 ngày gần nhất."}{" "}
+        Dữ liệu cũ hơn 45 ngày được tự động xóa.
       </p>
       <div className="flex flex-col gap-3 sm:flex-row">
         <label className="relative flex-1">
@@ -111,6 +126,22 @@ export function DebtReminderHistoryPanel() {
             }}
           />
         </label>
+        <select
+          className="field sm:w-48"
+          value={month}
+          aria-label="Khoảng thời gian"
+          onChange={(event) => {
+            setMonth(event.target.value);
+            setPage(1);
+          }}
+        >
+          <option value="">45 ngày gần nhất</option>
+          {retainedMonths().map(({ value, label }) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
         <select
           className="field sm:w-44"
           value={status}

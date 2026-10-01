@@ -259,7 +259,7 @@ export function MentionSettingsPage() {
         onClose={() => setPanel(null)}
         className="max-w-6xl"
         title="Lịch sử nhắc công nợ"
-        description="Các lượt nhắc trong tháng hiện tại còn nằm trong thời hạn lưu 45 ngày."
+        description="Mọi lượt nhắc trong 45 ngày gần nhất; có thể lọc theo tháng."
       >
         <DebtReminderHistoryPanel />
       </Modal>

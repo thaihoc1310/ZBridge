@@ -1,4 +1,5 @@
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -30,6 +31,8 @@ from app.services.tools_service import (
     list_debt_reminder_runs,
     preview_bulk_debt_reminders,
 )
+
+LOCAL_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 
 
 async def _database():
@@ -245,6 +248,47 @@ async def test_debt_history_expands_the_three_delivery_steps() -> None:
             "PROCESSING",
             "PENDING",
         ]
+    await engine.dispose()
+
+
+async def test_debt_history_defaults_to_everything_retained_not_just_this_month() -> None:
+    """At the start of a month the current-month view was almost empty."""
+    engine, sessions, _customer_id, _followup_id, run_id = await _database()
+    async with sessions() as db:
+        recent = await db.get(DebtReminderRun, run_id)
+        db.add(
+            DebtReminderRun(
+                automation_id=recent.automation_id,
+                scheduled_for=recent.scheduled_for - timedelta(days=31),
+                retry_at=recent.scheduled_for - timedelta(days=31),
+                status=DebtReminderStatus.SENT,
+                attempt_count=1,
+            )
+        )
+        await db.commit()
+        local = recent.scheduled_for.replace(tzinfo=UTC).astimezone(LOCAL_TIMEZONE)
+        month = local.strftime("%Y-%m")
+
+        async def history(**kwargs):
+            return await list_debt_reminder_runs(
+                db,
+                status=None,
+                search=None,
+                sort="scheduled",
+                direction="desc",
+                page=1,
+                limit=20,
+                **kwargs,
+            )
+
+        everything = await history(month=None)
+        assert everything.total == 2
+        assert everything.status_counts["ALL"] == 2
+        assert everything.items[0].id == run_id, "newest first"
+
+        one_month = await history(month=month)
+        assert one_month.total == 1
+        assert one_month.status_counts["ALL"] == 1
     await engine.dispose()
 
 

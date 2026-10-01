@@ -360,27 +360,28 @@ async def list_debt_reminder_runs(
     page: int,
     limit: int,
 ) -> DebtReminderRunListResponse:
-    local_now = datetime.now(UTC).astimezone(LOCAL_TIMEZONE)
+    # No month means everything still retained (45 days): showing only the
+    # current month left the list almost empty at the start of every month.
+    scope = []
     if month:
         try:
             year, month_number = (int(part) for part in month.split("-", 1))
             month_start = datetime(year, month_number, 1, tzinfo=LOCAL_TIMEZONE)
         except (ValueError, TypeError) as exc:
             raise AppError("INVALID_MONTH", "Tháng phải có định dạng YYYY-MM.", 422) from exc
-    else:
-        month_start = datetime(local_now.year, local_now.month, 1, tzinfo=LOCAL_TIMEZONE)
-    if month_start.month == 12:
-        month_end = month_start.replace(year=month_start.year + 1, month=1)
-    else:
-        month_end = month_start.replace(month=month_start.month + 1)
-    filters = [
-        DebtReminderRun.scheduled_for >= month_start.astimezone(UTC),
-        DebtReminderRun.scheduled_for < month_end.astimezone(UTC),
-    ]
+        if month_start.month == 12:
+            month_end = month_start.replace(year=month_start.year + 1, month=1)
+        else:
+            month_end = month_start.replace(month=month_start.month + 1)
+        scope += [
+            DebtReminderRun.scheduled_for >= month_start.astimezone(UTC),
+            DebtReminderRun.scheduled_for < month_end.astimezone(UTC),
+        ]
+    if search and search.strip():
+        scope.append(ZaloGroup.name.ilike(f"%{search.strip()}%"))
+    filters = [*scope]
     if status:
         filters.append(DebtReminderRun.status == status)
-    if search and search.strip():
-        filters.append(ZaloGroup.name.ilike(f"%{search.strip()}%"))
     base = (
         select(DebtReminderRun, Customer.id, ZaloGroup.name)
         .join(DebtReminderAutomation, DebtReminderAutomation.id == DebtReminderRun.automation_id)
@@ -408,7 +409,11 @@ async def list_debt_reminder_runs(
     }
     order_column = order_columns.get(sort, DebtReminderRun.scheduled_for)
     order = order_column.desc() if direction == "desc" else order_column.asc()
-    rows = (await db.execute(base.order_by(order).offset((page - 1) * limit).limit(limit))).all()
+    # id breaks ties so a page boundary never repeats or skips a run.
+    tie = DebtReminderRun.id.desc() if direction == "desc" else DebtReminderRun.id.asc()
+    rows = (
+        await db.execute(base.order_by(order, tie).offset((page - 1) * limit).limit(limit))
+    ).all()
     count_rows = (
         await db.execute(
             select(DebtReminderRun.status, func.count())
@@ -418,15 +423,9 @@ async def list_debt_reminder_runs(
             )
             .join(Customer, Customer.id == DebtReminderAutomation.customer_id)
             .join(ZaloGroup, ZaloGroup.id == Customer.zalo_group_id)
-            .where(
-                DebtReminderRun.scheduled_for >= month_start.astimezone(UTC),
-                DebtReminderRun.scheduled_for < month_end.astimezone(UTC),
-                *(
-                    [ZaloGroup.name.ilike(f"%{search.strip()}%")]
-                    if search and search.strip()
-                    else []
-                ),
-            )
+            # Counts follow the month and the search but not the status, so
+            # the status cards stay useful as filters.
+            .where(*scope)
             .group_by(DebtReminderRun.status)
         )
     ).all()
