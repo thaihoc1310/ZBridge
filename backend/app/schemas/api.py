@@ -468,6 +468,39 @@ class DebtPaymentSettingsResponse(DebtPaymentSettingsUpdate):
     updated_at: datetime | None = None
 
 
+#: How the payment history groups the confirmation statuses for people.
+PaymentHistoryGroup = Literal["sent", "skipped", "in_progress", "failed"]
+
+
+class DebtPaymentHistoryItem(BaseModel):
+    id: uuid.UUID
+    customer_id: uuid.UUID
+    customer_name: str
+    customer_avatar_url: str | None = None
+    sender_display_name: str | None = None
+    content: str
+    message_sent_at: datetime
+    group: PaymentHistoryGroup
+    status: str
+    ai_confidence: float | None = None
+    reason: str | None = None
+    notified_at: datetime | None = None
+    #: The customer's state now, not at the time of the message: the bot never
+    #: switches it, so this shows whether the accountant has caught up.
+    customer_has_debt: bool
+    customer_last_debt_paid_at: datetime | None = None
+
+
+class DebtPaymentHistoryResponse(BaseModel):
+    items: list[DebtPaymentHistoryItem]
+    total: int
+    page: int
+    limit: int
+    pages: int
+    group_counts: dict[str, int]
+    retention_days: int
+
+
 class DebtReminderTextPart(BaseModel):
     type: Literal["text"]
     text: str = Field(min_length=1, max_length=5000)

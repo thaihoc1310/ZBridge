@@ -100,7 +100,11 @@ PERMISSION_CATALOG: tuple[PermissionDef, ...] = (
     PermissionDef(DEBT_REMINDER_UPDATE, "Thay đổi cấu hình nhắc công nợ", CATEGORY_DEBT),
     PermissionDef(DEBT_REMINDER_SEND, "Gửi nhắc công nợ ngay", CATEGORY_DEBT),
     PermissionDef(DEBT_REMINDER_BULK_APPLY, "Áp lịch nhắc công nợ hàng loạt", CATEGORY_DEBT),
-    PermissionDef(DEBT_REMINDER_HISTORY_READ, "Xem lịch sử lượt nhắc công nợ", CATEGORY_DEBT),
+    PermissionDef(
+        DEBT_REMINDER_HISTORY_READ,
+        "Xem lịch sử nhắc công nợ và báo thanh toán",
+        CATEGORY_DEBT,
+    ),
     PermissionDef(
         DEBT_PAYMENT_CONFIRMATION_MANAGE,
         "Cấu hình báo xác nhận thanh toán",

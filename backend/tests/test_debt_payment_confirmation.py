@@ -693,3 +693,71 @@ async def test_a_payment_hook_error_does_not_block_replies_and_mentions() -> Non
     scheduled.assert_awaited_once()
     assert alert.await_args.args[0] == "DEBT_PAYMENT_CONFIRMATION_HOOK_FAILED"
     await engine.dispose()
+
+
+async def test_payment_history_groups_results_and_shows_the_customer_state_now() -> None:
+    from app.services.debt_payment_service import list_payment_history
+
+    engine, sessions, _group_id, customer_id, _run_id = await _setup(has_debt=True)
+    async with sessions() as db:
+        rows = [
+            ("sent", PaymentConfirmationStatus.SENT, 3),
+            ("asked", PaymentConfirmationStatus.SKIPPED, 2),
+            ("legacy", PaymentConfirmationStatus.DUPLICATE, 1),
+            ("waiting", PaymentConfirmationStatus.PENDING, 4),
+            ("broken", PaymentConfirmationStatus.FAILED, 0),
+        ]
+        for message_id, status, hours in rows:
+            db.add(
+                DebtPaymentConfirmation(
+                    customer_id=customer_id,
+                    source_message_id=message_id,
+                    sender_id="owner-1",
+                    sender_display_name="Anh Tuấn",
+                    content="Đã thanh toán",
+                    matched_phrase="đã thanh toán",
+                    message_sent_at=SENT_AT + timedelta(hours=hours),
+                    status=status,
+                    ai_reason=(
+                        "Đây là câu hỏi." if status == PaymentConfirmationStatus.SKIPPED else None
+                    ),
+                    applied_at=SENT_AT if status == PaymentConfirmationStatus.SENT else None,
+                )
+            )
+        await db.commit()
+
+        everything = await list_payment_history(db, search=None, group=None, page=1, limit=50)
+        assert everything.group_counts == {
+            "sent": 1,
+            "skipped": 2,
+            "in_progress": 1,
+            "failed": 1,
+            "all": 5,
+        }
+        assert [item.status for item in everything.items] == [
+            "PENDING",
+            "SENT",
+            "SKIPPED",
+            "DUPLICATE",
+            "FAILED",
+        ], "newest message first"
+        assert everything.items[0].customer_name == "Hùng TM"
+        assert everything.items[0].customer_has_debt is True
+
+        sent = await list_payment_history(db, search=None, group="sent", page=1, limit=50)
+        assert sent.total == 1 and sent.pages == 1
+        assert sent.items[0].notified_at is not None
+
+        skipped = await list_payment_history(db, search=None, group="skipped", page=1, limit=50)
+        assert {item.group for item in skipped.items} == {"skipped"}
+        assert skipped.items[0].reason == "Đây là câu hỏi."
+
+        # Counts follow the search, so a filter that matches nobody shows zeros.
+        nobody = await list_payment_history(
+            db, search="khong-ton-tai", group=None, page=1, limit=50
+        )
+        assert nobody.items == [] and nobody.group_counts["all"] == 0
+
+        paged = await list_payment_history(db, search="hùng", group=None, page=2, limit=2)
+        assert paged.total == 5 and paged.pages == 3 and len(paged.items) == 2
+    await engine.dispose()

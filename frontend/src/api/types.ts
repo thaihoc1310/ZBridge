@@ -360,6 +360,32 @@ export type DebtReminderRun = {
   error_message: string | null;
   steps: DebtReminderRunStep[];
 };
+export type PaymentHistoryGroup = "sent" | "skipped" | "in_progress" | "failed";
+export type DebtPaymentHistoryItem = {
+  id: string;
+  customer_id: string;
+  customer_name: string;
+  customer_avatar_url: string | null;
+  sender_display_name: string | null;
+  content: string;
+  message_sent_at: string;
+  group: PaymentHistoryGroup;
+  status: string;
+  ai_confidence: number | null;
+  reason: string | null;
+  notified_at: string | null;
+  customer_has_debt: boolean;
+  customer_last_debt_paid_at: string | null;
+};
+export type DebtPaymentHistory = {
+  items: DebtPaymentHistoryItem[];
+  total: number;
+  page: number;
+  limit: number;
+  pages: number;
+  group_counts: Record<string, number>;
+  retention_days: number;
+};
 export type DebtReminderRunList = {
   items: DebtReminderRun[];
   total: number;

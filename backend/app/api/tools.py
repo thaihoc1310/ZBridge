@@ -25,6 +25,7 @@ from app.models.entities import DebtReminderStatus
 from app.schemas.api import (
     ActiveMentionCompanyListResponse,
     ActiveMentionTaskResponse,
+    DebtPaymentHistoryResponse,
     DebtPaymentSettingsResponse,
     DebtPaymentSettingsUpdate,
     DebtReminderBulkApply,
@@ -39,8 +40,9 @@ from app.schemas.api import (
     GoogleOAuthStartResponse,
     GoogleOAuthStatusResponse,
     GroupMemberResponse,
+    PaymentHistoryGroup,
 )
-from app.services.debt_payment_service import get_settings, save_settings
+from app.services.debt_payment_service import get_settings, list_payment_history, save_settings
 from app.services.drive_conversion_service import (
     create_scan_job,
     get_conversion_job,
@@ -88,6 +90,25 @@ async def update_debt_payment_confirmation_settings(
     _actor: User = Depends(require_permission(DEBT_PAYMENT_CONFIRMATION_MANAGE)),
 ) -> DebtPaymentSettingsResponse:
     return await save_settings(db, data)
+
+
+@router.get(
+    "/debt-payment-confirmation/history",
+    response_model=DebtPaymentHistoryResponse,
+)
+async def debt_payment_confirmation_history(
+    search: str | None = None,
+    group: PaymentHistoryGroup | None = None,
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    # The debt-history grant, not the settings one: accountants read this list
+    # and should not need the right to change who the bot listens to.
+    _actor: User = Depends(require_permission(DEBT_REMINDER_HISTORY_READ)),
+) -> DebtPaymentHistoryResponse:
+    return await list_payment_history(
+        db, search=search, group=group, page=page, limit=limit
+    )
 
 
 @router.get(

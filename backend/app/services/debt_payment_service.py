@@ -29,12 +29,16 @@ from app.models.entities import (
     PaymentConfirmationStatus,
 )
 from app.schemas.api import (
+    DebtPaymentHistoryItem,
+    DebtPaymentHistoryResponse,
     DebtPaymentSettingsResponse,
     DebtPaymentSettingsUpdate,
     IncomingGroupMessage,
+    PaymentHistoryGroup,
 )
 from app.services.alerting import customer_link, report_async
 from app.services.delivery_service import add_delivery_log
+from app.services.log_retention import DEBT_PAYMENT_CONFIRMATION_RETENTION_DAYS
 from app.services.mention_classifier import complete_structured
 from app.services.mention_rules import normalize_phrase
 from app.services.zalo_gateway_client import GatewayError, zalo_gateway
@@ -804,4 +808,90 @@ async def _report_failure(
         # Per attempt: every failure reaches Telegram, and another customer failing
         # in the same window is still named. Bounded by the attempt count.
         dedup_key=f"{alert_code}:{confirmation.id}:{code}:{attempt}",
+    )
+
+
+#: Statuses each history group covers. DUPLICATE is a legacy "not announced".
+HISTORY_GROUPS: dict[str, tuple[PaymentConfirmationStatus, ...]] = {
+    "sent": (PaymentConfirmationStatus.SENT,),
+    "skipped": (PaymentConfirmationStatus.SKIPPED, PaymentConfirmationStatus.DUPLICATE),
+    "in_progress": IN_FLIGHT,
+    "failed": (PaymentConfirmationStatus.FAILED,),
+}
+_GROUP_OF = {status: group for group, statuses in HISTORY_GROUPS.items() for status in statuses}
+
+
+async def list_payment_history(
+    db: AsyncSession,
+    *,
+    search: str | None,
+    group: PaymentHistoryGroup | None,
+    page: int,
+    limit: int,
+) -> DebtPaymentHistoryResponse:
+    """Every recorded payment message, newest first, with the customer's state now."""
+    filters = []
+    if search and search.strip():
+        filters.append(ZaloGroup.name.ilike(f"%{search.strip()}%"))
+    joined = (
+        select(DebtPaymentConfirmation, Customer, ZaloGroup.name, ZaloGroup.avatar_url)
+        .join(Customer, Customer.id == DebtPaymentConfirmation.customer_id)
+        .join(ZaloGroup, ZaloGroup.id == Customer.zalo_group_id)
+        .where(*filters)
+    )
+    # Counts follow the search but not the group, so the filter chips stay useful.
+    count_rows = (
+        await db.execute(
+            select(DebtPaymentConfirmation.status, func.count())
+            .join(Customer, Customer.id == DebtPaymentConfirmation.customer_id)
+            .join(ZaloGroup, ZaloGroup.id == Customer.zalo_group_id)
+            .where(*filters)
+            .group_by(DebtPaymentConfirmation.status)
+        )
+    ).all()
+    group_counts = dict.fromkeys(HISTORY_GROUPS, 0)
+    for status, count in count_rows:
+        group_counts[_GROUP_OF[PaymentConfirmationStatus(status)]] += int(count)
+    group_counts["all"] = sum(group_counts.values())
+
+    if group:
+        joined = joined.where(DebtPaymentConfirmation.status.in_(HISTORY_GROUPS[group]))
+    total = group_counts[group] if group else group_counts["all"]
+    rows = (
+        await db.execute(
+            # id breaks ties so a page boundary never repeats or skips a row.
+            joined.order_by(
+                DebtPaymentConfirmation.message_sent_at.desc(),
+                DebtPaymentConfirmation.id.desc(),
+            )
+            .offset((page - 1) * limit)
+            .limit(limit)
+        )
+    ).all()
+    return DebtPaymentHistoryResponse(
+        items=[
+            DebtPaymentHistoryItem(
+                id=confirmation.id,
+                customer_id=customer.id,
+                customer_name=name,
+                customer_avatar_url=avatar_url,
+                sender_display_name=confirmation.sender_display_name,
+                content=confirmation.content,
+                message_sent_at=confirmation.message_sent_at,
+                group=_GROUP_OF[confirmation.status],
+                status=confirmation.status.value,
+                ai_confidence=confirmation.ai_confidence,
+                reason=confirmation.ai_reason,
+                notified_at=confirmation.applied_at,
+                customer_has_debt=customer.has_debt,
+                customer_last_debt_paid_at=customer.last_debt_paid_at,
+            )
+            for confirmation, customer, name, avatar_url in rows
+        ],
+        total=total,
+        page=page,
+        limit=limit,
+        pages=max(1, -(-total // limit)),
+        group_counts=group_counts,
+        retention_days=DEBT_PAYMENT_CONFIRMATION_RETENTION_DAYS,
     )

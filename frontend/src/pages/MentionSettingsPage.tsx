@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   BadgeCheck,
+  History,
   BrainCircuit,
   ChevronRight,
   FileClock,
@@ -25,6 +26,7 @@ import { ClassifierPolicySection } from "../features/mentions/ClassifierPolicySe
 import { StaffRosterSection } from "../features/mentions/StaffRosterSection";
 import { ActiveMentionTasksPanel } from "../features/tools/ActiveMentionTasksPanel";
 import { BulkDebtReminderSection } from "../features/tools/BulkDebtReminderSection";
+import { DebtPaymentHistoryPanel } from "../features/tools/DebtPaymentHistoryPanel";
 import { DebtReminderHistoryPanel } from "../features/tools/DebtReminderHistoryPanel";
 import { DebtPaymentConfirmationSection } from "../features/tools/DebtPaymentConfirmationSection";
 import { DriveConverterPanel } from "../features/tools/DriveConverterPanel";
@@ -38,6 +40,7 @@ type Panel =
   | "tasks"
   | "debt-bulk"
   | "debt-history"
+  | "debt-payment-history"
   | "debt-payment"
   | "drive";
 
@@ -166,6 +169,16 @@ export function MentionSettingsPage() {
                 onClick={() => setPanel("debt-history")}
               />
             )}
+            {canDebtHistory && (
+              <PanelCard
+                icon={History}
+                tone="emerald"
+                title="Lịch sử báo thanh toán"
+                description="Khách nào được bot báo đã thanh toán, và kế toán đã chuyển trạng thái chưa."
+                summary="Lưu 45 ngày"
+                onClick={() => setPanel("debt-payment-history")}
+              />
+            )}
             {canDebtPayment && (
               <PanelCard
                 icon={BadgeCheck}
@@ -249,6 +262,15 @@ export function MentionSettingsPage() {
         description="Các lượt nhắc trong tháng hiện tại còn nằm trong thời hạn lưu 45 ngày."
       >
         <DebtReminderHistoryPanel />
+      </Modal>
+      <Modal
+        open={panel === "debt-payment-history"}
+        onClose={() => setPanel(null)}
+        className="max-w-6xl"
+        title="Lịch sử báo thanh toán"
+        description="Mỗi tin “đã thanh toán” bot nhận được và kết quả xử lý. Bấm vào một dòng để mở trang khách hàng."
+      >
+        <DebtPaymentHistoryPanel />
       </Modal>
       <Modal
         open={panel === "debt-payment"}
