@@ -64,7 +64,7 @@ def _configure(monkeypatch, **overrides) -> list[dict]:
         sent.append({"url": url, "json": kwargs.get("json")})
         return httpx.Response(200, json={"ok": True}, request=httpx.Request("POST", url))
 
-    monkeypatch.setattr(alert_tasks.httpx, "post", fake_post)
+    monkeypatch.setattr(alert_tasks._http, "post", fake_post)
     return sent
 
 
@@ -117,7 +117,7 @@ def test_bad_token_is_not_retried_forever(monkeypatch) -> None:
             401, json={"description": "Unauthorized"}, request=httpx.Request("POST", url)
         )
 
-    monkeypatch.setattr(alert_tasks.httpx, "post", unauthorized)
+    monkeypatch.setattr(alert_tasks._http, "post", unauthorized)
     alert_tasks.send_alert(code="X", message="token sai", severity="ERROR")  # no raise
 
 
@@ -148,7 +148,7 @@ def test_telegram_outage_is_retried_and_the_retry_still_delivers(monkeypatch) ->
         countdowns.append(kwargs["countdown"])
         return original_retry(*args, **kwargs)
 
-    monkeypatch.setattr(alert_tasks.httpx, "post", flaky)
+    monkeypatch.setattr(alert_tasks._http, "post", flaky)
     monkeypatch.setattr(alert_tasks.send_alert, "retry", spy_retry)
     alert_tasks.send_alert.apply(
         kwargs={"code": "X", "message": "telegram sập", "severity": "ERROR"}
@@ -167,7 +167,7 @@ def test_telegram_outage_gives_up_after_bounded_retries(monkeypatch) -> None:
         calls.append(1)
         raise httpx.ConnectError("down", request=httpx.Request("POST", url))
 
-    monkeypatch.setattr(alert_tasks.httpx, "post", unavailable)
+    monkeypatch.setattr(alert_tasks._http, "post", unavailable)
     result = alert_tasks.send_alert.apply(
         kwargs={"code": "X", "message": "telegram sập", "severity": "ERROR"}
     )

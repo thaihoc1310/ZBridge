@@ -20,6 +20,12 @@ TELEGRAM_MAX_LENGTH = 4096
 #: Every URL we emit today is a customer page; give a new link type its own label.
 LINK_TEXT = "Mở trang khách hàng"
 
+#: One client for the life of the worker. httpx.get/post build a fresh client,
+#: SSL context and CA bundle on every call; glibc never handed that memory back,
+#: so the heartbeat (every 2 minutes) grew the alerts worker until the 256 MB
+#: limit OOM-killed it after ~5 weeks.
+_http = httpx.Client()
+
 
 def _occurrence(dedup_key: str, window_seconds: int) -> int:
     """How many times this problem was reported inside the current window.
@@ -126,7 +132,7 @@ def send_alert(
 
     backoff = 2 ** (self.request.retries + 1)
     try:
-        response = httpx.post(
+        response = _http.post(
             f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage",
             json={
                 "chat_id": settings.telegram_chat_id,
@@ -192,7 +198,7 @@ def heartbeat() -> None:
     this worker do not depend on the backend, which lets them notice its absence.
     """
     try:
-        response = httpx.get(settings.health_check_url, timeout=10.0)
+        response = _http.get(settings.health_check_url, timeout=10.0)
         response.raise_for_status()
         health = response.json()
     except Exception as exc:

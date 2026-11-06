@@ -1,7 +1,12 @@
+import logging
+
 from celery import Celery
 from celery.schedules import crontab
 
 from app.core.config import settings
+
+# httpx logs every request URL at INFO, and the Telegram URL carries the bot token.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 celery_app = Celery(
     "zbridge",
@@ -32,6 +37,8 @@ celery_app.conf.update(
         "zbridge.drive.*": {"queue": "drive"},
     },
     task_ignore_result=True,
+    # Recycle pool children so no slow allocator growth can reach a memory limit.
+    worker_max_tasks_per_child=1000,
     task_serializer="json",
     accept_content=["json"],
     timezone="Asia/Ho_Chi_Minh",
