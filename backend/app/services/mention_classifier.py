@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from time import perf_counter
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
-from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import selectinload
@@ -32,6 +32,10 @@ from app.services.alerting import report_async
 from app.services.mention_rules import text_mentions_price
 from app.services.mention_settings_service import get_or_create_mention_settings
 
+if TYPE_CHECKING:
+    # Imported where used: the SDK is heavy and only the ai worker calls a model.
+    from openai import AsyncOpenAI
+
 logger = logging.getLogger("zbridge.mention_classifier")
 
 CLASSIFICATION_STALE_AFTER = timedelta(minutes=10)
@@ -40,7 +44,7 @@ CLASSIFICATION_RETRY_DELAY = timedelta(minutes=5)
 #: this reuses the connection pool instead of paying a TLS handshake per message,
 #: while still never handing a client to a loop it was not created on. The
 #: provider is fixed at process start, so one cached client per loop is enough.
-_clients: dict[asyncio.AbstractEventLoop, AsyncOpenAI] = {}
+_clients: dict[asyncio.AbstractEventLoop, "AsyncOpenAI"] = {}
 PROMPT_VERSION = "mention-response-v6"
 PRICE_PROMPT_VERSION = "price-inquiry-v7"
 LOCAL_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
@@ -634,7 +638,9 @@ async def classify_payload(
     )
 
 
-def _shared_client(profile: _ProviderProfile) -> AsyncOpenAI:
+def _shared_client(profile: _ProviderProfile) -> "AsyncOpenAI":
+    from openai import AsyncOpenAI
+
     loop = asyncio.get_running_loop()
     client = _clients.get(loop)
     if client is None:

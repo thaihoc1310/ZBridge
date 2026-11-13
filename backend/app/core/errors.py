@@ -1,10 +1,16 @@
-import logging
+from __future__ import annotations
 
-from fastapi import Request
-from fastapi.responses import JSONResponse
+import logging
+from typing import TYPE_CHECKING
 
 from app.core.alerts import Severity
 from app.services.alerting import report_async
+
+if TYPE_CHECKING:
+    # Services raise AppError from Celery workers too; importing FastAPI here
+    # would load the whole web stack into every worker.
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
 
 logger = logging.getLogger("zbridge.errors")
 
@@ -27,6 +33,8 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
             severity=Severity.ERROR,
             context={"method": request.method, "path": request.url.path},
         )
+    from fastapi.responses import JSONResponse
+
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": {"code": exc.code, "message": exc.message}},
@@ -43,6 +51,8 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
         context={"method": request.method, "path": request.url.path},
         dedup_key=f"backend:UNHANDLED:{request.url.path}",
     )
+    from fastapi.responses import JSONResponse
+
     return JSONResponse(
         status_code=500,
         content={

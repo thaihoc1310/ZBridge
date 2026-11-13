@@ -1,17 +1,22 @@
+from __future__ import annotations
+
 import asyncio
 import io
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
-import pypdfium2 as pdfium
-from google.auth.transport.requests import Request
-from google.oauth2 import service_account
-from PIL import Image, ImageChops
 
 from app.core.config import settings
+
+if TYPE_CHECKING:
+    # Imported where used: only the containers that export a sheet should pay
+    # for Google auth, PDFium and Pillow, not every worker and the API.
+    from google.oauth2 import service_account
+    from PIL import Image
 
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 SHEETS_READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
@@ -76,6 +81,8 @@ def crop_white_margins(
     *,
     padding: int = CONTENT_PADDING,
 ) -> Image.Image:
+    from PIL import Image, ImageChops
+
     background = Image.new("RGB", image.size, "white")
     difference = ImageChops.difference(image.convert("RGB"), background).convert("L")
     mask = difference.point(lambda value: 255 if value > WHITE_THRESHOLD else 0)
@@ -99,6 +106,9 @@ def crop_white_margins(
 
 
 def render_pdf_to_png(pdf_data: bytes) -> tuple[bytes, int, int]:
+    import pypdfium2 as pdfium
+    from PIL import Image
+
     try:
         document = pdfium.PdfDocument(pdf_data)
     except Exception as exc:
@@ -156,6 +166,8 @@ def encode_png_within_limit(image: Image.Image) -> tuple[bytes, int, int]:
     A dense sheet can render past the upload limit; without this the send fails
     with a 413 on every retry until the run is marked permanently failed.
     """
+    from PIL import Image
+
     current = image
     try:
         for _ in range(MAX_PNG_SHRINK_ATTEMPTS + 1):
@@ -206,6 +218,8 @@ class GoogleSheetsService:
                 or self._credential_path != credential_path
                 or self._impersonated_user != impersonated_user
             ):
+                from google.oauth2 import service_account
+
                 try:
                     credentials = service_account.Credentials.from_service_account_file(
                         credential_path,
@@ -222,6 +236,8 @@ class GoogleSheetsService:
                 self._credential_path = credential_path
                 self._impersonated_user = impersonated_user
             if not self._credentials.valid or not self._credentials.token:
+                from google.auth.transport.requests import Request
+
                 try:
                     await asyncio.to_thread(self._credentials.refresh, Request())
                 except Exception as exc:
