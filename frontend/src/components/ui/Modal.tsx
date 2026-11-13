@@ -13,13 +13,19 @@ type Props = {
   className?: string;
 };
 
+// Fade the tint and blur, never opacity: Chrome drops one frame of the whole
+// modal when an opacity animation ends on a backdrop-filter layer.
+// Values are the old bg-slate-950/55 backdrop-blur-sm.
+const BACKDROP_HIDDEN = { backgroundColor: "rgba(2, 6, 23, 0)", backdropFilter: "blur(0px)" };
+const BACKDROP_SHOWN = { backgroundColor: "rgba(2, 6, 23, 0.55)", backdropFilter: "blur(4px)" };
+
 export function Modal({ open, onClose, title, description, children, className }: Props) {
   return (
     <AnimatePresence>
       {open && (
         <motion.div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
-          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          initial={BACKDROP_HIDDEN} animate={BACKDROP_SHOWN} exit={BACKDROP_HIDDEN}
           onMouseDown={(event) => event.target === event.currentTarget && onClose()}
         >
           <motion.section
